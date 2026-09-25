@@ -151,6 +151,23 @@ tidy_insert =
   |> get_var_from_path_or_env("WANDERER_TIDY_INSERT", "false")
   |> String.to_existing_atom()
 
+# CHEWY PATCH: DEV-ONLY authentication bypass token for GET /dev/login (see
+# WandererApp.Env.dev_auth_enabled?/0 and WandererAppWeb.DevAuthController).
+# No default, no boolean flag — unset/empty means the endpoint stays a 404.
+dev_auth_token =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_DEV_AUTH_TOKEN", "")
+
+if dev_auth_token != "" do
+  require Logger
+
+  Logger.warning(
+    "[WandererApp] DEV AUTH BYPASS ENABLED via WANDERER_DEV_AUTH_TOKEN — " <>
+      "GET /dev/login grants an authenticated session with no EVE SSO. " <>
+      "This MUST NEVER be set on a production deployment."
+  )
+end
+
 admins =
   System.get_env("WANDERER_ADMINS", "")
   |> case do
@@ -203,6 +220,8 @@ config :wanderer_app,
   # CHEWY PATCH: map beautifier / tidy-insert feature flags.
   map_beautifier: map_beautifier,
   tidy_insert: tidy_insert,
+  # CHEWY PATCH: DEV-ONLY authentication bypass token, see dev_auth_token above.
+  dev_auth_token: dev_auth_token,
   restrict_maps_creation: restrict_maps_creation,
   restrict_acls_creation: restrict_acls_creation,
   subscription_settings: %{

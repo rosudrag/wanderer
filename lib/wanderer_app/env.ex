@@ -22,6 +22,28 @@ defmodule WandererApp.Env do
   def map_beautifier?(), do: get_key(:map_beautifier, false)
   def tidy_insert?(), do: get_key(:tidy_insert, false)
 
+  # CHEWY PATCH: DEV-ONLY authentication bypass token for exercising the map
+  # UI without EVE SSO (see WandererAppWeb.DevAuthController). Config always
+  # stores a string (default ""); normalised to nil here so callers can
+  # `is_binary/1`-guard directly instead of special-casing the empty string.
+  def dev_auth_token() do
+    case get_key(:dev_auth_token, "") do
+      "" -> nil
+      token -> token
+    end
+  end
+
+  # CHEWY PATCH: DEV-ONLY authentication bypass. True only when a dev-auth
+  # token of at least 16 bytes is configured. MUST stay false unless an
+  # operator explicitly opts in via WANDERER_DEV_AUTH_TOKEN — no default, no
+  # boolean flag that could be flipped by accident.
+  def dev_auth_enabled?() do
+    case dev_auth_token() do
+      token when is_binary(token) -> byte_size(token) >= 16
+      _ -> false
+    end
+  end
+
   def map_subscriptions_enabled?(), do: get_key(:map_subscriptions_enabled, false)
   def public_api_disabled?(), do: get_key(:public_api_disabled, false)
 

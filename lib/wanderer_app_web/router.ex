@@ -425,8 +425,6 @@ defmodule WandererAppWeb.Router do
     get "/", BlogController, :license
   end
 
-
-
   scope "/swaggerui" do
     pipe_through [:browser, :api_spec]
 
@@ -503,6 +501,15 @@ defmodule WandererAppWeb.Router do
     get "/signout", AuthController, :signout
     get "/:provider", AuthController, :request
     get "/:provider/callback", AuthController, :callback
+  end
+
+  # CHEWY PATCH: dev-only authentication bypass so an agentic developer can
+  # exercise the map UI without an EVE Online account / EVE SSO. The route
+  # exists unconditionally; WandererAppWeb.DevAuthController refuses (404)
+  # unless WANDERER_DEV_AUTH_TOKEN is configured.
+  scope "/dev", WandererAppWeb do
+    pipe_through :browser
+    get "/login", DevAuthController, :login
   end
 
   #

@@ -1,0 +1,68 @@
+# CHEWY: this stack starts the wanderer fork with WANDERER_DEV_AUTH_TOKEN set,
+# i.e. with the SSO login bypass turned ON — it MUST only ever run on a
+# developer/agent workstation, bound to 127.0.0.1, and MUST NEVER be deployed
+# to a network-reachable host (production uses a separate compose file in the
+# deploy repo and never sets WANDERER_DEV_AUTH_TOKEN).
+
+name: wanderer-agent
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wanderer_agent
+      POSTGRES_PASSWORD: wanderer_agent
+      POSTGRES_DB: wanderer_agent
+    # No host port published: the app reaches this over the compose network
+    # as "db". Uncomment only if you need to poke the DB with an external
+    # client while debugging.
+    # ports:
+    #   - "127.0.0.1:${AGENT_DB_PORT:-5488}:5432"
+    volumes:
+      # Named volume distinct from any production compose (which lives in the
+      # separate deploy repo) so `down -v` here can never touch real data.
+      - wanderer-agent-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wanderer_agent -d wanderer_agent"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    image: ${WANDERER_IMAGE:-chewytech/wanderer:latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # Localhost only — never 0.0.0.0 or an unbound host port. This container
+    # exposes a working, no-credentials login for the whole app.
+    ports:
+      - "127.0.0.1:${AGENT_PORT:-4100}:4000"
+    # Same start sequence the production compose uses: the image does not
+    # migrate on its own, and a fresh agent database has no schema at all.
+    command: sh -c "/app/entrypoint.sh db createdb && /app/entrypoint.sh db migrate && /app/entrypoint.sh run"
+    environment:
+      PORT: "4000"
+      # Without this the release boots supervisors but never starts the HTTP
+      # endpoint ("Configuration :server was not enabled"), so the port accepts
+      # connections and immediately resets them.
+      PHX_SERVER: "true"
+      ECTO_IPV6: "false"
+      DATABASE_URL: "ecto://wanderer_agent:wanderer_agent@db/wanderer_agent"
+      # Throwaway, hardcoded on purpose: this instance holds no real data and
+      # is torn down with `down -v`. Never reuse these values anywhere real.
+      SECRET_KEY_BASE: "573803a3781077b382c8cc8d3044298f3477c450bb687a523d212d49d6bad3759c52656cb9a02d9cdfde8180492b3c1f"
+      CLOAK_KEY: "TDXOOejx50YDsl4U/FOBieRRglxL6EYmKwDEpqouZdg="
+      FALLBACK_CLOAK_KEY: "Kbm7Dt570Sg96kYHtY1xISg9HenPvDTGSXwVvpTiVNI="
+      WEB_APP_URL: "http://localhost:${AGENT_PORT:-4100}"
+      WANDERER_INVITES: "false"
+      # CHEWY: the auth bypass. Compose refuses to even start the stack if
+      # this is unset or empty — there is no default.
+      WANDERER_DEV_AUTH_TOKEN: "${WANDERER_DEV_AUTH_TOKEN:?set a >=16 char token, e.g. via 'export WANDERER_DEV_AUTH_TOKEN=openssl-rand-hex-24-output'}"
+      # Fork-specific features, on here so an agent can actually exercise them.
+      WANDERER_MAP_BEAUTIFIER: "true"
+      WANDERER_TIDY_INSERT: "true"
+
+volumes:
+  wanderer-agent-db-data: {}
