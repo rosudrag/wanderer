@@ -28,6 +28,8 @@ export const STORED_INTERFACE_DEFAULT_VALUES: InterfaceStoredSettings = {
   minimapPlacement: MiniMapPlacement.rightBottom,
   hideBookmarkWarning: false,
   dotlanBehavior: DotlanBehavior.system,
+  // CHEWY PATCH: Dotlan-style straight connections default on.
+  dotlanStyleConnections: true,
 };
 
 export const DEFAULT_ROUTES_SETTINGS: RoutesType = {

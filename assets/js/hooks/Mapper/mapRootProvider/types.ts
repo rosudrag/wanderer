@@ -9,6 +9,8 @@ export enum AvailableThemes {
   accessibleDark = 'accessible-dark',
   accessibleLarge = 'accessible-large',
   accessibleLargeColorblind = 'accessible-large-colorblind',
+  // CHEWY PATCH: Dotlan-style theme.
+  dotlan = 'dotlan',
 }
 
 export enum MiniMapPlacement {
@@ -49,6 +51,8 @@ export type InterfaceStoredSettings = {
   pingsPlacement: PingsPlacement;
   hideBookmarkWarning: boolean;
   dotlanBehavior: DotlanBehavior;
+  // CHEWY PATCH: Dotlan-style straight connections toggle.
+  dotlanStyleConnections: boolean;
 };
 
 export type RoutesType = {

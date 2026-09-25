@@ -151,6 +151,13 @@ export const CONNECTIONS_CHECKBOXES_PROPS: SettingsListItem[] = [
     label: 'Thicker connections',
     type: 'checkbox',
   },
+  {
+    // CHEWY PATCH: Dotlan-style straight connections toggle.
+    prop: 'dotlanStyleConnections',
+    label: 'Dotlan-style connections',
+    type: 'checkbox',
+    helperText: 'Straight lines coloured by constellation/region boundary instead of curves.',
+  },
 ];
 
 export const UI_CHECKBOXES_PROPS: SettingsListItem[] = [
@@ -177,6 +184,8 @@ export const THEME_OPTIONS = [
   { label: 'Pathfinder', value: AvailableThemes.pathfinder },
   { label: 'High-contrast', value: AvailableThemes.accessibleDark },
   { label: 'High-contrast Large', value: AvailableThemes.accessibleLargeColorblind },
+  // CHEWY PATCH: Dotlan theme option.
+  { label: 'Dotlan', value: AvailableThemes.dotlan },
 ];
 
 export const THEME_SETTING: SettingsListItem = {

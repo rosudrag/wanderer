@@ -1,0 +1,153 @@
+// CHEWY PATCH: Dotlan-style straight edge. Mirrors SolarSystemEdge.module.scss class names so all existing
+// time/mass/frigate/gate/bridge visual states keep working; adds Boundary* classes for the
+// constellation/region colour semantics lifted from Dotlan's own region SVGs.
+.EdgePathBack {
+  fill: none;
+  stroke: var(--rf-edge-time-normal, #80a5c5);
+  stroke-width: var(--rf-edge-time-normal-width, 3px);
+
+  &.time1 {
+    stroke: var(--rf-edge-time-critical, #f11ab2);
+    stroke-width: var(--rf-edge-time-critical-width, 4px);
+    stroke-dasharray: var(--rf-edge-time-critical-dasharray, none);
+    stroke-linecap: var(--rf-edge-time-critical-linecap, butt);
+  }
+
+  &.time4 {
+    stroke: var(--rf-edge-time-eol, #a654e3);
+    stroke-width: var(--rf-edge-time-eol-width, 4px);
+    stroke-dasharray: var(--rf-edge-time-eol-dasharray, none);
+    stroke-linecap: var(--rf-edge-time-eol-linecap, butt);
+  }
+
+  &.BoundaryNone {
+    stroke: var(--rf-edge-dotlan-neutral, #9aa4b2);
+  }
+
+  &.BoundaryConstellation {
+    stroke: var(--rf-edge-dotlan-constellation, #ff0000);
+  }
+
+  &.BoundaryRegion {
+    stroke: var(--rf-edge-dotlan-region, #800080);
+  }
+
+  &.Hovered {
+    stroke: var(--rf-edge-time-hover, #b5c8d9);
+
+    &.time1 {
+      stroke: var(--rf-edge-time-critical-hover, var(--rf-edge-time-hover, #b5c8d9));
+    }
+
+    &.time4 {
+      stroke: var(--rf-edge-time-eol-hover, var(--rf-edge-time-hover, #b5c8d9));
+    }
+
+    &.BoundaryNone {
+      stroke: var(--rf-edge-dotlan-neutral-hover, #c3cbd4);
+    }
+
+    &.BoundaryConstellation {
+      stroke: var(--rf-edge-dotlan-constellation-hover, #ff5c5c);
+    }
+
+    &.BoundaryRegion {
+      stroke: var(--rf-edge-dotlan-region-hover, #a64ca6);
+    }
+  }
+
+  &.Tick {
+    stroke-width: var(--rf-edge-time-normal-thick-width, 5px);
+
+    &.time1 {
+      stroke-width: var(--rf-edge-time-critical-thick-width, 5px);
+    }
+
+    &.time4 {
+      stroke-width: var(--rf-edge-time-eol-thick-width, 5px);
+    }
+  }
+
+  &.Bridge {
+    stroke: var(--rf-edge-bridge, var(--rf-edge-gate, #9aff40));
+
+    stroke-dasharray: var(--rf-edge-bridge-dasharray, 10 5);
+    stroke-linecap: var(--rf-edge-bridge-linecap, round);
+  }
+}
+
+.EdgePathFront {
+  fill: none;
+  stroke: var(--rf-edge-mass-normal, #2c3844);
+  stroke-width: var(--rf-edge-mass-normal-width, 2px);
+
+  &.MassVerge:not(&.Frigate) {
+    stroke: var(--rf-edge-mass-verge, #af0000);
+    stroke-dasharray: var(--rf-edge-mass-verge-dasharray, none);
+    stroke-linecap: var(--rf-edge-mass-verge-linecap, butt);
+  }
+
+  &.MassHalf:not(&.Frigate) {
+    stroke: var(--rf-edge-mass-half, #ffd700);
+    stroke-dasharray: var(--rf-edge-mass-half-dasharray, none);
+    stroke-linecap: var(--rf-edge-mass-half-linecap, butt);
+  }
+
+  &.Frigate {
+    stroke: var(--rf-edge-frigate, #d4f0ff);
+    stroke-dasharray: var(--rf-edge-frigate-dasharray, none);
+    stroke-linecap: var(--rf-edge-frigate-linecap, butt);
+  }
+
+  &.Gate {
+    stroke: var(--rf-edge-gate-inner, #1c1e15);
+  }
+
+  &.Hovered {
+    stroke: var(--rf-edge-mass-hover, #4e5d6c);
+    stroke-width: var(--rf-edge-mass-normal-width, 2px);
+
+    &.MassVerge:not(&.Frigate) {
+      stroke: var(--rf-edge-mass-verge-hover, #9d4c34);
+    }
+
+    &.MassHalf:not(&.Frigate) {
+      stroke: var(--rf-edge-mass-half-hover, #ec992c);
+    }
+
+    &.Frigate {
+      stroke: var(--rf-edge-frigate-hover, var(--rf-edge-frigate, #d4f0ff));
+    }
+  }
+
+  &.Tick {
+    stroke-width: var(--rf-edge-mass-normal-thick-width, 3px);
+
+    &.Hovered {
+      stroke-width: var(--rf-edge-mass-normal-thick-width, 3px);
+    }
+  }
+}
+
+.ClickPath {
+  fill: none;
+  stroke: none;
+  stroke-width: 8px;
+}
+
+.LinkLabel {
+  font-size: var(--rf-edge-label-font-size, 9px);
+  line-height: var(--rf-edge-label-line-height, 10px);
+  padding: var(--rf-edge-label-padding, 2px 4px);
+  opacity: 1;
+
+  & > span {
+    font-weight: bold;
+  }
+}
+
+.icon {
+  width: var(--rf-edge-label-icon-size, 8px);
+  height: var(--rf-edge-label-icon-size, 8px);
+  font-size: var(--rf-edge-label-icon-font-size, 8px);
+}

@@ -10,6 +10,9 @@ import { WdTooltipWrapper } from '@/hooks/Mapper/components/ui-kit/WdTooltipWrap
 import { useMapState } from '@/hooks/Mapper/components/map/MapProvider.tsx';
 import { SHIP_SIZES_DESCRIPTION, SHIP_SIZES_NAMES_SHORT } from '@/hooks/Mapper/components/map/constants.ts';
 import { TooltipPosition } from '@/hooks/Mapper/components/ui-kit';
+// CHEWY PATCH: read the live dotlan-style-connections setting so the renderer choice is reactive.
+import { useMapRootState } from '@/hooks/Mapper/mapRootProvider';
+import { DotlanEdge } from './DotlanEdge';
 
 const MAP_TRANSLATES: Record<string, string> = {
   [Position.Top]: 'translate(-48%, 0%)',
@@ -40,7 +43,15 @@ export const SHIP_SIZES_COLORS = {
   [ShipSizeStatus.capital]: 'bg-red-400',
 };
 
-export const SolarSystemEdge = ({ id, source, target, markerEnd, style, data }: EdgeProps<SolarSystemConnection>) => {
+export const SolarSystemEdge = (props: EdgeProps<SolarSystemConnection>) => {
+  // CHEWY PATCH: moved the dotlan-style-connections check into the component (was a module-level
+  // flag baked into the edge `type` at build time in convertConnection2Edge.ts) so toggling the
+  // setting re-renders every existing edge immediately instead of requiring a reconnect/reload.
+  const {
+    storedSettings: { interfaceSettings },
+  } = useMapRootState();
+
+  const { id, source, target, markerEnd, style, data } = props;
   const sourceNode = useStore(useCallback(store => store.nodeInternals.get(source), [source]));
   const targetNode = useStore(useCallback(store => store.nodeInternals.get(target), [target]));
   const isWormhole = data?.type === ConnectionType.wormhole;
@@ -69,6 +80,13 @@ export const SolarSystemEdge = ({ id, source, target, markerEnd, style, data }: 
 
     return [edgePath, labelX, labelY, sx, sy, tx, ty, sourcePos, targetPos];
   }, [isThickConnections, sourceNode, targetNode]);
+
+  // CHEWY PATCH: delegate after every hook above has already run (rules of hooks require the same
+  // hook order on every render, so this branch cannot sit before the useStore/useMapState/useState/
+  // useMemo calls it would otherwise skip on the dotlan-enabled render path).
+  if (interfaceSettings.dotlanStyleConnections) {
+    return <DotlanEdge {...props} />;
+  }
 
   if (!sourceNode || !targetNode || !data) {
     return null;

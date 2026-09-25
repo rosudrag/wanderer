@@ -1,4 +1,5 @@
-import { SolarSystemNodeDefault, SolarSystemNodeTheme } from '../components/SolarSystemNode';
+// CHEWY PATCH: import Dotlan node component for theme registry
+import { SolarSystemNodeDefault, SolarSystemNodeDotlan, SolarSystemNodeTheme } from '../components/SolarSystemNode';
 import type { NodeProps } from 'reactflow';
 import type { ComponentType } from 'react';
 import { MapSolarSystemType } from '../map.types';
@@ -23,6 +24,12 @@ const THEME_BEHAVIORS: {
   pathfinder: {
     isPanAndDrag: true,
     nodeComponent: SolarSystemNodeTheme,
+    connectionMode: ConnectionMode.Loose,
+  },
+  // CHEWY PATCH: dotlan theme — straight-line edges + pill nodes, dark canvas retained
+  dotlan: {
+    isPanAndDrag: false,
+    nodeComponent: SolarSystemNodeDotlan,
     connectionMode: ConnectionMode.Loose,
   },
 };

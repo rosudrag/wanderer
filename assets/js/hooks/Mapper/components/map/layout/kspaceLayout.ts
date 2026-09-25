@@ -44,10 +44,12 @@ const compressAxis = (usedValues: number[]): Map<number, number> => {
       return;
     }
     const gap = value - sorted[i - 1];
-    // At most ONE empty cell between two used ones. Two was measurably too airy on a real
-    // 15-system map (25x21 cells vs 21x15), and the extra cell buys nothing: the gap is
-    // already only ordinal, it says "these are not neighbours", not how far apart they are.
-    cursor += Math.min(gap, 2);
+    // Pure rank packing: consecutive occupied ranks land in adjacent cells, so a grid step is
+    // one node box plus its margin (180x75 for a 130x34 box) — the density Dotlan draws at.
+    // Leaving empty cells in the gaps only stretches the map and lengthens every line; the gap
+    // is ordinal anyway, it says "not neighbours", never how far apart. Measured on a real
+    // 15-system map: one empty cell gave 2590x1654 px, none gives 1870x979.
+    cursor += Math.min(gap, 1);
     mapping.set(value, cursor);
   });
   return mapping;
