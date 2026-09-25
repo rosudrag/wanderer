@@ -36,6 +36,20 @@ This file is OURS — upstream has no `AGENTS.md`, so it never conflicts on a me
 | Tracking survives the browser being closed | `WANDERER_PERSIST_TRACKING` | `lib/wanderer_app/map/persistent_tracking.ex` (+ 4 one-line hooks in `map_server_impl.ex`, `map_pool.ex`, `map_manager.ex`) |
 | Map beautifier (auto-layout: Dotlan-geometry k-space, tidy-tree wormhole chains) | `WANDERER_MAP_BEAUTIFIER` | `assets/js/hooks/Mapper/components/map/layout/` + `components/map/hooks/useBeautify.ts`, `lib/wanderer_app/map/bulk_reposition.ex` (+ `update_system_positions_bulk` event) |
 | Direction-aware placement for newly added systems | `WANDERER_TIDY_INSERT` | `lib/wanderer_app/map/map_position_calculator.ex` |
+| Agent dev access: log in and seed a map with no EVE account | `WANDERER_DEV_AUTH_TOKEN` (unset = endpoint is a plain 404; **never set in production**) | `lib/wanderer_app_web/controllers/dev_auth_controller.ex`, `lib/wanderer_app/dev/seed.ex`, `dev/` (compose stack, README, smoke script) |
+
+## Testing the map without an EVE account
+
+`dev/README.md` is the command sequence: a throwaway compose stack on `127.0.0.1:4100`, `/dev/login?token=…`,
+and `WandererApp.Dev.Seed.run/1` for a real 15-system map. Two traps are documented there and cost an hour each
+if you rediscover them: use `bin/wanderer_app rpc`, never `eval` (eval starts no applications, so Finch has no
+pools), and set `localStorage.wandererLastVersion` to the running `@version` or the server silently never starts
+the map and you get an empty canvas with an "Update Required" splash.
+
+`node dev/layout-bench.mjs` scores the beautifier: quality (crossings, span, edge length, idempotence) and
+**round-trip stability** — beautify, add k systems, beautify again — which is the number that matters, plus the
+cold full re-solve cost. `--json`/`--compare` gate regressions. Run it after any change under
+`assets/js/hooks/Mapper/components/map/layout/`.
 
 ## Loop
 
