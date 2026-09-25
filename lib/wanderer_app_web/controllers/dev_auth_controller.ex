@@ -105,7 +105,11 @@ defmodule WandererAppWeb.DevAuthController do
 
     case WandererApp.Api.Character.by_eve_id(@dev_character_eve_id) do
       {:ok, character} ->
-        {:ok, character} = WandererApp.Api.Character.update(character, character_data)
+        # The :update action does not accept :eve_id (it is the identity), so
+        # refresh only the mutable fields.
+        {:ok, character} =
+          WandererApp.Api.Character.update(character, Map.delete(character_data, :eve_id))
+
         character
 
       {:error, _not_found} ->

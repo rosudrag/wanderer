@@ -146,14 +146,14 @@ defmodule WandererApp.Dev.Seed do
   end
 
   defp sde_loaded? do
-    case Ash.count(MapSolarSystem) do
+    case Ash.count(MapSolarSystem, authorize?: false) do
       {:ok, count} when count > 0 -> true
       _other -> false
     end
   end
 
   defp find_or_create_user do
-    case User.by_hash(@dev_user_hash) do
+    case User.by_hash(@dev_user_hash, authorize?: false) do
       {:ok, user} ->
         {:ok, user}
 
@@ -161,13 +161,17 @@ defmodule WandererApp.Dev.Seed do
       # changeset API directly, exactly as WandererAppWeb.AuthController does.
       {:error, _not_found} ->
         User
-        |> Ash.Changeset.for_create(:create, %{name: @dev_character_name, hash: @dev_user_hash})
+        |> Ash.Changeset.for_create(
+          :create,
+          %{name: @dev_character_name, hash: @dev_user_hash},
+          authorize?: false
+        )
         |> Ash.create()
     end
   end
 
   defp find_or_create_character(user) do
-    case Character.by_eve_id(@dev_character_eve_id) do
+    case Character.by_eve_id(@dev_character_eve_id, authorize?: false) do
       {:ok, character} -> ensure_character_owner(character, user)
       {:error, _not_found} -> create_and_assign_character(user)
     end
@@ -177,56 +181,68 @@ defmodule WandererApp.Dev.Seed do
     do: {:ok, character}
 
   defp ensure_character_owner(character, user),
-    do: Character.assign_user(character, %{user_id: user.id})
+    do: Character.assign_user(character, %{user_id: user.id}, authorize?: false)
 
   defp create_and_assign_character(user) do
     with {:ok, character} <-
-           Character.create(%{eve_id: @dev_character_eve_id, name: @dev_character_name}) do
-      Character.assign_user(character, %{user_id: user.id})
+           Character.create(
+             %{eve_id: @dev_character_eve_id, name: @dev_character_name},
+             authorize?: false
+           ) do
+      Character.assign_user(character, %{user_id: user.id}, authorize?: false)
     end
   end
 
   defp find_or_create_map(map_name, slug, owner_character) do
-    case Map.get_map_by_slug(slug) do
+    case Map.get_map_by_slug(slug, authorize?: false) do
       {:ok, map} -> {:ok, map}
       {:error, _not_found} -> create_map(map_name, slug, owner_character)
     end
   end
 
   defp create_map(map_name, slug, owner_character) do
-    Map.new(%{
-      name: map_name,
-      slug: slug,
-      description: "Seeded dev map for UI verification without EVE SSO.",
-      scope: :wormholes,
-      only_tracked_characters: false,
-      owner_id: owner_character.id,
-      create_default_acl: true
-    })
+    Map.new(
+      %{
+        name: map_name,
+        slug: slug,
+        description: "Seeded dev map for UI verification without EVE SSO.",
+        scope: :wormholes,
+        only_tracked_characters: false,
+        owner_id: owner_character.id,
+        create_default_acl: true
+      },
+      authorize?: false
+    )
   end
 
   defp track_character(map, character) do
-    MapCharacterSettings.create(%{map_id: map.id, character_id: character.id, tracked: true})
+    MapCharacterSettings.create(
+      %{map_id: map.id, character_id: character.id, tracked: true},
+      authorize?: false
+    )
   end
 
   defp seed_systems(map, sde_loaded?) do
     Enum.each(@systems, fn {solar_system_id, position_x, position_y} ->
       {:ok, _system} =
-        MapSystem.upsert(%{
-          map_id: map.id,
-          solar_system_id: solar_system_id,
-          name: system_name(solar_system_id, sde_loaded?),
-          position_x: position_x,
-          position_y: position_y,
-          visible: true
-        })
+        MapSystem.upsert(
+          %{
+            map_id: map.id,
+            solar_system_id: solar_system_id,
+            name: system_name(solar_system_id, sde_loaded?),
+            position_x: position_x,
+            position_y: position_y,
+            visible: true
+          },
+          authorize?: false
+        )
     end)
 
     :ok
   end
 
   defp system_name(solar_system_id, true) do
-    case MapSolarSystem.by_solar_system_id(solar_system_id) do
+    case MapSolarSystem.by_solar_system_id(solar_system_id, authorize?: false) do
       {:ok, %{solar_system_name: name}} when is_binary(name) -> name
       _not_found -> Integer.to_string(solar_system_id)
     end
@@ -242,22 +258,33 @@ defmodule WandererApp.Dev.Seed do
     :ok
   end
 
+  # Connections have no identity to upsert against, so duplicate suppression is
+  # a manual existence check. A stored row is an unordered pair of endpoints
+  # (nothing about `solar_system_source`/`solar_system_target` makes the edge
+  # directional), so a seed pair must be suppressed by a stored row in EITHER
+  # orientation: `source = A, target = B` must also suppress `A, B` reversed
+  # to `B, A`.
   defp ensure_connection(map, source, target, type) do
     case Ash.count(
            Ash.Query.filter(
              MapConnection,
-             map_id == ^map.id and solar_system_source == ^source and
-               solar_system_target == ^target
-           )
+             map_id == ^map.id and
+               ((solar_system_source == ^source and solar_system_target == ^target) or
+                  (solar_system_source == ^target and solar_system_target == ^source))
+           ),
+           authorize?: false
          ) do
       {:ok, 0} ->
         {:ok, _connection} =
-          MapConnection.create(%{
-            map_id: map.id,
-            solar_system_source: source,
-            solar_system_target: target,
-            type: type
-          })
+          MapConnection.create(
+            %{
+              map_id: map.id,
+              solar_system_source: source,
+              solar_system_target: target,
+              type: type
+            },
+            authorize?: false
+          )
 
         :ok
 

@@ -49,6 +49,17 @@ services:
       # connections and immediately resets them.
       PHX_SERVER: "true"
       ECTO_IPV6: "false"
+      # Seeding and the SDE import must run through `bin/wanderer_app rpc`, not
+      # `eval`: eval loads the release without starting applications, so Finch
+      # has no pools and every HTTP call dies with "unknown registry: Req.Finch".
+      # rpc in turn needs distribution up with a resolvable node name — the
+      # default long-name-from-container-hostname fails with "Hostname <id> is
+      # illegal" / :noconnection, which is the same trap the production
+      # deployment hits. Pinning short-name distribution to a loopback node
+      # makes rpc work inside this container.
+      RELEASE_DISTRIBUTION: "name"
+      RELEASE_NODE: "wanderer@127.0.0.1"
+      RELEASE_COOKIE: "wanderer-agent-cookie"
       DATABASE_URL: "ecto://wanderer_agent:wanderer_agent@db/wanderer_agent"
       # Throwaway, hardcoded on purpose: this instance holds no real data and
       # is torn down with `down -v`. Never reuse these values anywhere real.
