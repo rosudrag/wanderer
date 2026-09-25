@@ -5,40 +5,69 @@
 // region, so the frontend "beautifier" can drop k-space systems into a
 // Dotlan-like geographic arrangement without doing any layout math at runtime.
 //
+// v3 replaces the old SDE-lattice-projection geometry with Dotlan's own
+// hand-made region maps (https://evemaps.dotlan.net/svg/<Region>.svg). Someone
+// already spent a lot of effort making those maps readable; this script just
+// stitches them into one shared grid instead of re-deriving a layout from
+// scratch. The SDE is still consulted, but only to answer "which regions and
+// systems are k-space, and which region does each system belong to" — all
+// geometry (where a system sits, relative to its neighbours) comes from
+// Dotlan.
+//
 // Usage: node assets/scripts/generate-region-layouts.mjs
 // (No npm dependencies; uses global fetch, available in Node 18+ and Bun.)
 
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import os from 'node:os';
 
 // NOTE: the SDE mirror path documented casually as
 // https://www.fuzzwork.co.uk/dump/latest/mapSolarSystems.csv 404s. The real
 // CSV dumps live one level deeper, under /dump/latest/csv/.
 const SOLAR_SYSTEMS_URL = 'https://www.fuzzwork.co.uk/dump/latest/csv/mapSolarSystems.csv';
 const REGIONS_URL = 'https://www.fuzzwork.co.uk/dump/latest/csv/mapRegions.csv';
+const DOTLAN_SVG_BASE = 'https://evemaps.dotlan.net/svg/';
 
+// Dotlan draws every region SVG at the same physical scale, so region-to-
+// region stitching is a pure translation (no per-region rescaling needed).
 const CELL_W = 180;
 const CELL_H = 75;
-// Row cells are drawn shorter than they are wide, so one lattice step along Y
-// has to span more *row* units than one lattice step along X spans *col*
-// units for the same on-screen physical distance. CELL_W/CELL_H is exactly
-// that correction factor.
-const ROW_ASPECT = CELL_W / CELL_H; // 2.4
-// CHEWY PATCH: TARGET_BBOX_CELLS (global-scale-to-1200-cells factor used to
-// combine per-region centroids with per-region local grids) is gone along
-// with the per-region packing it supported — see the global lattice pass
-// in main() below.
+// col = round(x / COL_DIVISOR), row = round(y / ROW_DIVISOR). The ratio
+// COL_DIVISOR/ROW_DIVISOR must equal CELL_W/CELL_H (=2.4) so that a shape
+// drawn on Dotlan keeps its proportions once rendered through our
+// non-square (180x75) grid cells: physical width covered by `cols` columns
+// is cols*CELL_W = (x/COL_DIVISOR)*CELL_W, and physical height covered by
+// `rows` rows is rows*CELL_H = (y/ROW_DIVISOR)*CELL_H. Those are equal (for
+// equal x, y pixel distances) exactly when COL_DIVISOR/ROW_DIVISOR ===
+// CELL_W/CELL_H.
+// Halved from 30/12.5 after measuring: the coarser pair forced 12.4% of systems
+// off their true cell by collision-nudging, and Dotlan-ordering agreement sat at
+// 98.2%. The engine collapses empty runs anyway, so a finer grid costs nothing
+// on screen and buys back that fidelity.
+const COL_DIVISOR = 15;
+const ROW_DIVISOR = 6.25;
 
-// A coordinate is considered "on the lattice" if it's within this fraction of
-// one step from the nearest integer multiple.
-const STEP_TOLERANCE = 0.01;
-// At least this fraction of real position2D coordinates (per axis) must fall
-// on the lattice, or the projection assumption is wrong and we abort.
-const STEP_MIN_FIT_FRACTION = 0.99;
+// Collisions above this fraction of all placed systems indicate the pixel
+// divisors above are too coarse for Dotlan's local system spacing.
+const COLLISION_WARN_FRACTION = 0.02;
 
 const KSPACE_MIN_REGION_ID = 10000001;
 const KSPACE_MAX_REGION_ID = 10999999;
+
+// Gap (in Dotlan pixel units) left between the current placed bounding box
+// and a region that has to be placed via SDE-direction fallback (no shared
+// system with anything placed so far).
+const ORPHAN_GAP_PX = 200;
+
+// Polite: cache raw SVGs on disk (outside the repo) so re-runs don't
+// re-fetch dotlan.net, and never hold more than this many requests open at
+// once.
+const CACHE_DIR = path.join(os.tmpdir(), 'wanderer-dotlan-svg-cache');
+const FETCH_CONCURRENCY = 4;
+const USER_AGENT =
+  'wanderer-region-layout-generator/3.0 (+https://github.com/wanderer-eve/wanderer; ' +
+  'one-off region-layout regeneration script, contact via GitHub issues)';
 
 const OUTPUT_PATH = path.resolve(
   fileURLToPath(import.meta.url),
@@ -99,7 +128,7 @@ function parseCsv(text) {
 }
 
 async function fetchText(url) {
-  const res = await fetch(url);
+  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
   if (!res.ok) {
     throw new Error(`Failed to fetch ${url}: HTTP ${res.status}`);
   }
@@ -137,143 +166,104 @@ function* spiralOffsets() {
   }
 }
 
-/**
- * Determines the fundamental lattice step of a set of quantized coordinates
- * via a real-valued GCD-by-successive-approximation: start from the modal
- * consecutive gap between sorted unique values (a good first guess even in
- * the presence of a handful of multi-step gaps or slightly-off-lattice
- * outliers), then refine with weighted least squares (weight = the integer
- * step count each value implies), excluding points that don't land near an
- * integer multiple. Iterating converges quickly because each refined `step`
- * produces better integer assignments than the last.
- */
-function robustStep(values) {
-  const uniq = [...new Set(values)].sort((a, b) => a - b);
-  if (uniq.length < 2) {
-    throw new Error('Cannot determine lattice step: fewer than 2 distinct coordinate values.');
-  }
-  const origin = uniq[0];
-  const rel = uniq.map(v => v - origin);
-
-  const diffs = [];
-  for (let i = 1; i < uniq.length; i++) diffs.push(uniq[i] - uniq[i - 1]);
-  const diffFreq = new Map();
-  for (const d of diffs) diffFreq.set(d, (diffFreq.get(d) || 0) + 1);
-  let step = diffs[0];
-  let bestCount = 0;
-  for (const [d, count] of diffFreq) {
-    if (count > bestCount) {
-      bestCount = count;
-      step = d;
-    }
-  }
-
-  for (let iter = 0; iter < 6; iter++) {
-    let num = 0;
-    let den = 0;
-    for (const v of rel) {
-      const n = Math.round(v / step);
-      if (n === 0) continue;
-      const relResid = Math.abs(v - n * step) / step;
-      if (relResid > STEP_TOLERANCE) continue;
-      num += v * n;
-      den += n * n;
-    }
-    if (den === 0) break;
-    step = num / den;
-  }
-
-  let within = 0;
-  const outliers = [];
-  for (let i = 0; i < rel.length; i++) {
-    const n = Math.round(rel[i] / step);
-    const relResid = Math.abs(rel[i] - n * step) / step;
-    if (relResid <= STEP_TOLERANCE) {
-      within++;
-    } else {
-      outliers.push(uniq[i]);
-    }
-  }
-  const fraction = within / rel.length;
-  return { step, fraction, total: rel.length, within, outliers };
-}
-
-/** Solves a 3x3 linear system via Cramer's rule. */
-function solveLinear3(A, b) {
-  const det3 = m =>
-    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
-    m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
-    m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-  const D = det3(A);
-  if (Math.abs(D) < 1e-9) {
-    throw new Error('Singular matrix while fitting fallback projection (reference systems are collinear).');
-  }
-  const withCol = (m, col, vec) => m.map((row, i) => row.map((v, j) => (j === col ? vec[i] : v)));
-  return [det3(withCol(A, 0, b)) / D, det3(withCol(A, 1, b)) / D, det3(withCol(A, 2, b)) / D];
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const n = sorted.length;
+  const mid = n >> 1;
+  return n % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 /**
- * Fits a 2D affine transform (x, z) -> (position2Dx, position2Dy) by least
- * squares over a region's systems that DO have a position2D projection, for
- * use on the (expected to be empty, but handled defensively) handful of
- * k-space systems that don't. Coordinates are mean-centred and rescaled
- * before solving to keep the 3x3 normal-equations solve well-conditioned
- * despite EVE's ~1e17-magnitude coordinates.
+ * Parses every `<use id="sys<id>" x="…" y="…" … />` tag out of a Dotlan
+ * region SVG. Attribute order isn't assumed (each of id/x/y is matched
+ * independently within the tag) even though Dotlan happens to emit them in
+ * a consistent order today.
  */
-function fitFallbackProjection(referencePoints) {
-  const n = referencePoints.length;
-  if (n < 3) {
-    throw new Error(`Cannot fit fallback projection: need >= 3 reference systems in the region, got ${n}.`);
+function parseSvgSystemPositions(svgText) {
+  const positions = new Map(); // solarSystemID -> [x, y] in this SVG's local pixel space
+  const useTagRe = /<use\b([^>]*?)\/>/g;
+  let m;
+  while ((m = useTagRe.exec(svgText))) {
+    const attrs = m[1];
+    const idMatch = attrs.match(/\bid="sys(\d+)"/);
+    if (!idMatch) continue;
+    const xMatch = attrs.match(/\bx="(-?[\d.]+)"/);
+    const yMatch = attrs.match(/\by="(-?[\d.]+)"/);
+    if (!xMatch || !yMatch) continue;
+    positions.set(parseInt(idMatch[1], 10), [parseFloat(xMatch[1]), parseFloat(yMatch[1])]);
   }
-  const meanX = referencePoints.reduce((s, p) => s + p.x, 0) / n;
-  const meanZ = referencePoints.reduce((s, p) => s + p.z, 0) / n;
-  const SCALE = 1e16;
-  const norm = referencePoints.map(p => ({
-    x: (p.x - meanX) / SCALE,
-    z: (p.z - meanZ) / SCALE,
-    p2x: p.p2x,
-    p2y: p.p2y,
-  }));
+  return positions;
+}
 
-  let Sxx = 0,
-    Sxz = 0,
-    Sx = 0,
-    Szz = 0,
-    Sz = 0,
-    Sxp = 0,
-    Szp = 0,
-    Sp = 0,
-    Sxq = 0,
-    Szq = 0,
-    Sq = 0;
-  for (const p of norm) {
-    Sxx += p.x * p.x;
-    Sxz += p.x * p.z;
-    Sx += p.x;
-    Szz += p.z * p.z;
-    Sz += p.z;
-    Sxp += p.x * p.p2x;
-    Szp += p.z * p.p2x;
-    Sp += p.p2x;
-    Sxq += p.x * p.p2y;
-    Szq += p.z * p.p2y;
-    Sq += p.p2y;
+function dotlanSvgUrl(regionName) {
+  return `${DOTLAN_SVG_BASE}${regionName.replace(/ /g, '_')}.svg`;
+}
+
+/** Reads a cached SVG from disk, or fetches + caches it if missing. */
+async function fetchRegionSvg(regionName) {
+  const cacheFile = path.join(CACHE_DIR, `${regionName.replace(/ /g, '_')}.svg`);
+  if (existsSync(cacheFile)) {
+    return readFileSync(cacheFile, 'utf8');
   }
-  const A = [
-    [Sxx, Sxz, Sx],
-    [Sxz, Szz, Sz],
-    [Sx, Sz, n],
-  ];
-  const [a, b, e] = solveLinear3(A, [Sxp, Szp, Sp]);
-  const [c, d, f] = solveLinear3(A, [Sxq, Szq, Sq]);
-  // norm.x = (x - meanX) / SCALE, so undo the centring/scaling algebraically.
-  const aa = a / SCALE;
-  const bb = b / SCALE;
-  const ee = e - aa * meanX - bb * meanZ;
-  const cc = c / SCALE;
-  const dd = d / SCALE;
-  const ff = f - cc * meanX - dd * meanZ;
-  return (x, z) => [aa * x + bb * z + ee, cc * x + dd * z + ff];
+  const text = await fetchText(dotlanSvgUrl(regionName));
+  writeFileSync(cacheFile, text);
+  return text;
+}
+
+/**
+ * Fetches every region's SVG (cache-first), at most FETCH_CONCURRENCY in
+ * flight at once. Per-region failures (404, empty SVG) are collected rather
+ * than thrown, so one bad region doesn't block placing the other ~69.
+ */
+async function fetchAllRegionSvgs(regions) {
+  mkdirSync(CACHE_DIR, { recursive: true });
+  const svgPositions = new Map(); // regionID -> Map<solarSystemID, [x,y]>
+  const skipped = []; // { region, reason }
+  let cursor = 0;
+  async function worker() {
+    while (cursor < regions.length) {
+      const region = regions[cursor++];
+      try {
+        const svgText = await fetchRegionSvg(region.name);
+        const positions = parseSvgSystemPositions(svgText);
+        if (positions.size === 0) {
+          throw new Error('SVG fetched but contained zero <use id="sys…"> system markers');
+        }
+        svgPositions.set(region.id, positions);
+      } catch (err) {
+        process.stderr.write(`ABORT region "${region.name}" (${region.id}): ${err.message}\n`);
+        skipped.push({ region, reason: err.message });
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: FETCH_CONCURRENCY }, worker));
+  return { svgPositions, skipped };
+}
+
+function bboxOfPositions(positions) {
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
+  for (const [x, y] of positions) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  return { minX, maxX, minY, maxY };
+}
+
+function centroid2D(points) {
+  let sx = 0,
+    sy = 0,
+    n = 0;
+  for (const [x, y] of points) {
+    sx += x;
+    sy += y;
+    n++;
+  }
+  return n ? [sx / n, sy / n] : null;
 }
 
 async function main() {
@@ -283,8 +273,8 @@ async function main() {
   const regionsCsvText = await fetchText(REGIONS_URL);
 
   const { idx: solarIdx, rows: solarRows } = parseCsv(solarCsvText);
-  const requiredCols = ['solarSystemID', 'regionID', 'solarSystemName', 'x', 'z', 'position2Dx', 'position2Dy'];
-  for (const col of requiredCols) {
+  const requiredSolarCols = ['solarSystemID', 'regionID', 'solarSystemName', 'position2Dx', 'position2Dy'];
+  for (const col of requiredSolarCols) {
     if (!(col in solarIdx)) {
       throw new Error(
         `mapSolarSystems.csv is missing required column "${col}". Header had: ${Object.keys(solarIdx).join(', ')}`,
@@ -299,138 +289,276 @@ async function main() {
     }
   }
 
+  // --- SDE is authoritative for "which regions/systems are k-space, and
+  // which region owns each system"; Dotlan supplies only geometry. ---
   const regionNames = new Map();
   for (const row of regionRows) {
     const regionID = parseInt(row[regionIdx.regionID], 10);
+    if (!Number.isFinite(regionID) || regionID < KSPACE_MIN_REGION_ID || regionID > KSPACE_MAX_REGION_ID) continue;
     regionNames.set(regionID, row[regionIdx.regionName]);
   }
+  const regionList = [...regionNames.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.id - b.id);
 
-  // --- parse + filter to k-space; position2Dx/position2Dy is the SDE's own
-  // Dotlan-style 2D map projection (present for k-space, empty for the
-  // ~3000 wormhole/abyssal systems, which the region filter already drops). ---
-  const allSystems = [];
+  const ownRegionOf = new Map(); // solarSystemID -> regionID
+  const systemNames = new Map();
+  const systemP2D = new Map(); // solarSystemID -> [position2Dx, position2Dy], used ONLY to pick a
+  // direction for regions with no Dotlan-shared anchor to the placed set.
   for (const row of solarRows) {
     const regionID = parseInt(row[solarIdx.regionID], 10);
-    if (!Number.isFinite(regionID) || regionID < KSPACE_MIN_REGION_ID || regionID > KSPACE_MAX_REGION_ID) continue;
+    if (!regionNames.has(regionID)) continue;
     const solarSystemID = parseInt(row[solarIdx.solarSystemID], 10);
-    const name = row[solarIdx.solarSystemName];
-    const x = parseFloat(row[solarIdx.x]);
-    const z = parseFloat(row[solarIdx.z]);
-    if (!Number.isFinite(x) || !Number.isFinite(z)) {
-      throw new Error(`System ${solarSystemID} (${name}) has non-numeric x/z coordinates.`);
-    }
-    const p2xRaw = row[solarIdx.position2Dx];
-    const p2yRaw = row[solarIdx.position2Dy];
-    const hasP2D = p2xRaw !== '' && p2yRaw !== '';
-    if (hasP2D && (!Number.isFinite(parseFloat(p2xRaw)) || !Number.isFinite(parseFloat(p2yRaw)))) {
-      throw new Error(`System ${solarSystemID} (${name}) has non-numeric position2Dx/position2Dy.`);
-    }
-    allSystems.push({
-      regionID,
-      solarSystemID,
-      name,
-      x,
-      z,
-      hasP2D,
-      p2x: hasP2D ? parseFloat(p2xRaw) : null,
-      p2y: hasP2D ? parseFloat(p2yRaw) : null,
-    });
+    ownRegionOf.set(solarSystemID, regionID);
+    systemNames.set(solarSystemID, row[solarIdx.solarSystemName]);
+    const px = parseFloat(row[solarIdx.position2Dx]);
+    const py = parseFloat(row[solarIdx.position2Dy]);
+    if (Number.isFinite(px) && Number.isFinite(py)) systemP2D.set(solarSystemID, [px, py]);
   }
-
-  if (allSystems.length === 0) {
+  if (ownRegionOf.size === 0) {
     throw new Error('No k-space systems parsed from mapSolarSystems.csv — aborting.');
   }
+  process.stderr.write(`k-space regions=${regionList.length} systems=${ownRegionOf.size} (from SDE)\n`);
 
-  // --- detect the SDE's projection lattice step, per axis, from every
-  // k-space system that has a position2D projection ---
-  const withP2D = allSystems.filter(s => s.hasP2D);
-  const fallbackSystems = allSystems.filter(s => !s.hasP2D);
-
-  const stepXInfo = robustStep(withP2D.map(s => s.p2x));
-  const stepYInfo = robustStep(withP2D.map(s => s.p2y));
-  process.stderr.write(
-    `Lattice step X=${stepXInfo.step} (${stepXInfo.within}/${stepXInfo.total} on-lattice), ` +
-      `Y=${stepYInfo.step} (${stepYInfo.within}/${stepYInfo.total} on-lattice)\n`,
-  );
-  if (stepXInfo.fraction < STEP_MIN_FIT_FRACTION || stepYInfo.fraction < STEP_MIN_FIT_FRACTION) {
-    throw new Error(
-      `position2D coordinates don't fit a regular lattice: X ${(stepXInfo.fraction * 100).toFixed(2)}%, ` +
-        `Y ${(stepYInfo.fraction * 100).toFixed(2)}% within tolerance (need >= ${STEP_MIN_FIT_FRACTION * 100}%). ` +
-        `X outliers: ${stepXInfo.outliers.slice(0, 5).join(', ')}. Y outliers: ${stepYInfo.outliers.slice(0, 5).join(', ')}.`,
+  // --- fetch + cache + parse every region's Dotlan SVG. Region SVGs draw
+  // their own systems PLUS a chunk of neighbouring regions' systems for
+  // context; those foreign appearances are exactly the anchors used below
+  // to stitch regions together (a system's OWN region's rendering always
+  // wins for its final position — see placeRegion below). ---
+  process.stderr.write(`Fetching ${regionList.length} region SVGs from Dotlan (cache: ${CACHE_DIR})...\n`);
+  const { svgPositions, skipped: skippedRegions } = await fetchAllRegionSvgs(regionList);
+  const placeableRegions = regionList.filter(r => svgPositions.has(r.id));
+  if (skippedRegions.length > 0) {
+    process.stderr.write(
+      `Skipped ${skippedRegions.length} region(s) (see ABORT lines above): ` +
+        `${skippedRegions.map(s => s.region.name).join(', ')}\n`,
     );
   }
-  const stepX = stepXInfo.step;
-  const stepY = stepYInfo.step;
 
-  // --- group by region, then resolve any missing position2D via a
-  // per-region affine fit of the old x/z projection onto position2D space,
-  // using that region's other (known-good) systems as reference points ---
-  const byRegion = new Map();
-  for (const s of allSystems) {
-    if (!byRegion.has(s.regionID)) byRegion.set(s.regionID, []);
-    byRegion.get(s.regionID).push(s);
-  }
-
-  if (fallbackSystems.length > 0) {
-    const byRegionFallback = new Map();
-    for (const s of fallbackSystems) {
-      if (!byRegionFallback.has(s.regionID)) byRegionFallback.set(s.regionID, []);
-      byRegionFallback.get(s.regionID).push(s);
-    }
-    for (const [regionID, systems] of byRegionFallback) {
-      const referencePoints = byRegion.get(regionID).filter(s => s.hasP2D);
-      const project = fitFallbackProjection(referencePoints);
-      for (const s of systems) {
-        const [fx, fy] = project(s.x, s.z);
-        s.p2x = fx;
-        s.p2y = fy;
+  // --- region adjacency graph: an edge exists between two regions if their
+  // SVGs share at least one system id (own or foreign-context). ---
+  const adjacency = new Map();
+  for (const r of placeableRegions) adjacency.set(r.id, new Map());
+  for (let i = 0; i < placeableRegions.length; i++) {
+    for (let j = i + 1; j < placeableRegions.length; j++) {
+      const A = placeableRegions[i].id;
+      const B = placeableRegions[j].id;
+      const mapA = svgPositions.get(A);
+      const mapB = svgPositions.get(B);
+      let shared = 0;
+      for (const sid of mapA.keys()) if (mapB.has(sid)) shared++;
+      if (shared > 0) {
+        adjacency.get(A).set(B, shared);
+        adjacency.get(B).set(A, shared);
       }
     }
+  }
+
+  // --- stitch every region into one global (translation-only) pixel frame ---
+  const regionOffset = new Map(); // regionID -> [ox, oy]
+  const authoritative = new Map(); // solarSystemID -> [gx, gy], from the system's OWN region
+  const provisional = new Map(); // solarSystemID -> [gx, gy], from a foreign-context rendering,
+  // used only as a stitching anchor until (if ever) the system's own region gets placed
+  function globalPosOf(sid) {
+    return authoritative.has(sid) ? authoritative.get(sid) : provisional.get(sid);
+  }
+  function placeRegion(regionId, offset) {
+    regionOffset.set(regionId, offset);
+    for (const [sid, [lx, ly]] of svgPositions.get(regionId)) {
+      const g = [lx + offset[0], ly + offset[1]];
+      if (ownRegionOf.get(sid) === regionId) {
+        authoritative.set(sid, g); // own region always wins, even over an earlier foreign guess
+      } else if (!provisional.has(sid)) {
+        provisional.set(sid, g);
+      }
+    }
+  }
+
+  const stitchReport = []; // { region, anchors, residual, method, via }
+  const unvisited = new Set(placeableRegions.map(r => r.id));
+
+  function totalSharedAmong(regionId, candidateSet) {
+    let total = 0;
+    for (const [neighborId, count] of adjacency.get(regionId)) {
+      if (candidateSet.has(neighborId)) total += count;
+    }
+    return total;
+  }
+
+  while (unvisited.size > 0) {
+    // Pick the next BFS root: prefer a region with graph edges into the
+    // still-unvisited set (so its shape stitches onto the shared-anchor
+    // frame like the rest); the very first root is "the region with the
+    // most shared systems" overall. Any region with zero such edges (no
+    // shared system with anything, anywhere) is placed via SDE-direction
+    // fallback below, and BFS from it will simply terminate immediately.
+    let rootId = null;
+    let rootScore = -1;
+    for (const id of unvisited) {
+      const score = totalSharedAmong(id, unvisited);
+      if (score > rootScore || (score === rootScore && (rootId === null || id < rootId))) {
+        rootScore = score;
+        rootId = id;
+      }
+    }
+
+    if (authoritative.size === 0) {
+      // very first region ever placed: anchors its own frame at [0,0]
+      placeRegion(rootId, [0, 0]);
+      stitchReport.push({ region: regionNames.get(rootId), id: rootId, anchors: 0, residual: 0, method: 'root' });
+    } else {
+      // check whether this root shares any anchor with what's already placed
+      const localMap = svgPositions.get(rootId);
+      const anchors = [];
+      for (const [sid, local] of localMap) {
+        const g = globalPosOf(sid);
+        if (g) anchors.push({ local, global: g });
+      }
+      if (anchors.length > 0) {
+        const offX = median(anchors.map(a => a.global[0] - a.local[0]));
+        const offY = median(anchors.map(a => a.global[1] - a.local[1]));
+        let residual = 0;
+        for (const a of anchors) {
+          residual = Math.max(
+            residual,
+            Math.abs(a.global[0] - a.local[0] - offX),
+            Math.abs(a.global[1] - a.local[1] - offY),
+          );
+        }
+        placeRegion(rootId, [offX, offY]);
+        stitchReport.push({
+          region: regionNames.get(rootId),
+          id: rootId,
+          anchors: anchors.length,
+          residual,
+          method: 'anchor',
+        });
+      } else {
+        // no shared system with the placed set anywhere: fall back to an
+        // SDE-derived direction, pushed just outside the current global
+        // bbox so it can't collide with anything already placed.
+        const ownSids = [...localMap.keys()].filter(sid => ownRegionOf.get(sid) === rootId);
+        const placedCentroidP2D = centroid2D([...authoritative.keys()].map(sid => systemP2D.get(sid)).filter(Boolean));
+        const ownCentroidP2D = centroid2D(ownSids.map(sid => systemP2D.get(sid)).filter(Boolean));
+        const { minX, maxX, minY, maxY } = bboxOfPositions(authoritative.values());
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+        const globalRadius = Math.hypot(maxX - minX, maxY - minY) / 2;
+        const localBbox = bboxOfPositions(localMap.values());
+        const localCenterX = (localBbox.minX + localBbox.maxX) / 2;
+        const localCenterY = (localBbox.minY + localBbox.maxY) / 2;
+        const localRadius = Math.hypot(localBbox.maxX - localBbox.minX, localBbox.maxY - localBbox.minY) / 2;
+
+        let dir = [1, 0];
+        if (placedCentroidP2D && ownCentroidP2D) {
+          // position2Dy grows north on the SDE's own projection (same
+          // orientation Dotlan draws in); our pixel-space y grows downward
+          // (south), so the y component is inverted.
+          const raw = [ownCentroidP2D[0] - placedCentroidP2D[0], -(ownCentroidP2D[1] - placedCentroidP2D[1])];
+          const len = Math.hypot(raw[0], raw[1]);
+          if (len > 0) dir = [raw[0] / len, raw[1] / len];
+        }
+        const targetCenter = [
+          centerX + dir[0] * (globalRadius + localRadius + ORPHAN_GAP_PX),
+          centerY + dir[1] * (globalRadius + localRadius + ORPHAN_GAP_PX),
+        ];
+        const offset = [targetCenter[0] - localCenterX, targetCenter[1] - localCenterY];
+        placeRegion(rootId, offset);
+        stitchReport.push({
+          region: regionNames.get(rootId),
+          id: rootId,
+          anchors: 0,
+          residual: null,
+          method: 'sde-direction',
+          direction: dir,
+        });
+        process.stderr.write(
+          `No Dotlan-shared anchor for region "${regionNames.get(rootId)}" (${rootId}); placed via SDE-derived ` +
+            `direction [${dir[0].toFixed(2)}, ${dir[1].toFixed(2)}] instead.\n`,
+        );
+      }
+    }
+    unvisited.delete(rootId);
+
+    // BFS the rest of this region's connected component using shared-anchor
+    // stitching (this also picks up any region that becomes reachable only
+    // once an SDE-direction-placed root is on the board).
+    const queue = [rootId];
+    while (queue.length > 0) {
+      const R = queue.shift();
+      const neighbors = [...adjacency.get(R).keys()].filter(n => unvisited.has(n)).sort((a, b) => a - b);
+      for (const N of neighbors) {
+        if (!unvisited.has(N)) continue;
+        const localMap = svgPositions.get(N);
+        const anchors = [];
+        for (const [sid, local] of localMap) {
+          const g = globalPosOf(sid);
+          if (g) anchors.push({ local, global: g });
+        }
+        if (anchors.length === 0) continue; // will be handled as a new root by the outer loop
+        const offX = median(anchors.map(a => a.global[0] - a.local[0]));
+        const offY = median(anchors.map(a => a.global[1] - a.local[1]));
+        let residual = 0;
+        for (const a of anchors) {
+          residual = Math.max(
+            residual,
+            Math.abs(a.global[0] - a.local[0] - offX),
+            Math.abs(a.global[1] - a.local[1] - offY),
+          );
+        }
+        placeRegion(N, [offX, offY]);
+        unvisited.delete(N);
+        queue.push(N);
+        stitchReport.push({
+          region: regionNames.get(N),
+          id: N,
+          anchors: anchors.length,
+          residual,
+          method: 'anchor',
+          via: regionNames.get(R),
+        });
+      }
+    }
+  }
+  const droppedSystems = [...ownRegionOf.keys()].filter(sid => !authoritative.has(sid));
+  if (droppedSystems.length > 0) {
     process.stderr.write(
-      `Fell back to x/z-derived projection for ${fallbackSystems.length} system(s) missing position2D: ` +
-        `${fallbackSystems.map(s => `${s.name} (${s.solarSystemID})`).join(', ')}\n`,
+      `${droppedSystems.length} system(s) dropped (their region's SVG could not be placed): ` +
+        `${droppedSystems
+          .slice(0, 10)
+          .map(sid => systemNames.get(sid))
+          .join(', ')}${droppedSystems.length > 10 ? ', …' : ''}\n`,
     );
-  } else {
-    process.stderr.write('All k-space systems have a position2D projection; no fallback needed.\n');
   }
 
-  // --- CHEWY PATCH: ONE global lattice shared by every k-space system,
-  // instead of per-region boxes packed by centroid. The old design stored
-  // per-region local cells (region-relative, starting at 0,0) plus a
-  // region centroid scaled to hit a ~1200-cell target bbox, then expected
-  // callers to add local cell + centroid together at render time. Those
-  // two lived on different scales, so a system's on-screen position
-  // relative to a gate neighbour in ANOTHER region was meaningless (e.g.
-  // Amamake, Heimatar, rendered at the top of a stack of Metropolis
-  // systems despite gating directly into Auga/Dal/Siseide), and each
-  // region box compressed its own empty rows/columns independently, so
-  // regions ended at different effective scales (a region whose systems
-  // share almost the same column collapsed into a vertical "stick").
-  // Computing col/row directly from position2Dx/position2Dy against ONE
-  // shared origin, and resolving collisions + compressing empty
-  // rows/columns exactly once across ALL of New Eden, fixes both: every
-  // system's cell distance to every other system — same region or not —
-  // is the real Dotlan-projected distance. ---
-  let globalMinX = Infinity;
-  let globalMaxY = -Infinity;
-  for (const s of allSystems) {
-    if (s.p2x < globalMinX) globalMinX = s.p2x;
-    if (s.p2y > globalMaxY) globalMaxY = s.p2y;
+  // --- stitch quality report: worst 5 residuals among anchor-stitched regions ---
+  const anchorStitched = stitchReport.filter(s => s.method === 'anchor');
+  const worst = [...anchorStitched].sort((a, b) => b.residual - a.residual).slice(0, 5);
+  process.stderr.write('Stitch report (5 worst residuals):\n');
+  for (const s of worst) {
+    process.stderr.write(
+      `  ${s.region}: anchors=${s.anchors} residual=${s.residual.toFixed(1)}px (via ${s.via ?? 'root'})\n`,
+    );
+  }
+  const sdeDirectionPlaced = stitchReport.filter(s => s.method === 'sde-direction');
+  if (sdeDirectionPlaced.length > 0) {
+    process.stderr.write(
+      `Placed via SDE-derived direction (no Dotlan-shared anchor): ${sdeDirectionPlaced.map(s => s.region).join(', ')}\n`,
+    );
   }
 
-  // lattice units -> integer cells, resolving rounding collisions
-  // deterministically with a spiral search, GLOBALLY (ascending
-  // solarSystemID across all k-space systems, not per region)
-  const allSorted = [...allSystems].sort((a, b) => a.solarSystemID - b.solarSystemID);
+  // --- pixels -> integer grid cells, preserving Dotlan's aspect ratio on
+  // our non-square (180x75) cells; resolve rounding collisions
+  // deterministically (ascending solarSystemID, square spiral outward) ---
+  const placedSids = [...authoritative.keys()].sort((a, b) => a - b);
   const occupied = new Set();
   const cellById = new Map();
-  for (const s of allSorted) {
-    const lx = (s.p2x - globalMinX) / stepX;
-    const ly = (globalMaxY - s.p2y) / stepY;
-    let col = Math.round(lx);
-    let row = Math.round(ly * ROW_ASPECT);
+  let nudged = 0;
+  for (const sid of placedSids) {
+    const [x, y] = authoritative.get(sid);
+    let col = Math.round(x / COL_DIVISOR);
+    let row = Math.round(y / ROW_DIVISOR);
     let key = `${col},${row}`;
     if (occupied.has(key)) {
+      nudged++;
       const spiral = spiralOffsets();
       for (;;) {
         const [dx, dy] = spiral.next().value;
@@ -446,7 +574,16 @@ async function main() {
       }
     }
     occupied.add(key);
-    cellById.set(s.solarSystemID, [col, row]);
+    cellById.set(sid, [col, row]);
+  }
+  const collisionFraction = nudged / placedSids.length;
+  process.stderr.write(`Collision nudges: ${nudged}/${placedSids.length} (${(collisionFraction * 100).toFixed(2)}%)\n`);
+  if (collisionFraction > COLLISION_WARN_FRACTION) {
+    process.stderr.write(
+      `WARNING: collision-nudge fraction ${(collisionFraction * 100).toFixed(2)}% exceeds the ` +
+        `${(COLLISION_WARN_FRACTION * 100).toFixed(0)}% sanity threshold — COL_DIVISOR=${COL_DIVISOR}/` +
+        `ROW_DIVISOR=${ROW_DIVISOR} are coarse relative to how tightly Dotlan packs systems within a region.\n`,
+    );
   }
 
   // re-translate so the global min col/row = 0
@@ -460,8 +597,6 @@ async function main() {
   const systemsOut = {};
   let maxCol = 0;
   let maxRow = 0;
-  // stable numeric-ascending key order (also V8's native ordering for
-  // integer-like string keys, but built explicitly for clarity)
   const sortedIds = [...cellById.keys()].sort((a, b) => a - b);
   const seenCells = new Set();
   for (const id of sortedIds) {
@@ -478,28 +613,27 @@ async function main() {
     systemsOut[String(id)] = [fCol, fRow];
   }
 
-  // assert every k-space system landed on a distinct global cell
-  if (seenCells.size !== allSystems.length) {
+  if (seenCells.size !== placedSids.length) {
     throw new Error(
-      `Global cell uniqueness assertion failed: ${seenCells.size} unique cells for ${allSystems.length} systems.`,
+      `Global cell uniqueness assertion failed: ${seenCells.size} unique cells for ${placedSids.length} systems.`,
     );
   }
 
   const gridSize = [maxCol + 1, maxRow + 1];
 
-  const regionIds = [...byRegion.keys()].sort((a, b) => a - b);
+  const placedRegionIds = placeableRegions
+    .map(r => r.id)
+    .filter(id => regionOffset.has(id))
+    .sort((a, b) => a - b);
   const regionsOut = {};
-  for (const regionID of regionIds) {
-    regionsOut[String(regionID)] = regionNames.get(regionID) ?? `Region ${regionID}`;
+  for (const regionID of placedRegionIds) {
+    regionsOut[String(regionID)] = regionNames.get(regionID);
   }
 
-  // top-level object; integer-like string keys inside `regions`/`systems`
-  // are already emitted in ascending numeric order (both by explicit sort
-  // above and by JS's native ordering of integer-index string keys).
   const output = {
-    version: 2,
+    version: 3,
     generatedAt: new Date().toISOString().slice(0, 10),
-    source: 'fuzzwork SDE mapSolarSystems.csv position2Dx/position2Dy',
+    source: 'evemaps.dotlan.net region SVGs, stitched into one global frame',
     regions: regionsOut,
     systems: systemsOut,
   };
@@ -507,11 +641,9 @@ async function main() {
   const json = JSON.stringify(output);
   writeFileSync(OUTPUT_PATH, json);
 
-  const systemCount = allSystems.length;
-  const regionCount = regionIds.length;
   const bytes = Buffer.byteLength(json, 'utf8');
   process.stderr.write(
-    `regions=${regionCount} systems=${systemCount} globalGridSizeCells=${gridSize[0]}x${gridSize[1]} outputBytes=${bytes}\n`,
+    `regions=${placedRegionIds.length} systems=${placedSids.length} globalGridSizeCells=${gridSize[0]}x${gridSize[1]} outputBytes=${bytes}\n`,
   );
   process.stderr.write(`Wrote ${OUTPUT_PATH}\n`);
 }

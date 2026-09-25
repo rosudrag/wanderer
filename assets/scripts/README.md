@@ -3,97 +3,133 @@
 ## generate-region-layouts.mjs
 
 Generates `assets/js/hooks/Mapper/components/map/layout/data/regionLayouts.json`,
-a precomputed Dotlan-like 2D grid layout (v2 schema, in `CELL_W=180 x
-CELL_H=75` px cell units) used by the map beautifier to place k-space systems.
+a precomputed 2D grid layout (v3 schema, in `CELL_W=180 x CELL_H=75` px cell
+units) used by the map beautifier to place k-space systems.
 
-It fetches `mapSolarSystems.csv` and `mapRegions.csv` from the Fuzzwork SDE
-CSV dump (the SDE mirror bundled with the app has no `x`/`y`/`z`/`position2D*`
-columns) and projects each system from `position2Dx`/`position2Dy` — the
-SDE's own pre-baked 2D map projection, i.e. the same coordinates Dotlan-style
-region maps are drawn from — instead of approximating one from the raw 3D
-`x`/`y`/`z`. Those two columns are quantized onto a regular lattice (empirically
-~2.0545e15 units/step, detected at generation time rather than hardcoded);
-dividing by that step turns them directly into integer grid cells, with no
-further per-region distance-based rescaling needed.
+### Dotlan's own maps, not a synthesized projection
 
-### CHEWY PATCH: one global lattice, not per-region boxes
+v2 of this file derived every system's position by projecting the SDE's own
+`position2Dx`/`position2Dy` columns onto a detected lattice. That worked, but
+it threw away something better: [Dotlan](https://evemaps.dotlan.net) already
+publishes a hand-tuned, genuinely readable 2D layout for every region — the
+same maps EVE players actually navigate by. v3 uses that layout directly
+instead of re-deriving one.
 
-v1 of this file stored a separate local cell grid *per region* (each
-starting at its own `[0,0]`) plus a region `centroid`, and the beautifier
-placed a system at `centroid + localCell`. That broke down on real maps in
-two ways:
+The SDE is still fetched (`mapRegions.csv` and `mapSolarSystems.csv` from the
+Fuzzwork CSV dump) but only as the authority for **which regions/systems are
+k-space** and **which region owns each system**. All _geometry_ — where a
+system sits relative to its neighbours — now comes from Dotlan's region SVGs
+at `https://evemaps.dotlan.net/svg/<Region_Name>.svg` (spaces become
+underscores, e.g. `The_Forge.svg`). Each system is a
+`<use id="sys<solarSystemID>" x="…" y="…" … />` element in that region's own
+local pixel space; SVG y already grows downward, matching screen/grid
+orientation.
 
-1. Region-local cells and centroids live on completely different scales
-   (the centroid was scaled to fit a ~1200-cell target bbox; the local
-   cells were native lattice-step integers), so a system's on-screen
-   position relative to a gate neighbour in *another* region was
-   meaningless. Concretely: Amamake (Heimatar) gate-connects directly to
-   Auga, Dal and Siseide (Metropolis), but v1 rendered it at the top of a
-   stack of unrelated Metropolis systems, with all three of those gates
-   drawn running the full height of the map.
-2. Each region box compressed its own empty rows/columns independently, so
-   two region boxes ended up at different effective scales — a region
-   whose systems happen to share almost the same column (e.g. Metropolis,
-   cols 3/5/5/5/5 in v1) collapsed into a single-pixel-wide vertical
-   "stick" instead of a readable 2D shape.
+### Stitching 70 separate drawings into one frame
 
-v2 fixes both by using **one lattice, shared by every k-space system in
-New Eden**, and compressing it exactly once, globally. `col`/`row` are
-computed directly against a single global origin (global min
-`position2Dx`, global max `position2Dy`), collisions are resolved with one
-global deterministic pass (not per region), and the whole lattice is
-translated so its global min col/row is `[0,0]`. There is no more
-`centroid`, no more per-region `size`, and no more addition step at
-render time — `systems[id]` is already the system's final cell.
+Every region SVG is drawn at the same physical scale, so combining two
+regions only requires finding the right **translation** between them — no
+per-region rescaling. The trick is that a region's SVG isn't just its own
+systems: Dotlan also draws a chunk of each neighbouring region's systems for
+context (e.g. `Heimatar.svg` includes Kourmonen from The Bleak Lands and
+Eszur from Metropolis). Wherever the same system ID appears in two different
+regions' SVGs, that's a **stitching anchor**: comparing its local pixel
+position in each SVG tells you the translation between those two regions'
+frames.
 
-Cell mapping (global, not per-region):
+The generator:
 
-- `col = round((position2Dx - globalMinX) / stepX)`
-- `row = round((globalMaxY - position2Dy) / stepY * (CELL_W / CELL_H))`
+1. Fetches and caches all 70 k-space region SVGs (polite: at most 4 requests
+   in flight, cached under `<os.tmpdir()>/wanderer-dotlan-svg-cache/` so
+   re-runs never re-hit dotlan.net for unchanged regions). A region whose SVG
+   404s or parses to zero systems is skipped with a loud `ABORT region "…"`
+   line on stderr and reported in the final summary — it does not stop the
+   other ~69 from being placed.
+2. Builds a graph of regions, with an edge between any two regions whose SVGs
+   share at least one system ID.
+3. Picks the region with the most total shared systems as the anchor of the
+   whole map (placed at a local offset of `[0, 0]`), then walks the graph
+   breadth-first. Each newly-reached region's offset is the **median**, over
+   every system it shares with something already placed, of
+   `(already-placed global position − this region's local position)`. The
+   median is robust to the handful of anchors that turn out to be
+   schematic/compressed "just for context" icons rather than true-to-scale
+   placements (a real, measured effect — some anchors land over 1000px off
+   the consensus; see the stitch report below). The **residual** (max
+   deviation from the median offset, in Dotlan pixels) is reported per region
+   so a bad stitch is visible rather than silent.
+4. If a region shares no system anywhere with what's already placed (true in
+   EVE today for `UUA-F4`, `J7HZ-F`, `A821-A` and `Pochven` — none of them
+   render any foreign-region context, and none of their own systems are
+   rendered as context by anyone else), it's placed last: its direction from
+   the placed set's centroid is estimated from the SDE's own
+   `position2Dx`/`position2Dy` columns (fetched already for this purpose,
+   used only for this fallback's direction, never for geometry), and it's
+   translated just outside the current global bounding box along that
+   direction. This is flagged explicitly in the stderr report.
+5. A system's own region always wins: if a system appears in several SVGs
+   (its own region's, plus one or more neighbours' context renderings), its
+   final position comes only from its own region's rendering, translated by
+   that region's offset. Foreign-context appearances are used solely as
+   anchors for computing _other_ regions' offsets.
 
-Row uses `globalMaxY - position2Dy` (not `position2Dx`'s min-relative form)
-because higher `position2Dy` is further *north*, verified against Dotlan's
-own rendered SVG for The Forge: Perimeter (lower `position2Dy` than Jita)
-sits south of Jita on-screen, New Caldari (higher `position2Dy`) sits north
-of it. Subtracting from the global max flips that into "row grows
-downward," matching on-screen/SVG coordinates. The `CELL_W / CELL_H = 2.4`
-factor corrects for the grid's non-square cells: a lattice step covers the
-same physical (pixel) distance on both axes only once the Y term is
-stretched by that ratio, since each row is drawn shorter than it is wide.
+### Pixels to grid cells
 
-Collisions (two systems rounding to the same cell) are resolved with a
-deterministic spiral search in ascending-`solarSystemID` order, applied
-once across *all* k-space systems (not per region), so no two systems in
-New Eden share a cell — asserted after the fact by comparing the resolved
-cell count to the total system count. The ~1-2% of k-space systems whose
-`position2Dx`/`position2Dy` fall off the detected lattice (a handful of
-genuine outliers in the SDE data, e.g. C-DHON in Vale of the Silent) are
-still placed — they just round to their nearest lattice cell instead of
-landing on it exactly. Any k-space system with no `position2D` at all
-(none currently; those columns are only empty for the ~3000
-wormhole/abyssal systems, which the k-space region filter already
-excludes) falls back to a `position2D` value synthesized by
-least-squares-fitting an affine transform from that system's `x`/`z` onto
-its region's other, known-good `position2D` points.
+Cells are non-square (`CELL_W=180 x CELL_H=75`), so converting Dotlan pixels
+to grid cells uses different divisors per axis to keep on-screen shapes
+proportional:
 
-### Output shape (v2)
+```
+col = round(x / 15)
+row = round(y / 6.25)
+```
+
+`15 / 6.25 = 2.4 = CELL_W / CELL_H`: for the same pixel distance on either
+axis, `cols * CELL_W` and `rows * CELL_H` come out equal, so a shape drawn on
+Dotlan keeps its proportions once rendered through the grid.
+
+Two systems that round to the same cell are resolved deterministically with a
+square-spiral search in ascending-`solarSystemID` order (global, across every
+placed system, not per region), and every system is asserted to land on a
+distinct cell afterward. A nudged system is one drawn somewhere Dotlan did not
+put it, so the divisors are a fidelity knob, measured rather than guessed
+(agreement = share of system pairs whose east/west and north/south order
+matches Dotlan's own SVG, own-region systems only, over 5 sampled regions):
+
+| divisors      | nudged   | Dotlan agreement | 15-system map                  |
+| ------------- | -------- | ---------------- | ------------------------------ |
+| 30 / 12.5     | 12.4%    | 98.18%           | 14x12 cells, mean edge 4.7     |
+| **15 / 6.25** | **3.0%** | **99.35%**       | **14x21 cells, mean edge 6.7** |
+| 7.5 / 3.125   | 0.9%     | 99.83%           | 17x21 cells, mean edge 7.6     |
+
+Finer divisors mean fewer systems share a column, so the engine's rank-based
+compression spreads the map out more. 15 / 6.25 is the chosen balance.
+
+Finally the whole grid is translated so the global minimum col/row is
+`[0, 0]`.
+
+### Output shape (v3)
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "generatedAt": "2026-09-25",
-  "source": "fuzzwork SDE mapSolarSystems.csv position2Dx/position2Dy",
-  "regions": { "10000042": "Metropolis" },
-  "systems": { "30002537": [306, 713] }
+  "source": "evemaps.dotlan.net region SVGs, stitched into one global frame",
+  "regions": { "10000030": "Heimatar" },
+  "systems": { "30002537": [93, 675] }
 }
 ```
 
-`regions` is now just `regionID -> regionName`; per-region grids, `size`
-and `centroid` are gone. `systems[solarSystemID] = [col, row]` are GLOBAL
-integer cell coordinates on the one shared lattice, with `[0, 0]` at the
-global min. `regions`/`systems` keys are emitted sorted ascending
-numerically, and the file is minified. Re-running the generator against
-unchanged SDE data reproduces byte-identical output.
+Same shape as v2: `regions` is `regionID -> regionName`, `systems[solarSystemID]
+= [col, row]` are GLOBAL integer cell coordinates with `[0, 0]` at the global
+minimum, keys are emitted sorted ascending numerically, and the file is
+minified. The frontend needs no changes to consume this — it's the same
+`{version, generatedAt, source, regions, systems}` shape as before, just
+`version: 3` and Dotlan-sourced coordinates.
+
+Re-running the generator against unchanged Dotlan/SDE data (or, more
+practically, an unchanged local SVG cache) reproduces byte-identical output —
+verified via a `sha256sum` diff across consecutive runs.
 
 Re-run with:
 
@@ -101,6 +137,11 @@ Re-run with:
 node assets/scripts/generate-region-layouts.mjs
 ```
 
+The SVG cache lives outside the repo (`os.tmpdir()/wanderer-dotlan-svg-cache`)
+so it never needs a `.gitignore` entry and re-runs against the same cache are
+free of network traffic. Delete that directory to force a fresh fetch (e.g.
+after Dotlan updates a region's layout).
+
 The output is committed (not generated at build/runtime) because it depends
-on a third-party network fetch and EVE's static universe geometry barely
-ever changes — regenerating it is a rare, deliberate, reviewable diff.
+on a third-party network fetch and EVE's universe geometry barely ever
+changes — regenerating it is a rare, deliberate, reviewable diff.
