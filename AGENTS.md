@@ -51,6 +51,23 @@ the map and you get an empty canvas with an "Update Required" splash.
 cold full re-solve cost. `--json`/`--compare` gate regressions. Run it after any change under
 `assets/js/hooks/Mapper/components/map/layout/`.
 
+## Traps that cost real time here
+
+- **Never `docker build` from a tar of this Windows working tree.** NTFS drops the exec bit and git hands
+  you CRLF, so the image fails with `exec /app/entrypoint.sh: no such file or directory`, then
+  `/app/releases/*/env.sh: not found`. Build from a fresh `git clone` on the server, the way
+  `deploy.ps1 -Build` does. Same reason `mix format --check-formatted` reports every file as unformatted
+  until you strip CR: the formatter also wants 100 columns, not 120.
+- **Actor-less Ash reads can return nothing even with `authorize?: false`.** `MapConnection`'s primary read
+  is `prepare WandererApp.Api.Preparations.FilterConnectionsByActorMap`, so with no actor it yields 0 rows
+  while the table holds hundreds — a duplicate guard built on it silently inserts every time. Use the
+  purpose-built read actions (`:read_by_locations`, `:read_by_map`) in any script or seeder that runs
+  without an actor.
+- **`deploy.ps1` does not run from an agent session**: `SSH_KEY_PATH` is empty in `.env` and `SERVER_HOST`
+  is `root@…`, while the agent's ssh alias authenticates as `claude`. Replicate its steps over
+  `ssh ex44 "sudo …"` — fetch + `git checkout --detach origin/chewy`, read `@version`, `docker build` with
+  both tags, install `.env`/`docker-compose.yml`, `compose pull` the sidecars, `compose up -d --force-recreate`.
+
 ## Loop
 
 ```bash
