@@ -4,21 +4,25 @@
 //   1. Partition the graph: gate (type 1) edges define k-space clusters;
 //      wormhole/bridge (type 0/2) edges define chain structure. A node
 //      touched by no gate edge is chain-only.
-//   2. Lay out every k-space cluster's region groups geographically (or
-//      topologically, per options/fallback) — see kspaceLayout.ts.
+//   2. Lay out every k-space cluster member that resolves to a GLOBAL
+//      lattice cell as ONE geographic box shared across every cluster and
+//      region (or every cluster topologically, per options/fallback); any
+//      member lacking a lattice entry falls back to a per-cluster
+//      topological group — see kspaceLayout.ts.
 //   3. Build the wormhole-chain forest out of chain-only nodes plus any
 //      k-space node that has a wormhole/bridge edge reaching into it (an
 //      "attachment point"), and lay out each component as a tidy tree
 //      rooted at pickChainRoot() — see chainLayout.ts. Attachment points
 //      and locked nodes are pinned: they seed the tree's translation but
 //      never receive a newly-emitted position themselves.
-//   4. Hand every component (region groups + chain trees) to pack.ts as a
-//      LayoutBox; it places them on one shared grid without overlap.
+//   4. Hand every component (the geographic box, topological groups, chain
+//      trees) to pack.ts as a LayoutBox; it places them on one shared grid
+//      without overlap.
 //   5. Emit only nodes whose integer-cell position actually changed,
 //      excluding every locked node.
 
 import { pickChainRoot, layoutChainTree } from './chainLayout';
-import { layoutKSpaceGroup } from './kspaceLayout';
+import { layoutGeographicSet, layoutTopologicalGroup } from './kspaceLayout';
 import { packBoxes } from './pack';
 import { loadRegionLayouts } from './regionData';
 import { CELL_H, CELL_W } from './types';
@@ -119,7 +123,7 @@ export const beautifyLayout = async (
   const kspaceClusters = gateComponents.filter(c => c.length >= 2);
   const kspaceMemberIds = new Set<string>(kspaceClusters.flat());
 
-  // --- 2. K-space region groups --------------------------------------------
+  // --- 2. K-space geographic set + topological fallback -------------------
 
   const boxes: LayoutBox[] = [];
   /** k-space node id -> its proposed (pre-pack) global cell, used to seed wormhole-chain attachment anchors. */
@@ -127,53 +131,40 @@ export const beautifyLayout = async (
 
   const regionData = kspaceMode === 'geographic' && kspaceClusters.length > 0 ? await loadRegionLayouts() : null;
 
-  kspaceClusters.forEach((cluster, clusterIndex) => {
-    const clusterSet = new Set(cluster);
-    const clusterGateEdges = edgesWithin(gateEdges, clusterSet);
+  if (kspaceMode === 'geographic') {
+    // ONE box for every cluster member that resolves to a GLOBAL lattice
+    // cell, regardless of which gate component or region it belongs to —
+    // compressing this whole set together (inside layoutGeographicSet) is
+    // what keeps relative position meaningful across region boundaries.
+    const allMembers = kspaceClusters.flat().map(id => nodeById.get(id)!);
+    const geo = layoutGeographicSet('kspace:geo', allMembers, regionData);
+    if (geo.result) {
+      boxes.push(geo.result.box);
+      for (const [id, cell] of geo.result.proposedCells) kspaceProposedCell.set(id, cell);
+    }
 
-    if (kspaceMode === 'geographic') {
-      const byRegion = new Map<string, string[]>();
-      for (const id of cluster) {
-        const regionKey = String(nodeById.get(id)!.regionId ?? 'unknown');
-        const bucket = byRegion.get(regionKey);
-        if (bucket) bucket.push(id);
-        else byRegion.set(regionKey, [id]);
-      }
-
-      for (const [regionKey, memberIds] of [...byRegion].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-        const members = memberIds.map(id => nodeById.get(id)!);
-        const memberSet = new Set(memberIds);
-        const groupGateEdges = edgesWithin(clusterGateEdges, memberSet);
-        const regionId = regionKey === 'unknown' ? undefined : Number(regionKey);
-        const result = layoutKSpaceGroup(
-          `kspace:${clusterIndex}:${regionKey}`,
-          members,
-          groupGateEdges,
-          regionId,
-          regionData,
-          'geographic',
-          axis,
-          hubs,
-        );
-        boxes.push(result.box);
-        for (const [id, cell] of result.proposedCells) kspaceProposedCell.set(id, cell);
-      }
-    } else {
-      const members = cluster.map(id => nodeById.get(id)!);
-      const result = layoutKSpaceGroup(
-        `kspace:${clusterIndex}`,
-        members,
-        clusterGateEdges,
-        undefined,
-        null,
-        'topological',
-        axis,
-        hubs,
-      );
+    // Members with no lattice entry (wormhole space, abyssal, data gaps)
+    // fall back to a per-cluster topological group, scoped to just that
+    // cluster's missing members, exactly as before.
+    kspaceClusters.forEach((cluster, clusterIndex) => {
+      const missingIds = cluster.filter(id => geo.missingIds.has(id));
+      if (missingIds.length === 0) return;
+      const members = missingIds.map(id => nodeById.get(id)!);
+      const clusterGateEdges = edgesWithin(gateEdges, new Set(cluster));
+      const groupGateEdges = edgesWithin(clusterGateEdges, new Set(missingIds));
+      const result = layoutTopologicalGroup(`kspace:topo:${clusterIndex}`, members, groupGateEdges, axis, hubs);
       boxes.push(result.box);
       for (const [id, cell] of result.proposedCells) kspaceProposedCell.set(id, cell);
-    }
-  });
+    });
+  } else {
+    kspaceClusters.forEach((cluster, clusterIndex) => {
+      const members = cluster.map(id => nodeById.get(id)!);
+      const clusterGateEdges = edgesWithin(gateEdges, new Set(cluster));
+      const result = layoutTopologicalGroup(`kspace:${clusterIndex}`, members, clusterGateEdges, axis, hubs);
+      boxes.push(result.box);
+      for (const [id, cell] of result.proposedCells) kspaceProposedCell.set(id, cell);
+    });
+  }
 
   // --- 3. Wormhole-chain forest --------------------------------------------
 
@@ -240,7 +231,7 @@ export const beautifyLayout = async (
 
     const cells = new Map<string, CellCoord>();
     for (const id of component) {
-      if (kspaceMemberIds.has(id)) continue; // authoritative position lives in its region-group box
+      if (kspaceMemberIds.has(id)) continue; // authoritative position lives in the geographic set or a topological k-space box
       const local = localCells.get(id);
       if (!local) continue; // unreachable in this edge set (shouldn't happen for a real component)
       cells.set(id, { col: local.col + dCol, row: local.row + dRow });

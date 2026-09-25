@@ -1,41 +1,37 @@
-// Lazy loader + typing for the precomputed per-region Dotlan-like layout
+// Lazy loader + typing for the precomputed GLOBAL k-space lattice layout
 // data (assets/js/hooks/Mapper/components/map/layout/data/regionLayouts.json,
-// generated offline from the Fuzzwork SDE mapSolarSystems dump). The JSON is
-// sizeable (every known-space region), so it is dynamically imported and
-// cached — that keeps it out of the main bundle and out of any code path
-// that never runs geographic k-space layout.
+// generated offline from the Fuzzwork SDE mapSolarSystems dump). Every
+// known-space system in New Eden shares ONE lattice — see kspaceLayout.ts
+// for why per-region grids can't produce meaningful relative positions
+// across a region border. The JSON is sizeable, so it is dynamically
+// imported and cached — that keeps it out of the main bundle and out of
+// any code path that never runs geographic k-space layout.
 
-export interface RegionLayoutEntry {
-  name: string;
-  /** Region's position in shared, universe-projected CELL units. */
-  centroid: [number, number];
-  /** [maxCol + 1, maxRow + 1] of the region's own local grid. */
-  size: [number, number];
-  /** solarSystemId (string) -> region-local [col, row]. */
-  systems: Record<string, [number, number]>;
-}
+import type { CellCoord } from './types';
 
 export interface RegionLayoutData {
   version: number;
   generatedAt: string;
   source: string;
-  /** regionId (string) -> region entry. */
-  regions: Record<string, RegionLayoutEntry>;
+  /** regionId (string) -> region name; display/debugging only, not used for layout lookups. */
+  regions: Record<string, string>;
+  /** solarSystemId (string) -> GLOBAL [col, row] on the one shared lattice. */
+  systems: Record<string, [number, number]>;
 }
 
 let cache: Promise<RegionLayoutData | null> | null = null;
 
 /**
- * Loads and caches the region layout dataset. Resolves to `null` (rather
- * than throwing) if the data file is missing or malformed, so geographic
+ * Loads and caches the lattice dataset. Resolves to `null` (rather than
+ * throwing) if the data file is missing or malformed, so geographic
  * k-space layout can gracefully fall back to topological layout instead of
  * failing the whole beautify pass.
  */
 export const loadRegionLayouts = (): Promise<RegionLayoutData | null> => {
   if (!cache) {
     cache = import('./data/regionLayouts.json')
-      .then(mod => {
-        const data = (mod as { default?: unknown }).default ?? mod;
+      .then((mod: unknown) => {
+        const data = hasDefaultExport(mod) ? mod.default : mod;
         return isRegionLayoutData(data) ? data : null;
       })
       .catch(() => null);
@@ -43,21 +39,18 @@ export const loadRegionLayouts = (): Promise<RegionLayoutData | null> => {
   return cache;
 };
 
-const isRegionLayoutData = (value: unknown): value is RegionLayoutData =>
-  typeof value === 'object' &&
-  value !== null &&
-  'regions' in value &&
-  typeof (value as { regions: unknown }).regions === 'object';
+const hasDefaultExport = (value: unknown): value is { default: unknown } =>
+  typeof value === 'object' && value !== null && 'default' in value;
 
-export const getRegionEntry = (
-  data: RegionLayoutData | null,
-  regionId: number | undefined,
-): RegionLayoutEntry | null => {
-  if (!data || regionId == null) return null;
-  return data.regions[String(regionId)] ?? null;
+const isRegionLayoutData = (value: unknown): value is RegionLayoutData => {
+  if (typeof value !== 'object' || value === null) return false;
+  if (!('systems' in value)) return false;
+  return typeof value.systems === 'object' && value.systems !== null;
 };
 
-export const getSystemCell = (entry: RegionLayoutEntry | null, solarSystemId: string): [number, number] | null => {
-  if (!entry) return null;
-  return entry.systems[solarSystemId] ?? null;
+/** Looks up a k-space system's GLOBAL cell coordinate on the shared lattice, or null if the system is unknown/missing. */
+export const getGlobalSystemCell = (data: RegionLayoutData | null, solarSystemId: string): CellCoord | null => {
+  if (!data) return null;
+  const cell = data.systems[solarSystemId];
+  return cell ? { col: cell[0], row: cell[1] } : null;
 };

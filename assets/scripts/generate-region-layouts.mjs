@@ -25,7 +25,10 @@ const CELL_H = 75;
 // units for the same on-screen physical distance. CELL_W/CELL_H is exactly
 // that correction factor.
 const ROW_ASPECT = CELL_W / CELL_H; // 2.4
-const TARGET_BBOX_CELLS = 1200;
+// CHEWY PATCH: TARGET_BBOX_CELLS (global-scale-to-1200-cells factor used to
+// combine per-region centroids with per-region local grids) is gone along
+// with the per-region packing it supported — see the global lattice pass
+// in main() below.
 
 // A coordinate is considered "on the lattice" if it's within this fraction of
 // one step from the nearest integer multiple.
@@ -391,139 +394,114 @@ async function main() {
     process.stderr.write('All k-space systems have a position2D projection; no fallback needed.\n');
   }
 
-  // --- global scale factor, in lattice units, so the full k-space bounding
-  // box is ~1200 cells across its larger dimension. Y is negated + aspect
-  // corrected here too (same as the per-region row formula below) so that
-  // centroids and per-region local cells share one "row grows downward"
-  // coordinate space — callers translate local cells by the centroid
-  // directly (see kspaceLayout.ts), so the two MUST agree on orientation. ---
-  const uOf = s => s.p2x / stepX;
-  const vOf = s => (-s.p2y / stepY) * ROW_ASPECT;
-
-  let minU = Infinity;
-  let maxU = -Infinity;
-  let minV = Infinity;
-  let maxV = -Infinity;
+  // --- CHEWY PATCH: ONE global lattice shared by every k-space system,
+  // instead of per-region boxes packed by centroid. The old design stored
+  // per-region local cells (region-relative, starting at 0,0) plus a
+  // region centroid scaled to hit a ~1200-cell target bbox, then expected
+  // callers to add local cell + centroid together at render time. Those
+  // two lived on different scales, so a system's on-screen position
+  // relative to a gate neighbour in ANOTHER region was meaningless (e.g.
+  // Amamake, Heimatar, rendered at the top of a stack of Metropolis
+  // systems despite gating directly into Auga/Dal/Siseide), and each
+  // region box compressed its own empty rows/columns independently, so
+  // regions ended at different effective scales (a region whose systems
+  // share almost the same column collapsed into a vertical "stick").
+  // Computing col/row directly from position2Dx/position2Dy against ONE
+  // shared origin, and resolving collisions + compressing empty
+  // rows/columns exactly once across ALL of New Eden, fixes both: every
+  // system's cell distance to every other system — same region or not —
+  // is the real Dotlan-projected distance. ---
+  let globalMinX = Infinity;
+  let globalMaxY = -Infinity;
   for (const s of allSystems) {
-    const u = uOf(s);
-    const v = vOf(s);
-    if (u < minU) minU = u;
-    if (u > maxU) maxU = u;
-    if (v < minV) minV = v;
-    if (v > maxV) maxV = v;
+    if (s.p2x < globalMinX) globalMinX = s.p2x;
+    if (s.p2y > globalMaxY) globalMaxY = s.p2y;
   }
-  const globalScale = TARGET_BBOX_CELLS / Math.max(maxU - minU, maxV - minV);
+
+  // lattice units -> integer cells, resolving rounding collisions
+  // deterministically with a spiral search, GLOBALLY (ascending
+  // solarSystemID across all k-space systems, not per region)
+  const allSorted = [...allSystems].sort((a, b) => a.solarSystemID - b.solarSystemID);
+  const occupied = new Set();
+  const cellById = new Map();
+  for (const s of allSorted) {
+    const lx = (s.p2x - globalMinX) / stepX;
+    const ly = (globalMaxY - s.p2y) / stepY;
+    let col = Math.round(lx);
+    let row = Math.round(ly * ROW_ASPECT);
+    let key = `${col},${row}`;
+    if (occupied.has(key)) {
+      const spiral = spiralOffsets();
+      for (;;) {
+        const [dx, dy] = spiral.next().value;
+        const cCol = col + dx;
+        const cRow = row + dy;
+        const cKey = `${cCol},${cRow}`;
+        if (!occupied.has(cKey)) {
+          col = cCol;
+          row = cRow;
+          key = cKey;
+          break;
+        }
+      }
+    }
+    occupied.add(key);
+    cellById.set(s.solarSystemID, [col, row]);
+  }
+
+  // re-translate so the global min col/row = 0
+  let finalMinCol = Infinity;
+  let finalMinRow = Infinity;
+  for (const [col, row] of cellById.values()) {
+    if (col < finalMinCol) finalMinCol = col;
+    if (row < finalMinRow) finalMinRow = row;
+  }
+
+  const systemsOut = {};
+  let maxCol = 0;
+  let maxRow = 0;
+  // stable numeric-ascending key order (also V8's native ordering for
+  // integer-like string keys, but built explicitly for clarity)
+  const sortedIds = [...cellById.keys()].sort((a, b) => a - b);
+  const seenCells = new Set();
+  for (const id of sortedIds) {
+    const [col, row] = cellById.get(id);
+    const fCol = col - finalMinCol;
+    const fRow = row - finalMinRow;
+    const cellKey = `${fCol},${fRow}`;
+    if (seenCells.has(cellKey)) {
+      throw new Error(`Collision resolution failed: duplicate global cell ${cellKey} (system ${id}).`);
+    }
+    seenCells.add(cellKey);
+    if (fCol > maxCol) maxCol = fCol;
+    if (fRow > maxRow) maxRow = fRow;
+    systemsOut[String(id)] = [fCol, fRow];
+  }
+
+  // assert every k-space system landed on a distinct global cell
+  if (seenCells.size !== allSystems.length) {
+    throw new Error(
+      `Global cell uniqueness assertion failed: ${seenCells.size} unique cells for ${allSystems.length} systems.`,
+    );
+  }
+
+  const gridSize = [maxCol + 1, maxRow + 1];
 
   const regionIds = [...byRegion.keys()].sort((a, b) => a - b);
   const regionsOut = {};
-  let maxRegionSize = [0, 0];
-
   for (const regionID of regionIds) {
-    const systems = byRegion.get(regionID);
-    systems.sort((a, b) => a.solarSystemID - b.solarSystemID);
-
-    // centroid: mean of (position2Dx/step, position2Dy/step*ROW_ASPECT,
-    // sign-flipped), scaled by the shared global factor
-    let sumU = 0;
-    let sumV = 0;
-    for (const s of systems) {
-      sumU += uOf(s);
-      sumV += vOf(s);
-    }
-    const centroid = [
-      Math.round((sumU / systems.length) * globalScale),
-      Math.round((sumV / systems.length) * globalScale),
-    ];
-
-    // region reference corner: min X (west edge) and max Y (north edge, since
-    // higher position2Dy is further north / up-screen, verified against
-    // Dotlan's own rendered The Forge map: Perimeter, whose position2Dy is
-    // below Jita's, sits south of Jita on-screen, and New Caldari, whose
-    // position2Dy is above Jita's, sits north of Jita on-screen)
-    let minX = Infinity;
-    let maxY = -Infinity;
-    for (const s of systems) {
-      if (s.p2x < minX) minX = s.p2x;
-      if (s.p2y > maxY) maxY = s.p2y;
-    }
-
-    // lattice units -> integer cells, resolving rounding collisions
-    // deterministically with a spiral search
-    const occupied = new Set();
-    const cellById = new Map();
-    for (const s of systems) {
-      const lx = (s.p2x - minX) / stepX;
-      const ly = (maxY - s.p2y) / stepY;
-      let col = Math.round(lx);
-      let row = Math.round(ly * ROW_ASPECT);
-      let key = `${col},${row}`;
-      if (occupied.has(key)) {
-        const spiral = spiralOffsets();
-        for (;;) {
-          const [dx, dy] = spiral.next().value;
-          const cCol = col + dx;
-          const cRow = row + dy;
-          const cKey = `${cCol},${cRow}`;
-          if (!occupied.has(cKey)) {
-            col = cCol;
-            row = cRow;
-            key = cKey;
-            break;
-          }
-        }
-      }
-      occupied.add(key);
-      cellById.set(s.solarSystemID, [col, row]);
-    }
-
-    // re-translate so region min col/row = 0
-    let finalMinCol = Infinity;
-    let finalMinRow = Infinity;
-    for (const [col, row] of cellById.values()) {
-      if (col < finalMinCol) finalMinCol = col;
-      if (row < finalMinRow) finalMinRow = row;
-    }
-
-    const systemsOut = {};
-    let maxCol = 0;
-    let maxRow = 0;
-    // stable numeric-ascending key order (also V8's native ordering for
-    // integer-like string keys, but built explicitly for clarity)
-    const sortedIds = [...cellById.keys()].sort((a, b) => a - b);
-    const seenCells = new Set();
-    for (const id of sortedIds) {
-      const [col, row] = cellById.get(id);
-      const fCol = col - finalMinCol;
-      const fRow = row - finalMinRow;
-      const cellKey = `${fCol},${fRow}`;
-      if (seenCells.has(cellKey)) {
-        throw new Error(`Collision resolution failed: region ${regionID} has duplicate cell ${cellKey}.`);
-      }
-      seenCells.add(cellKey);
-      if (fCol > maxCol) maxCol = fCol;
-      if (fRow > maxRow) maxRow = fRow;
-      systemsOut[String(id)] = [fCol, fRow];
-    }
-
-    const size = [maxCol + 1, maxRow + 1];
-    if (size[0] * size[1] > maxRegionSize[0] * maxRegionSize[1]) maxRegionSize = size;
-
-    regionsOut[String(regionID)] = {
-      name: regionNames.get(regionID) ?? `Region ${regionID}`,
-      centroid,
-      size,
-      systems: systemsOut,
-    };
+    regionsOut[String(regionID)] = regionNames.get(regionID) ?? `Region ${regionID}`;
   }
 
   // top-level object; integer-like string keys inside `regions`/`systems`
   // are already emitted in ascending numeric order (both by explicit sort
   // above and by JS's native ordering of integer-index string keys).
   const output = {
-    version: 1,
+    version: 2,
     generatedAt: new Date().toISOString().slice(0, 10),
-    source: 'fuzzwork mapSolarSystems.csv (SDE) position2Dx/position2Dy projection',
+    source: 'fuzzwork SDE mapSolarSystems.csv position2Dx/position2Dy',
     regions: regionsOut,
+    systems: systemsOut,
   };
 
   const json = JSON.stringify(output);
@@ -533,7 +511,7 @@ async function main() {
   const regionCount = regionIds.length;
   const bytes = Buffer.byteLength(json, 'utf8');
   process.stderr.write(
-    `regions=${regionCount} systems=${systemCount} maxRegionSizeCells=${maxRegionSize[0]}x${maxRegionSize[1]} outputBytes=${bytes}\n`,
+    `regions=${regionCount} systems=${systemCount} globalGridSizeCells=${gridSize[0]}x${gridSize[1]} outputBytes=${bytes}\n`,
   );
   process.stderr.write(`Wrote ${OUTPUT_PATH}\n`);
 }

@@ -1,26 +1,30 @@
-// K-space layout: one gate-connected cluster (>=2 systems linked by
-// stargates) is split into per-region groups — "systems of the same region
-// form one cluster" — because the precomputed layout data is region-local.
-// Each region group is laid out either:
-//   - geographically: region-local [col,row] straight out of
-//     regionLayouts.json, with the empty rows/columns the map doesn't use
-//     compressed away, or
-//   - topologically: the same BFS + tidy-tree code chains use, but walking
-//     gate edges instead of wormhole/bridge edges, for any group where the
-//     data is missing or the caller asked for kspaceMode: 'topological'.
+// K-space layout. All k-space cluster members (>=2 systems gate-linked)
+// that resolve to a GLOBAL cell on the shared New Eden lattice
+// (regionLayouts.json) are laid out as ONE geographic box: every occupied
+// column/row across the WHOLE set is compressed together (see
+// compressAxis), so relative order and direction are preserved across
+// region and cluster boundaries — a system's position next to its gate
+// neighbour in another region is now meaningful, and a region whose
+// systems only vary slightly in one axis no longer collapses on its own.
+//
+// Any cluster member that has no lattice entry (wormhole space, abyssal,
+// or a data gap) falls back to the same BFS + tidy-tree code chains use,
+// walking gate edges instead of wormhole/bridge edges, scoped to just that
+// cluster's missing members — exactly as the old per-region fallback did.
 //
 // Locked nodes act as anchors exactly as in chain layout: if a group has a
 // locked member, the whole group is translated so that member keeps its
 // exact current position and the resulting box is marked `fixed` (pack.ts
-// must not move it). Otherwise the box is a soft `target` seeded from the
-// region's centroid (geographic) or the group's current average position
-// (topological, region unknown) — pack.ts may nudge it to avoid collisions.
+// must not move it). Otherwise the box is a soft `target` seeded from
+// (0,0) for the geographic set (already at its own compressed origin) or
+// the group's current average position for a topological fallback group —
+// pack.ts may nudge it to avoid collisions.
 
 import { layoutChainTree, pickChainRoot } from './chainLayout';
-import { getRegionEntry, getSystemCell } from './regionData';
-import type { RegionLayoutData, RegionLayoutEntry } from './regionData';
+import { getGlobalSystemCell } from './regionData';
+import type { RegionLayoutData } from './regionData';
 import { CELL_H, CELL_W } from './types';
-import type { BeautifyAxis, CellCoord, KSpaceMode, LayoutBox, LayoutEdgeInput, LayoutNodeInput } from './types';
+import type { BeautifyAxis, CellCoord, LayoutBox, LayoutEdgeInput, LayoutNodeInput } from './types';
 
 export interface KSpaceGroupResult {
   box: LayoutBox;
@@ -40,7 +44,10 @@ const compressAxis = (usedValues: number[]): Map<number, number> => {
       return;
     }
     const gap = value - sorted[i - 1];
-    cursor += Math.min(gap, 3); // at most 2 empty cells between two used ones
+    // At most ONE empty cell between two used ones. Two was measurably too airy on a real
+    // 15-system map (25x21 cells vs 21x15), and the extra cell buys nothing: the gap is
+    // already only ordinal, it says "these are not neighbours", not how far apart they are.
+    cursor += Math.min(gap, 2);
     mapping.set(value, cursor);
   });
   return mapping;
@@ -89,57 +96,45 @@ const finalizeGroup = (
   };
 };
 
-const layoutGeographicGroup = (
+export interface GeographicSetResult {
+  /** null when none of `members` resolved to a lattice cell (e.g. regionLayouts.json failed to load). */
+  result: KSpaceGroupResult | null;
+  /** ids from `members` that have no lattice entry and must go through layoutTopologicalGroup instead. */
+  missingIds: Set<string>;
+}
+
+/**
+ * Lays out every k-space cluster member that resolves to a GLOBAL lattice
+ * cell as ONE box, compressed once across the whole set (not per region,
+ * not per cluster) — this is what keeps a system's position relative to a
+ * gate neighbour in another region meaningful.
+ */
+export const layoutGeographicSet = (
   groupId: string,
   members: LayoutNodeInput[],
-  entry: RegionLayoutEntry,
-): KSpaceGroupResult | null => {
-  const raw = new Map<string, [number, number]>();
+  regionData: RegionLayoutData | null,
+): GeographicSetResult => {
+  const raw = new Map<string, CellCoord>();
+  const missingIds = new Set<string>();
   for (const node of members) {
-    const cell = getSystemCell(entry, node.id);
-    if (!cell) return null; // caller falls back to topological for this group
-    raw.set(node.id, cell);
+    const cell = getGlobalSystemCell(regionData, node.id);
+    if (cell) raw.set(node.id, cell);
+    else missingIds.add(node.id);
   }
 
-  const colMap = compressAxis([...raw.values()].map(([col]) => col));
-  const rowMap = compressAxis([...raw.values()].map(([, row]) => row));
+  if (raw.size === 0) return { result: null, missingIds };
+
+  const colMap = compressAxis([...raw.values()].map(c => c.col));
+  const rowMap = compressAxis([...raw.values()].map(c => c.row));
 
   const localCells = new Map<string, CellCoord>();
-  for (const [id, [col, row]] of raw) {
-    localCells.set(id, { col: colMap.get(col)!, row: rowMap.get(row)! });
+  for (const [id, cell] of raw) {
+    localCells.set(id, { col: colMap.get(cell.col)!, row: rowMap.get(cell.row)! });
   }
 
-  const softTarget: CellCoord = { col: Math.round(entry.centroid[0]), row: Math.round(entry.centroid[1]) };
-  return finalizeGroup(groupId, members, localCells, softTarget);
-};
-
-const layoutTopologicalGroup = (
-  groupId: string,
-  members: LayoutNodeInput[],
-  gateEdges: LayoutEdgeInput[],
-  axis: BeautifyAxis,
-  hubs: string[] | undefined,
-  regionCentroid: [number, number] | null,
-): KSpaceGroupResult => {
-  const rootId = pickChainRoot(members, gateEdges, hubs) ?? [...members].map(n => n.id).sort()[0];
-  const { localCells } = layoutChainTree(members, gateEdges, axis, rootId);
-
-  // Any member the BFS couldn't reach (disconnected within this region
-  // group, e.g. gate edges to it weren't included on the map) keeps a
-  // deterministic fallback slot appended to the row so it's still placed.
-  let fallbackRow = 0;
-  for (const node of members) {
-    if (!localCells.has(node.id)) {
-      localCells.set(node.id, { col: 0, row: fallbackRow });
-      fallbackRow += 1;
-    }
-  }
-
-  const softTarget: CellCoord = regionCentroid
-    ? { col: Math.round(regionCentroid[0]), row: Math.round(regionCentroid[1]) }
-    : averagePosition(members);
-
-  return finalizeGroup(groupId, members, localCells, softTarget);
+  const placedMembers = members.filter(n => raw.has(n.id));
+  const result = finalizeGroup(groupId, placedMembers, localCells, { col: 0, row: 0 });
+  return { result, missingIds };
 };
 
 const averagePosition = (members: LayoutNodeInput[]): CellCoord => {
@@ -151,26 +146,30 @@ const averagePosition = (members: LayoutNodeInput[]): CellCoord => {
 };
 
 /**
- * Lays out one region-group (all cluster members sharing the same
- * regionId). `gateEdges` should already be filtered to edges between
- * members of this group.
+ * Lays out a group of cluster members lacking a lattice entry via the
+ * same BFS + tidy-tree code chains use, walking gate edges. `gateEdges`
+ * should already be filtered to edges between members of this group.
  */
-export const layoutKSpaceGroup = (
+export const layoutTopologicalGroup = (
   groupId: string,
   members: LayoutNodeInput[],
   gateEdges: LayoutEdgeInput[],
-  regionId: number | undefined,
-  regionData: RegionLayoutData | null,
-  mode: KSpaceMode,
   axis: BeautifyAxis,
   hubs: string[] | undefined,
 ): KSpaceGroupResult => {
-  const entry = getRegionEntry(regionData, regionId);
+  const rootId = pickChainRoot(members, gateEdges, hubs) ?? [...members].map(n => n.id).sort()[0];
+  const { localCells } = layoutChainTree(members, gateEdges, axis, rootId);
 
-  if (mode === 'geographic' && entry) {
-    const geo = layoutGeographicGroup(groupId, members, entry);
-    if (geo) return geo;
+  // Any member the BFS couldn't reach (disconnected within this group,
+  // e.g. gate edges to it weren't included on the map) keeps a
+  // deterministic fallback slot appended to the row so it's still placed.
+  let fallbackRow = 0;
+  for (const node of members) {
+    if (!localCells.has(node.id)) {
+      localCells.set(node.id, { col: 0, row: fallbackRow });
+      fallbackRow += 1;
+    }
   }
 
-  return layoutTopologicalGroup(groupId, members, gateEdges, axis, hubs, entry ? entry.centroid : null);
+  return finalizeGroup(groupId, members, localCells, averagePosition(members));
 };
