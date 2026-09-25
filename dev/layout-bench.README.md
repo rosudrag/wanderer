@@ -127,6 +127,28 @@ trigger it.
      rather than `'full'`. A scenario silently falling back to `'full'`
      must be visible here, not inferred from the shift numbers alone.
 
+   And over the `k` NEWLY ADDED nodes themselves (this is where a placement
+   defect can hide behind a perfect score above — see the yugen/`30002538`
+   incident that motivated these three metrics: a real k-space system,
+   gate-attached to an already-placed neighbour, left at its exact raw drop
+   coordinates, off-grid, far from the rest of the map, while every metric
+   above still read a clean `0`):
+   - **newOffGrid** — count, summed over all 10 repeats, of newly added
+     nodes whose final position is not an exact multiple of
+     `CELL_W`/`CELL_H`. Hard invariant, same treatment as `overlaps`/
+     `offGrid`: must always be `0`, independent of `--compare` tolerance.
+   - **newUnplaced** — count, summed over all 10 repeats, of newly added
+     nodes whose final position is byte-identical to their raw drop
+     position, i.e. the engine left them exactly where they fell instead
+     of placing them at all. Same hard-invariant treatment as `newOffGrid`.
+   - **newAnchorCells** (`mean`/`max`) — grid distance from each newly
+     added node's final position to the final position of the
+     already-placed graph neighbour it was attached to (every synthetic
+     new node has exactly one edge, to the pre-existing node it grew
+     from). A newly added system should land NEXT to what it connects to;
+     pooled over every new node across all 10 repeats. Not a hard
+     invariant — judged against a threshold in the verdict table below.
+
 A nonzero round-trip `movedFraction`/`rankInversions` while `mode` reads
 `'incremental'` is NOT a harness bug: `classifyNodes`/`placeIncrementalNodes`
 can legitimately re-place a handful of existing k-space members when a new
@@ -143,7 +165,10 @@ raw scenario coordinates never look laid out — so this measures "what does
 a full re-solve of a slightly bigger messy map cost", which is a real cost
 worth tracking but is NOT "beautify after adding one system to a tidy map".
 Same four metrics as round-trip, minus the mode column (it is always
-`'full'` by construction).
+`'full'` by construction) and minus the new-node placement metrics
+(`newOffGrid`/`newUnplaced`/`newAnchorCells` are round-trip-only: cold's
+new nodes are added to a never-laid-out map, so "landed near its
+already-placed neighbour" isn't a meaningful question there).
 
 The printed/JSON stability numbers are the mean over the 10 repeats (plus
 `max` for `rankInversions`, since one bad repeat matters even if the
@@ -160,8 +185,11 @@ over `k = 1, 3, 5` of each round-trip metric is checked against:
 | `meanShift` | `<= 0.5` cells |
 | `rankInv(mean)` | `<= 2` |
 | `idempotent movedFrac` | `== 0` |
+| `newOffGrid` (summed over 10 repeats) | `== 0` |
+| `newUnplaced` (summed over 10 repeats) | `== 0` |
+| `newAnchorCells mean` / `max` | `<= 2.0` / `<= 4` cells |
 
-A scenario `PASS`es only if all four hold. This is the pass/fail line the
+A scenario `PASS`es only if all seven hold. This is the pass/fail line the
 whole effort is judged against, independent of `--compare`/tolerances.
 
 ## `--compare` tolerances
@@ -182,12 +210,15 @@ direction: `baseline - current > max(abs, baseline * rel)`.
 | `stability.roundTrip.maxShiftCells` (per k) | 5% | 0.1 cells |
 | `stability.roundTrip.rankInversions` (per k) | 5% | 1 pair |
 | `stability.roundTrip.incrementalShare` (per k, **higher is better**) | 5% | 0.05 |
+| `stability.roundTrip.newAnchorCells.mean` (per k) | 5% | 0.1 cells |
+| `stability.roundTrip.newAnchorCells.max` (per k) | 5% | 0.2 cells |
 | `stability.cold.movedFraction` (per k) | 5% | 0.03 |
 | `stability.cold.meanShiftCells` (per k) | 5% | 0.05 cells |
 | `stability.cold.maxShiftCells` (per k) | 5% | 0.1 cells |
 | `stability.cold.rankInversions` (per k) | 5% | 1 pair |
 
-`overlaps`, `offGrid`, `determinism`, and `idempotent.movedFraction` are
+`overlaps`, `offGrid`, `determinism`, `idempotent.movedFraction`, and (per
+k) `stability.roundTrip.newOffGrid`/`stability.roundTrip.newUnplaced` are
 hard invariants: any violation in the *current* run fails the whole
 comparison (and even a plain run with no `--compare` at all), independent
 of tolerance or baseline. A metric that improved is marked `better`;

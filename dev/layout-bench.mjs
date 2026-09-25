@@ -37,7 +37,13 @@
 //                      out), so this is "what a from-scratch re-solve
 //                      costs", not stability.
 //                  Both report moved fraction, displacement, and
-//                  left/right & above/below order inversions.
+//                  left/right & above/below order inversions. Round-trip
+//                  additionally checks the k NEWLY ADDED nodes' own
+//                  placement — on-grid, actually moved off their raw drop
+//                  point, and landed near the already-placed neighbour
+//                  they were attached to — since a perfect "existing
+//                  nodes didn't move" score can otherwise hide a new
+//                  system dumped off-grid far from the map.
 //
 // Run: `node dev/layout-bench.mjs` (plain Node, no install step, no Bun).
 // Flags:
@@ -682,12 +688,13 @@ function withPositions(nodes, positions) {
   });
 }
 
-/** Adds `k` plausible-but-unbeautified new systems to a cloned copy of `graph` (`graph.nodes`/`graph.edges`/`graph.name` — either the raw scenario, for the "cold" measurement, or the scenario's own beautified P1 output, for the "round-trip" measurement). */
+/** Adds `k` plausible-but-unbeautified new systems to a cloned copy of `graph` (`graph.nodes`/`graph.edges`/`graph.name` — either the raw scenario, for the "cold" measurement, or the scenario's own beautified P1 output, for the "round-trip" measurement). Also returns `added`: `{ id, baseId, x, y }` for each new node — its raw drop position and the pre-existing node it was attached to — so callers can judge where the new nodes themselves ended up. */
 function extendGraph(scenario, prng, k, regionSystems, kLabel, repeatIndex) {
   const nodes = structuredClone(scenario.nodes);
   const edges = structuredClone(scenario.edges);
   const baseIds = nodes.map((n) => n.id).sort();
   const usedSystemIds = new Set(baseIds);
+  const added = [];
 
   for (let i = 0; i < k; i++) {
     const baseId = baseIds[Math.floor(prng() * baseIds.length)];
@@ -700,30 +707,56 @@ function extendGraph(scenario, prng, k, regionSystems, kLabel, repeatIndex) {
       usedSystemIds.add(best.id);
       const jx = Math.round((prng() - 0.5) * 80);
       const jy = Math.round((prng() - 0.5) * 80);
-      nodes.push({
-        id: best.id,
-        x: baseNode.x + jx,
-        y: baseNode.y + jy,
-        locked: false,
-      });
+      const x = baseNode.x + jx;
+      const y = baseNode.y + jy;
+      nodes.push({ id: best.id, x, y, locked: false });
       edges.push({ source: baseId, target: best.id, type: 1 });
+      added.push({ id: best.id, baseId, x, y });
     } else {
       const newId = `${scenario.name}-ext-k${kLabel}-r${repeatIndex}-${i}`;
       const cls = 1 + Math.floor(prng() * 6);
       const jx = Math.round((prng() - 0.5) * 300);
       const jy = Math.round((prng() - 0.5) * 300);
+      const x = baseNode.x + jx;
+      const y = baseNode.y + jy;
       usedSystemIds.add(newId);
       nodes.push({
         id: newId,
-        x: baseNode.x + jx,
-        y: baseNode.y + jy,
+        x,
+        y,
         locked: false,
         systemClass: cls,
       });
       edges.push({ source: baseId, target: newId, type: 0 });
+      added.push({ id: newId, baseId, x, y });
     }
   }
-  return { nodes, edges };
+  return { nodes, edges, added };
+}
+
+// CHEWY PATCH: the round-trip metrics above this point only ever looked at
+// how much the PRE-EXISTING nodes moved — a newly added node could be left
+// exactly where it was dropped, off-grid, far from the map, and every one
+// of those numbers would still read a perfect 0. This checks the k newly
+// added nodes themselves: are they on-grid, did the engine actually move
+// them at all, and did they land near the already-placed neighbour they
+// were attached to.
+function newNodeMetrics(added, P2, CELL_W, CELL_H) {
+  let offGrid = 0;
+  let unplaced = 0;
+  const anchorDists = [];
+  for (const a of added) {
+    const p = P2.get(a.id);
+    if (p.x % CELL_W !== 0 || p.y % CELL_H !== 0) offGrid++;
+    if (p.x === a.x && p.y === a.y) unplaced++;
+    const anchor = P2.get(a.baseId);
+    if (anchor) {
+      anchorDists.push(
+        cellDist(p.x - anchor.x, p.y - anchor.y, CELL_W, CELL_H),
+      );
+    }
+  }
+  return { offGrid, unplaced, anchorDists };
 }
 
 const K_VALUES = [1, 3, 5];
@@ -787,10 +820,15 @@ async function runStability(
       const rtP2 = mergeFinalPositions(rtEnlarged.nodes, rtResult);
       const rtShift = shiftStats(baseIds, P1positions, rtP2, CELL_W, CELL_H);
       const rtInv = rankInversionCount(baseIds, P1positions, rtP2);
+      // CHEWY PATCH: how did the k NEWLY ADDED nodes themselves land?
+      const rtNew = newNodeMetrics(rtEnlarged.added, rtP2, CELL_W, CELL_H);
       rtRepeats.push({
         ...rtShift,
         rankInversions: rtInv,
         mode: rtResult.mode,
+        newOffGrid: rtNew.offGrid,
+        newUnplaced: rtNew.unplaced,
+        newAnchorDists: rtNew.anchorDists,
       });
 
       // Cold (still meaningful, NOT the primary number): grow the RAW,
@@ -823,6 +861,17 @@ async function runStability(
     }
     const avg = (arr, key) => arr.reduce((s, x) => s + x[key], 0) / arr.length;
     const mx = (arr, key) => Math.max(...arr.map((x) => x[key]));
+    // CHEWY PATCH: newOffGrid/newUnplaced are hard invariants, summed
+    // across all REPEATS (like overlaps/offGrid at the quality level —
+    // any nonzero count is a failure, not a rate to average away).
+    // newAnchorCells pools every newly added node's distance to its
+    // attach-point across all REPEATS into one mean/max, same shape as
+    // gateEdgeCells/wormholeEdgeCells.
+    const newOffGrid = rtRepeats.reduce((s, x) => s + x.newOffGrid, 0);
+    const newUnplaced = rtRepeats.reduce((s, x) => s + x.newUnplaced, 0);
+    const newAnchorCells = edgeStats(
+      rtRepeats.flatMap((x) => x.newAnchorDists),
+    );
     roundTrip[k] = {
       movedFraction: {
         mean: avg(rtRepeats, "movedFraction"),
@@ -843,6 +892,9 @@ async function runStability(
       incrementalShare:
         rtRepeats.filter((x) => x.mode === "incremental").length /
         rtRepeats.length,
+      newOffGrid,
+      newUnplaced,
+      newAnchorCells,
     };
     cold[k] = {
       movedFraction: {
@@ -923,6 +975,10 @@ const ROUND_TRIP_THRESHOLDS = {
   movedFraction: 0.15,
   meanShiftCells: 0.5,
   rankInversions: 2,
+  // CHEWY PATCH: how close a newly added node must land to the
+  // already-placed neighbour it was attached to.
+  newAnchorCellsMean: 2.0,
+  newAnchorCellsMax: 4,
 };
 
 function printRoundTripStabilityTable(scenarios) {
@@ -935,6 +991,10 @@ function printRoundTripStabilityTable(scenarios) {
     "rankInv(mean)",
     "rankInv(max)",
     "incremental%",
+    "newOffGrid",
+    "newUnplaced",
+    "newAnchor(mean)",
+    "newAnchor(max)",
   ];
   const rows = [];
   for (const s of scenarios) {
@@ -949,6 +1009,10 @@ function printRoundTripStabilityTable(scenarios) {
         fmt(st.rankInversions.mean),
         fmt(st.rankInversions.max),
         `${Math.round(st.incrementalShare * 100)}%`,
+        st.newOffGrid,
+        st.newUnplaced,
+        fmt(st.newAnchorCells.mean),
+        fmt(st.newAnchorCells.max),
       ]);
     }
   }
@@ -999,19 +1063,55 @@ function scenarioVerdict(s) {
   const worstInv = Math.max(
     ...K_VALUES.map((k) => s.stability.roundTrip[k].rankInversions.mean),
   );
+  // CHEWY PATCH: newOffGrid/newUnplaced are summed (any nonzero count is a
+  // hard failure, not a rate); newAnchorCells is judged on the worst mean
+  // and worst max seen at any k, same as the other worst-case checks above.
+  const totalNewOffGrid = K_VALUES.reduce(
+    (sum, k) => sum + s.stability.roundTrip[k].newOffGrid,
+    0,
+  );
+  const totalNewUnplaced = K_VALUES.reduce(
+    (sum, k) => sum + s.stability.roundTrip[k].newUnplaced,
+    0,
+  );
+  const worstAnchorMean = Math.max(
+    ...K_VALUES.map((k) => s.stability.roundTrip[k].newAnchorCells.mean),
+  );
+  const worstAnchorMax = Math.max(
+    ...K_VALUES.map((k) => s.stability.roundTrip[k].newAnchorCells.max),
+  );
   const movedOk = worstMoved <= ROUND_TRIP_THRESHOLDS.movedFraction;
   const shiftOk = worstShift <= ROUND_TRIP_THRESHOLDS.meanShiftCells;
   const invOk = worstInv <= ROUND_TRIP_THRESHOLDS.rankInversions;
   const idempotentOk = s.idempotent.movedFraction === 0;
+  const newOffGridOk = totalNewOffGrid === 0;
+  const newUnplacedOk = totalNewUnplaced === 0;
+  const anchorOk =
+    worstAnchorMean <= ROUND_TRIP_THRESHOLDS.newAnchorCellsMean &&
+    worstAnchorMax <= ROUND_TRIP_THRESHOLDS.newAnchorCellsMax;
   return {
     movedOk,
     shiftOk,
     invOk,
     idempotentOk,
+    newOffGridOk,
+    newUnplacedOk,
+    anchorOk,
     worstMoved,
     worstShift,
     worstInv,
-    pass: movedOk && shiftOk && invOk && idempotentOk,
+    totalNewOffGrid,
+    totalNewUnplaced,
+    worstAnchorMean,
+    worstAnchorMax,
+    pass:
+      movedOk &&
+      shiftOk &&
+      invOk &&
+      idempotentOk &&
+      newOffGridOk &&
+      newUnplacedOk &&
+      anchorOk,
   };
 }
 
@@ -1022,6 +1122,9 @@ function printVerdictTable(scenarios) {
     "meanShift<=0.5",
     "rankInv(mean)<=2",
     "idempotent==0",
+    "newOffGrid==0",
+    "newUnplaced==0",
+    "newAnchor<=2.0/4",
     "PASS",
   ];
   const rows = scenarios.map((s) => {
@@ -1032,6 +1135,9 @@ function printVerdictTable(scenarios) {
       `${v.shiftOk ? "yes" : "NO"} (${fmt(v.worstShift)})`,
       `${v.invOk ? "yes" : "NO"} (${fmt(v.worstInv)})`,
       `${v.idempotentOk ? "yes" : "NO"} (${fmt(s.idempotent.movedFraction)})`,
+      `${v.newOffGridOk ? "yes" : "NO"} (${v.totalNewOffGrid})`,
+      `${v.newUnplacedOk ? "yes" : "NO"} (${v.totalNewUnplaced})`,
+      `${v.anchorOk ? "yes" : "NO"} (${fmt(v.worstAnchorMean)}/${fmt(v.worstAnchorMax)})`,
       v.pass ? "PASS" : "FAIL",
     ];
   });
@@ -1059,6 +1165,10 @@ const TOLERANCES = {
   "stability.roundTrip.meanShiftCells": { rel: 0.05, abs: 0.05 },
   "stability.roundTrip.maxShiftCells": { rel: 0.05, abs: 0.1 },
   "stability.roundTrip.rankInversions": { rel: 0.05, abs: 1 },
+  // CHEWY PATCH: mean/max grid distance from a newly added node to the
+  // already-placed neighbour it was attached to.
+  "stability.roundTrip.newAnchorCells.mean": { rel: 0.05, abs: 0.1 },
+  "stability.roundTrip.newAnchorCells.max": { rel: 0.05, abs: 0.2 },
   // Higher is better (share of repeats that resolved 'incremental'); see
   // HIGHER_IS_BETTER_METRICS below for the flipped regression direction.
   "stability.roundTrip.incrementalShare": { rel: 0.05, abs: 0.05 },
@@ -1068,7 +1178,15 @@ const TOLERANCES = {
   "stability.cold.rankInversions": { rel: 0.05, abs: 1 },
 };
 // Hard invariants: any violation fails regardless of baseline/tolerance.
-const HARD_ZERO_METRICS = ["overlaps", "offGrid", "idempotent.movedFraction"];
+// CHEWY PATCH: newOffGrid/newUnplaced (per k) joined the hard-zero list —
+// they were the exact gap that let the reported defect through unnoticed.
+const HARD_ZERO_METRICS = [
+  "overlaps",
+  "offGrid",
+  "idempotent.movedFraction",
+  "stability.roundTrip.newOffGrid",
+  "stability.roundTrip.newUnplaced",
+];
 // Metrics where a HIGHER current value is the improvement (a regression is
 // a DECREASE beyond tolerance) — every other metric is "lower is better".
 const HIGHER_IS_BETTER_METRICS = ["stability.roundTrip.incrementalShare"];
@@ -1106,6 +1224,15 @@ function flattenScenarioMetrics(s) {
       s.stability.roundTrip[k].rankInversions.mean;
     out[`stability.roundTrip.incrementalShare@k${k}`] =
       s.stability.roundTrip[k].incrementalShare;
+    // CHEWY PATCH: new-node placement metrics, per k.
+    out[`stability.roundTrip.newOffGrid@k${k}`] =
+      s.stability.roundTrip[k].newOffGrid;
+    out[`stability.roundTrip.newUnplaced@k${k}`] =
+      s.stability.roundTrip[k].newUnplaced;
+    out[`stability.roundTrip.newAnchorCells.mean@k${k}`] =
+      s.stability.roundTrip[k].newAnchorCells.mean;
+    out[`stability.roundTrip.newAnchorCells.max@k${k}`] =
+      s.stability.roundTrip[k].newAnchorCells.max;
     out[`stability.cold.movedFraction@k${k}`] =
       s.stability.cold[k].movedFraction.mean;
     out[`stability.cold.meanShiftCells@k${k}`] =
@@ -1156,7 +1283,10 @@ function runCompare(current, baselinePath) {
         toleranceKeyFor(key),
       );
       let verdict = "ok";
-      if (HARD_ZERO_METRICS.includes(key) && curVal !== 0) {
+      // CHEWY PATCH: strip the @kN suffix before matching HARD_ZERO_METRICS
+      // too, so per-k hard invariants (newOffGrid/newUnplaced) work the
+      // same way the tolerance lookup already does.
+      if (HARD_ZERO_METRICS.includes(toleranceKeyFor(key)) && curVal !== 0) {
         verdict = "REGRESSED (must be 0)";
         regressed = true;
       } else if (isRegression(toleranceKeyFor(key), baseVal, curVal)) {
@@ -1288,11 +1418,20 @@ async function main() {
     if (s.quality.offGrid !== 0) hardFail = true;
     if (!s.determinism.ok) hardFail = true;
     if (s.idempotent.movedFraction !== 0) hardFail = true;
+    // CHEWY PATCH: a newly added node landing off-grid, or left exactly at
+    // its raw drop point, is just as much a hard failure as an existing
+    // node overlapping/off-grid — this is the exact defect class that used
+    // to slip through unnoticed.
+    for (const k of K_VALUES) {
+      if (s.stability.roundTrip[k].newOffGrid !== 0) hardFail = true;
+      if (s.stability.roundTrip[k].newUnplaced !== 0) hardFail = true;
+    }
   }
   if (hardFail) {
     console.error(
       "\nFAIL: a hard invariant was violated (overlaps/offGrid must be 0; output must be deterministic; " +
-        "an unchanged already-beautified map must stay unchanged on repeat beautify).\n",
+        "an unchanged already-beautified map must stay unchanged on repeat beautify; every newly added " +
+        "node must land on-grid and must actually be moved off its raw drop point).\n",
     );
   }
 

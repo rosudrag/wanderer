@@ -297,34 +297,57 @@ const commit = (ctx: PlacementCtx, id: string, cell: CellCoord): void => {
 };
 
 /**
- * K-space node with a GLOBAL lattice cell: anchored to its nearest
- * ALREADY-PLACED lattice neighbour (by real lattice distance — exactly how
- * a new system's gate edge always runs to its nearest not-yet-used lattice
- * neighbour, see dev/layout-bench.mjs's own extendGraph), one cell further
- * out in the same left/right + above/below direction that neighbour is
- * from this node on the lattice, landed on the nearest free cell. Falls
- * back to the node's own current pixel (rounded) if no other lattice
- * member has been placed yet — there is nothing to order against.
+ * K-space node with a GLOBAL lattice cell: anchored to the nearest
+ * ALREADY-PLACED, lattice-resolved neighbour — preferring an actual GRAPH
+ * neighbour (`graphNeighbourIds`: gate or chain edge) over any other
+ * lattice member, so the node lands next to the system it is actually
+ * connected to rather than whichever already-placed member merely
+ * happens to sit closest on the real-world lattice while sharing no edge
+ * with it at all (the exact quality gap dev/layout-bench.mjs's
+ * `newAnchorCells` metric is built to catch — see dev/layout-bench.README.md).
+ * Only when none of its own graph neighbours are both placed AND
+ * lattice-resolved does it fall back to the nearest ANY already-placed
+ * lattice member (by real lattice distance — exactly how a new system's
+ * gate edge usually runs to its nearest not-yet-used lattice neighbour,
+ * see dev/layout-bench.mjs's own extendGraph). Either way, lands one cell
+ * further out in the same left/right + above/below direction the anchor
+ * is from this node on the lattice, on the nearest free cell.
+ *
+ * CHEWY PATCH: returns `null` — never a raw, unsnapped fallback — when no
+ * already-placed lattice member exists anywhere yet, instead of reaching
+ * straight for the node's own current pixel. Having a lattice entry used
+ * to be a dead end of its own: a node with real lattice data but no
+ * lattice-resolved anchor yet available NEVER got to try its plain graph
+ * neighbours (gate/chain) before this, even when one of those was
+ * already placed — the exact "fell through to the no-information-at-all
+ * branch despite having a real neighbour" defect. The caller now tries
+ * plain graph adjacency next, and only reaches its own snapped-to-current
+ * -position fallback if that also comes up empty.
  */
 const placeLatticeNode = (
-  node: LayoutNodeInput,
   lattice: CellCoord,
   latticeById: ReadonlyMap<string, CellCoord>,
+  graphNeighbourIds: readonly string[],
   ctx: PlacementCtx,
-): CellCoord => {
-  let anchorId: string | null = null;
-  let bestDist = Infinity;
-  for (const [id, otherLattice] of latticeById) {
-    if (!ctx.cells.has(id)) continue;
-    const d = Math.hypot(otherLattice.col - lattice.col, otherLattice.row - lattice.row);
-    if (d < bestDist || (d === bestDist && (anchorId === null || id < anchorId))) {
-      bestDist = d;
-      anchorId = id;
+): CellCoord | null => {
+  const nearestAnchor = (candidateIds: Iterable<string>): string | null => {
+    let anchorId: string | null = null;
+    let bestDist = Infinity;
+    for (const id of candidateIds) {
+      const otherLattice = latticeById.get(id);
+      if (!otherLattice || !ctx.cells.has(id)) continue;
+      const d = Math.hypot(otherLattice.col - lattice.col, otherLattice.row - lattice.row);
+      if (d < bestDist || (d === bestDist && (anchorId === null || id < anchorId))) {
+        bestDist = d;
+        anchorId = id;
+      }
     }
-  }
-  if (anchorId === null) {
-    return nearestFreeCell({ col: Math.round(node.x / CELL_W), row: Math.round(node.y / CELL_H) }, ctx.occupied);
-  }
+    return anchorId;
+  };
+
+  const anchorId = nearestAnchor(graphNeighbourIds) ?? nearestAnchor(latticeById.keys());
+  if (anchorId === null) return null;
+
   const anchorCell = ctx.cells.get(anchorId)!;
   const anchorLattice = latticeById.get(anchorId)!;
   const dCol = Math.sign(lattice.col - anchorLattice.col);
@@ -421,20 +444,30 @@ export const placeIncrementalNodes = (
   for (const id of [...classification.toPlace].sort()) {
     const node = nodeById.get(id)!;
 
+    // CHEWY PATCH: graph adjacency is now computed unconditionally (not
+    // just when there's no lattice cell) so it can serve BOTH as the
+    // lattice branch's preferred anchor pool AND as this node's own
+    // fallback if the lattice branch can't find any lattice-resolved
+    // anchor at all — no code path dead-ends straight to the raw,
+    // unsnapped current-position fallback while a real graph neighbour
+    // sits right there already placed. See placeLatticeNode's header for
+    // the failure this closes.
+    const viaChain = (chainAdj.get(id) ?? []).filter(n2 => ctx.cells.has(n2));
+    const viaGate = (gateAdj.get(id) ?? []).filter(n2 => ctx.cells.has(n2));
+
     const lattice = latticeById.get(id);
-    let target: CellCoord;
-    if (lattice) {
-      target = placeLatticeNode(node, lattice, latticeById, ctx);
-    } else {
-      const viaChain = (chainAdj.get(id) ?? []).filter(n2 => ctx.cells.has(n2));
-      const viaGate = (gateAdj.get(id) ?? []).filter(n2 => ctx.cells.has(n2));
+    let target: CellCoord | null = lattice
+      ? placeLatticeNode(lattice, latticeById, [...viaGate, ...viaChain], ctx)
+      : null;
+    if (!target) {
       if (viaChain.length > 0) {
         target = placeAdjacentNode(id, viaChain, chainAdj, axis, ctx);
       } else if (viaGate.length > 0) {
         target = placeAdjacentNode(id, viaGate, gateAdj, axis, ctx);
-      } else {
-        target = nearestFreeCell({ col: Math.round(node.x / CELL_W), row: Math.round(node.y / CELL_H) }, ctx.occupied);
       }
+    }
+    if (!target) {
+      target = nearestFreeCell({ col: Math.round(node.x / CELL_W), row: Math.round(node.y / CELL_H) }, ctx.occupied);
     }
 
     commit(ctx, id, target);
