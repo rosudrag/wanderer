@@ -228,6 +228,34 @@ defmodule WandererAppWeb.MapSystemsEventHandler do
     {:noreply, socket}
   end
 
+  # CHEWY PATCH: beautifier bulk reposition — env-gated no-op, otherwise batches
+  # position writes through WandererApp.Map.BulkReposition instead of recursing
+  # one system at a time.
+  def handle_ui_event(
+        "update_system_positions_bulk",
+        positions,
+        %{
+          assigns: %{
+            map_id: map_id,
+            main_character_id: main_character_id,
+            has_tracked_characters?: true,
+            user_permissions: %{update_system: true}
+          }
+        } = socket
+      )
+      when not is_nil(main_character_id) do
+    if WandererApp.Env.map_beautifier?() do
+      map_id
+      |> WandererApp.Map.BulkReposition.apply(parse_bulk_positions(positions))
+    else
+      Logger.warning(
+        "[update_system_positions_bulk] Ignored: WANDERER_MAP_BEAUTIFIER is disabled"
+      )
+    end
+
+    {:noreply, socket}
+  end
+
   def handle_ui_event(
         "update_system_" <> param,
         %{"system_id" => solar_system_id, "value" => value} = _event,
@@ -394,4 +422,27 @@ defmodule WandererAppWeb.MapSystemsEventHandler do
          })
 
   defp update_system_position(_map_id, _position), do: :ok
+
+  # CHEWY PATCH: decode/round the "update_system_positions_bulk" payload into
+  # the atom-keyed integer shape WandererApp.Map.BulkReposition.apply/3 expects.
+  defp parse_bulk_positions(positions) when is_list(positions),
+    do: positions |> Enum.flat_map(&parse_bulk_position/1)
+
+  defp parse_bulk_positions(_positions), do: []
+
+  defp parse_bulk_position(%{
+         "position" => %{"x" => x, "y" => y},
+         "solar_system_id" => solar_system_id
+       })
+       when not is_nil(x) and not is_nil(y) and not is_nil(solar_system_id) do
+    [
+      %{
+        solar_system_id: solar_system_id |> String.to_integer(),
+        position_x: x |> round(),
+        position_y: y |> round()
+      }
+    ]
+  end
+
+  defp parse_bulk_position(_position), do: []
 end

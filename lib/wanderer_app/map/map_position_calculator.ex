@@ -1,5 +1,15 @@
 defmodule WandererApp.Map.PositionCalculator do
-  @moduledoc false
+  @moduledoc """
+  Finds a free grid cell to place a new system on the map.
+
+  Normally this spiral-searches outward from the parent system (see
+  `check_system_available_positions/5`), which packs chains into a dense
+  blob. When `WandererApp.Env.tidy_insert?/0` is enabled, `get_new_system_position/3`
+  instead prefers a cell one grid pitch away from the parent along the chain's
+  primary axis (x for left_to_right, y for top_to_bottom), fanning out along the
+  secondary axis for siblings before falling back to the original spiral search.
+  See the `# CHEWY PATCH` block below for the geometry.
+  """
   require Logger
 
   @ddrt Application.compile_env(:wanderer_app, :ddrt)
@@ -14,6 +24,12 @@ defmodule WandererApp.Map.PositionCalculator do
 
   @start_x 0
   @start_y 0
+
+  # CHEWY PATCH: tidy-insert candidate geometry (WandererApp.Env.tidy_insert?/0).
+  # Fan offsets tried on the secondary axis, closest-to-parent first, alternating sides.
+  @tidy_fan [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6]
+  # Primary-axis pitches tried, in order, before giving up and spiral-searching.
+  @tidy_primary_offsets [1, 2]
 
   def get_system_bounding_rect(%{position_x: x, position_y: y} = _system) do
     [{x, x + @w}, {y, y + @h}]
@@ -31,9 +47,52 @@ defmodule WandererApp.Map.PositionCalculator do
         rtree_name,
         opts
       ) do
-    {:ok, {x, y}} = rtree_name |> check_system_available_positions(start_x, start_y, 1, opts)
+    # CHEWY PATCH: direction-aware tidy insert, gated behind WandererApp.Env.tidy_insert?/0.
+    if WandererApp.Env.tidy_insert?() do
+      case tidy_insert_position(rtree_name, start_x, start_y, opts) do
+        {:ok, {x, y}} ->
+          %{x: x, y: y}
 
-    %{x: x, y: y}
+        :error ->
+          {:ok, {x, y}} =
+            rtree_name |> check_system_available_positions(start_x, start_y, 1, opts)
+
+          %{x: x, y: y}
+      end
+    else
+      {:ok, {x, y}} = rtree_name |> check_system_available_positions(start_x, start_y, 1, opts)
+
+      %{x: x, y: y}
+    end
+  end
+
+  # CHEWY PATCH: pure candidate generator for tidy insert, unit-testable without a live R-tree.
+  # Candidates are ordered: primary pitch 1 with no fan, then primary pitch 1 fanned out on the
+  # secondary axis (+1,-1,+2,-2,...,+6,-6), then the same fan at primary pitch 2.
+  @doc false
+  def tidy_insert_candidates(start_x, start_y, opts) do
+    {{px, py}, {sx, sy}} = tidy_insert_axes(opts[:layout])
+
+    for primary <- @tidy_primary_offsets, secondary <- @tidy_fan do
+      {
+        start_x + px * primary + sx * secondary,
+        start_y + py * primary + sy * secondary
+      }
+    end
+  end
+
+  defp tidy_insert_axes("top_to_bottom"), do: {{0, @h + @m_y}, {@w + @m_x, 0}}
+  # Default (including "left_to_right" and nil) grows along x.
+  defp tidy_insert_axes(_layout), do: {{@w + @m_x, 0}, {0, @h + @m_y}}
+
+  defp tidy_insert_position(rtree_name, start_x, start_y, opts) do
+    start_x
+    |> tidy_insert_candidates(start_y, opts)
+    |> Enum.find(&is_available_position(&1, rtree_name))
+    |> case do
+      nil -> :error
+      position -> {:ok, position}
+    end
   end
 
   defp check_system_available_positions(_rtree_name, _start_x, _start_y, 100, _opts),

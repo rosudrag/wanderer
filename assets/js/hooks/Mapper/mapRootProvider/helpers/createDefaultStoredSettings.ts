@@ -9,6 +9,8 @@ import {
   DEFAULT_WIDGET_LOCAL_SETTINGS,
   getDefaultWidgetProps,
   STORED_INTERFACE_DEFAULT_VALUES,
+  // CHEWY PATCH: map beautifier settings.
+  DEFAULT_BEAUTIFY_SETTINGS,
 } from '@/hooks/Mapper/mapRootProvider/constants.ts';
 import { DEFAULT_SIGNATURE_SETTINGS } from '@/hooks/Mapper/constants/signatures.ts';
 import { STORED_SETTINGS_VERSION } from '@/hooks/Mapper/mapRootProvider/version.ts';
@@ -37,6 +39,8 @@ export const createDefaultStoredSettings = (): MapUserSettings => {
     interface: createWidgetSettings(STORED_INTERFACE_DEFAULT_VALUES),
     map: createWidgetSettings(DEFAULT_MAP_SETTINGS),
     jumpPlanner: createWidgetSettings(DEFAULT_JUMP_PLANNER_SETTINGS),
+    // CHEWY PATCH: map beautifier settings.
+    beautify: createWidgetSettings(DEFAULT_BEAUTIFY_SETTINGS),
   };
 };
 
@@ -67,5 +71,8 @@ export const getDefaultSettingsByType = (type: SettingsTypes): SettingsWrapper<a
       return createWidgetSettings(DEFAULT_MAP_SETTINGS);
     case SettingsTypes.jumpPlanner:
       return createWidgetSettings(DEFAULT_JUMP_PLANNER_SETTINGS);
+    // CHEWY PATCH: map beautifier settings.
+    case SettingsTypes.beautify:
+      return createWidgetSettings(DEFAULT_BEAUTIFY_SETTINGS);
   }
 };

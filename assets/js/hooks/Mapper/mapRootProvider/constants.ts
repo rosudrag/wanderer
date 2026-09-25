@@ -11,6 +11,8 @@ import {
   PingsPlacement,
   RoutesByType,
   RoutesType,
+  // CHEWY PATCH: map beautifier settings.
+  BeautifySettings,
 } from '@/hooks/Mapper/mapRootProvider/types.ts';
 import { DEFAULT_WIDGETS, STORED_VISIBLE_WIDGETS_DEFAULT } from '@/hooks/Mapper/components/mapInterface/constants.tsx';
 
@@ -76,6 +78,13 @@ export const DEFAULT_JUMP_PLANNER_SETTINGS: JumpPlannerSettings = {
   jumpFreighter: 4,
   preferStationSystems: true,
   avoidIncursions: true,
+};
+
+// CHEWY PATCH: map beautifier default per-map preferences.
+export const DEFAULT_BEAUTIFY_SETTINGS: BeautifySettings = {
+  rootId: null,
+  axis: 'left_to_right',
+  kspaceMode: 'geographic',
 };
 
 export const getDefaultWidgetProps = () => ({

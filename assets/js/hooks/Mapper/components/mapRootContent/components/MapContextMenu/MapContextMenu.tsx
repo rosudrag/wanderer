@@ -7,6 +7,8 @@ import { OutCommand } from '@/hooks/Mapper/types';
 import { MenuItem } from 'primereact/menuitem';
 import { useMapCheckPermissions } from '@/hooks/Mapper/mapRootProvider/hooks/api';
 import { UserPermission } from '@/hooks/Mapper/types/permissions.ts';
+// CHEWY PATCH: map beautifier submenu.
+import { useBeautify } from '@/hooks/Mapper/components/map/hooks/useBeautify.ts';
 
 export interface MapContextMenuProps {
   onShowOnTheMap?: () => void;
@@ -25,8 +27,11 @@ export const MapContextMenu = ({
 }: MapContextMenuProps) => {
   const {
     outCommand,
-    storedSettings: { setInterfaceSettings },
+    data: { selectedSystems },
+    storedSettings: { setInterfaceSettings, settingsBeautify, settingsBeautifyUpdate },
   } = useMapRootState();
+
+  const { beautify, isEnabled: isBeautifyEnabled, isBeautifying } = useBeautify();
 
   const canTrackCharacters = useMapCheckPermissions([UserPermission.TRACK_CHARACTER]);
 
@@ -38,6 +43,32 @@ export const MapContextMenu = ({
       data: {},
     });
   }, [outCommand]);
+
+  // CHEWY PATCH: map beautifier handlers.
+  const handleBeautifyWholeMap = useCallback(() => {
+    beautify({
+      scope: 'all',
+      rootId: settingsBeautify.rootId,
+      axis: settingsBeautify.axis,
+      kspaceMode: settingsBeautify.kspaceMode,
+    });
+  }, [beautify, settingsBeautify]);
+
+  const handleBeautifySelection = useCallback(() => {
+    beautify({
+      scope: 'selection',
+      rootId: settingsBeautify.rootId,
+      axis: settingsBeautify.axis,
+      kspaceMode: settingsBeautify.kspaceMode,
+    });
+  }, [beautify, settingsBeautify]);
+
+  const handleToggleBeautifyAxis = useCallback(() => {
+    settingsBeautifyUpdate(prev => ({
+      ...prev,
+      axis: prev.axis === 'top_to_bottom' ? 'left_to_right' : 'top_to_bottom',
+    }));
+  }, [settingsBeautifyUpdate]);
 
   const items = useMemo(() => {
     return (
@@ -73,6 +104,36 @@ export const MapContextMenu = ({
           visible: true,
         },
         { separator: true, visible: true },
+        ...(isBeautifyEnabled
+          ? [
+              {
+                label: 'Beautify',
+                icon: 'pi pi-sparkles',
+                visible: true,
+                items: [
+                  {
+                    label: 'Whole map',
+                    icon: 'pi pi-sitemap',
+                    command: handleBeautifyWholeMap,
+                    disabled: isBeautifying,
+                  },
+                  {
+                    label: 'Selection',
+                    icon: 'pi pi-check-square',
+                    command: handleBeautifySelection,
+                    disabled: isBeautifying || selectedSystems.length === 0,
+                  },
+                  { separator: true },
+                  {
+                    label: settingsBeautify.axis === 'top_to_bottom' ? 'Axis: Top to bottom' : 'Axis: Left to right',
+                    icon: settingsBeautify.axis === 'top_to_bottom' ? 'pi pi-arrow-down' : 'pi pi-arrow-right',
+                    command: handleToggleBeautifyAxis,
+                  },
+                ],
+              },
+              { separator: true, visible: true },
+            ]
+          : []),
         {
           label: 'Settings',
           icon: `pi pi-cog`,
@@ -100,6 +161,13 @@ export const MapContextMenu = ({
     onShowWormholesReference,
     onShowJumpPlanner,
     setInterfaceSettings,
+    isBeautifyEnabled,
+    isBeautifying,
+    selectedSystems,
+    settingsBeautify,
+    handleBeautifyWholeMap,
+    handleBeautifySelection,
+    handleToggleBeautifyAxis,
   ]);
 
   return (

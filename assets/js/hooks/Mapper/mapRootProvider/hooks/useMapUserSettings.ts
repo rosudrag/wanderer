@@ -112,6 +112,14 @@ export const useMapUserSettings = ({ map_slug }: MapRootData, outCommand: OutCom
     'jumpPlanner',
   );
 
+  // CHEWY PATCH: map beautifier settings.
+  const [settingsBeautify, settingsBeautifyUpdate] = useSettingsValueAndSetter(
+    mapUserSettings,
+    setMapUserSettings,
+    map_slug,
+    'beautify',
+  );
+
   // HERE we MUST work with migrations
   useEffect(() => {
     if (isReady) {
@@ -217,6 +225,9 @@ export const useMapUserSettings = ({ map_slug }: MapRootData, outCommand: OutCom
     mapSettingsUpdate,
     settingsJumpPlanner,
     settingsJumpPlannerUpdate,
+    // CHEWY PATCH: map beautifier settings.
+    settingsBeautify,
+    settingsBeautifyUpdate,
 
     getSettingsForExport,
     applySettings,

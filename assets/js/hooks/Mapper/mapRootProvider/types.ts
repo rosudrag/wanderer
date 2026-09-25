@@ -1,4 +1,6 @@
 import { WindowStoreInfo } from '@/hooks/Mapper/mapRootProvider/hooks/useStoreWidgets.ts';
+// CHEWY PATCH: map beautifier per-map preferences (rootId/axis/kspaceMode).
+import type { BeautifyAxis, KSpaceMode } from '@/hooks/Mapper/components/map/layout';
 import { SignatureSettingsType } from '@/hooks/Mapper/constants/signatures.ts';
 
 export enum AvailableThemes {
@@ -107,6 +109,13 @@ export type JumpPlannerSettings = {
   avoidIncursions: boolean;
 };
 
+// CHEWY PATCH: map beautifier per-map preferences.
+export type BeautifySettings = {
+  rootId: string | null;
+  axis: BeautifyAxis;
+  kspaceMode: KSpaceMode;
+};
+
 export type SettingsWrapper<T> = T;
 
 export type MapUserSettings = {
@@ -122,6 +131,8 @@ export type MapUserSettings = {
   killsWidget: SettingsWrapper<KillsWidgetSettings>;
   map: SettingsWrapper<MapSettings>;
   jumpPlanner: SettingsWrapper<JumpPlannerSettings>;
+  // CHEWY PATCH: map beautifier settings.
+  beautify: SettingsWrapper<BeautifySettings>;
 };
 
 export type MapUserSettingsStructure = {
@@ -143,6 +154,8 @@ export enum SettingsTypes {
   interface = 'interface',
   map = 'map',
   jumpPlanner = 'jumpPlanner',
+  // CHEWY PATCH: map beautifier settings.
+  beautify = 'beautify',
 }
 
 export type MigrationFunc = (prev: any) => any;

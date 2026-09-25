@@ -11,4 +11,6 @@ export type MapOptions = {
   show_linked_signature_id_temp_name: StringBoolean;
   show_temp_system_name: StringBoolean;
   store_custom_labels: StringBoolean;
+  // CHEWY PATCH: server-side map beautifier feature flag (WANDERER_MAP_BEAUTIFIER).
+  beautifier_enabled?: StringBoolean;
 };

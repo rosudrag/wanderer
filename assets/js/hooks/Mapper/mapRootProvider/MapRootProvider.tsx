@@ -30,6 +30,8 @@ import {
   OnTheMapSettingsType,
   RoutesByType,
   RoutesType,
+  // CHEWY PATCH: map beautifier settings.
+  BeautifySettings,
 } from '@/hooks/Mapper/mapRootProvider/types.ts';
 import {
   DEFAULT_KILLS_WIDGET_SETTINGS,
@@ -40,6 +42,8 @@ import {
   DEFAULT_ROUTES_SETTINGS,
   DEFAULT_WIDGET_LOCAL_SETTINGS,
   STORED_INTERFACE_DEFAULT_VALUES,
+  // CHEWY PATCH: map beautifier settings.
+  DEFAULT_BEAUTIFY_SETTINGS,
 } from '@/hooks/Mapper/mapRootProvider/constants.ts';
 import { useMapUserSettings } from '@/hooks/Mapper/mapRootProvider/hooks/useMapUserSettings.ts';
 import { useGlobalHooks } from '@/hooks/Mapper/mapRootProvider/hooks/useGlobalHooks.ts';
@@ -153,6 +157,9 @@ export interface MapRootContextProps {
     mapSettingsUpdate: Dispatch<SetStateAction<MapSettings>>;
     settingsJumpPlanner: JumpPlannerSettings;
     settingsJumpPlannerUpdate: Dispatch<SetStateAction<JumpPlannerSettings>>;
+    // CHEWY PATCH: map beautifier settings.
+    settingsBeautify: BeautifySettings;
+    settingsBeautifyUpdate: Dispatch<SetStateAction<BeautifySettings>>;
     isReady: boolean;
     hasOldSettings: boolean;
     getSettingsForExport(): string | undefined;
@@ -204,6 +211,9 @@ const MapRootContext = createContext<MapRootContextProps>({
     mapSettingsUpdate: () => null,
     settingsJumpPlanner: DEFAULT_JUMP_PLANNER_SETTINGS,
     settingsJumpPlannerUpdate: () => null,
+    // CHEWY PATCH: map beautifier settings.
+    settingsBeautify: DEFAULT_BEAUTIFY_SETTINGS,
+    settingsBeautifyUpdate: () => null,
     isReady: false,
     hasOldSettings: false,
     getSettingsForExport: () => '',

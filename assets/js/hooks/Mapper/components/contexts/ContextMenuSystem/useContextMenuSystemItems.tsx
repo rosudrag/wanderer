@@ -52,8 +52,13 @@ export const useContextMenuSystemItems = ({
   const getUserRoutes = useUserRoute({ userHubs, systemId, onUserHubToggle });
 
   const {
-    data: { pings, isSubscriptionActive },
+    data: { pings, isSubscriptionActive, options },
+    // CHEWY PATCH: map beautifier chain-root selection.
+    storedSettings: { settingsBeautifyUpdate },
   } = useMapRootState();
+
+  // CHEWY PATCH: map beautifier chain-root selection.
+  const isBeautifyEnabled = options.beautifier_enabled === 'true';
 
   const ping = useMemo(() => (pings.length === 1 ? pings[0] : undefined), [pings]);
   const isShowPingBtn = useMemo(() => {
@@ -141,6 +146,17 @@ export const useContextMenuSystemItems = ({
           );
         },
       },
+      // CHEWY PATCH: map beautifier chain-root selection.
+      ...(isBeautifyEnabled
+        ? [
+            { separator: true },
+            {
+              label: 'Set as chain root',
+              icon: PrimeIcons.SITEMAP,
+              command: () => settingsBeautifyUpdate(prev => ({ ...prev, rootId: systemId ?? null })),
+            },
+          ]
+        : []),
       ...(system.locked && canLockSystem
         ? [
             {
@@ -206,5 +222,8 @@ export const useContextMenuSystemItems = ({
     onTogglePing,
     ping,
     isShowPingBtn,
+    // CHEWY PATCH: map beautifier chain-root selection.
+    isBeautifyEnabled,
+    settingsBeautifyUpdate,
   ]);
 };

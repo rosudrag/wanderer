@@ -16,6 +16,10 @@ interface RightBarProps {
   onShowTrackingDialog?: () => void;
   onShowWormholesReference?: () => void;
   onShowJumpPlanner?: () => void;
+  // CHEWY PATCH: map beautifier button.
+  onBeautify?: () => void;
+  isBeautifyEnabled?: boolean;
+  isBeautifying?: boolean;
   additionalContent?: ReactNode;
 }
 
@@ -25,6 +29,9 @@ export const RightBar = ({
   onShowTrackingDialog,
   onShowWormholesReference,
   onShowJumpPlanner,
+  onBeautify,
+  isBeautifyEnabled,
+  isBeautifying,
   additionalContent,
 }: RightBarProps) => {
   const {
@@ -129,6 +136,19 @@ export const RightBar = ({
       <div className="flex flex-col items-center mb-2 gap-1">
         {/* TODO - do not delete this code needs for debug */}
         {/*<DebugComponent />*/}
+
+        {isBeautifyEnabled && (
+          <WdTooltipWrapper content="Beautify layout" position={TooltipPosition.left}>
+            <button
+              className="btn bg-transparent text-gray-400 hover:text-white border-transparent hover:bg-transparent py-2 h-auto min-h-auto disabled:opacity-50"
+              type="button"
+              onClick={onBeautify}
+              disabled={isBeautifying}
+            >
+              <i className="pi pi-sparkles"></i>
+            </button>
+          </WdTooltipWrapper>
+        )}
 
         <WdTooltipWrapper content="Map user settings" position={TooltipPosition.left}>
           <button

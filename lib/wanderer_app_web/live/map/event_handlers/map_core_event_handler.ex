@@ -758,6 +758,9 @@ defmodule WandererAppWeb.MapCoreEventHandler do
       map_id
       |> WandererApp.Map.get_options()
 
+    # CHEWY PATCH: expose the map beautifier feature flag to the client init payload.
+    options = Map.put(options, "beautifier_enabled", to_string(WandererApp.Env.map_beautifier?()))
+
     map_characters =
       map_id
       |> WandererApp.Map.list_characters()

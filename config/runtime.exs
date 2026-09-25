@@ -140,6 +140,17 @@ wallet_tracking_enabled =
   |> get_var_from_path_or_env("WANDERER_WALLET_TRACKING_ENABLED", "false")
   |> String.to_existing_atom()
 
+# CHEWY PATCH: map beautifier / tidy-insert feature flags, default off (upstream behaviour).
+map_beautifier =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_MAP_BEAUTIFIER", "false")
+  |> String.to_existing_atom()
+
+tidy_insert =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_TIDY_INSERT", "false")
+  |> String.to_existing_atom()
+
 admins =
   System.get_env("WANDERER_ADMINS", "")
   |> case do
@@ -189,6 +200,9 @@ config :wanderer_app,
   map_connection_auto_eol_hours: map_connection_auto_eol_hours,
   map_connection_eol_expire_timeout_mins: map_connection_eol_expire_timeout_mins,
   wallet_tracking_enabled: wallet_tracking_enabled,
+  # CHEWY PATCH: map beautifier / tidy-insert feature flags.
+  map_beautifier: map_beautifier,
+  tidy_insert: tidy_insert,
   restrict_maps_creation: restrict_maps_creation,
   restrict_acls_creation: restrict_acls_creation,
   subscription_settings: %{

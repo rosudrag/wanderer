@@ -51,6 +51,8 @@ defmodule WandererAppWeb.MapEventHandler do
     "search_systems",
     "update_system_position",
     "update_system_positions",
+    # CHEWY PATCH: beautifier bulk reposition event (env-gated at handler)
+    "update_system_positions_bulk",
     "update_system_name",
     "update_system_description",
     "update_system_labels",

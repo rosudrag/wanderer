@@ -270,6 +270,8 @@ export enum OutCommand {
   updateSystemTag = 'update_system_tag',
   updateSystemPosition = 'update_system_position',
   updateSystemPositions = 'update_system_positions',
+  // CHEWY PATCH: bulk position apply for the map beautifier (broadcasts per-system update_system to all clients).
+  updateSystemPositionsBulk = 'update_system_positions_bulk',
   deleteSystems = 'delete_systems',
   manualAddSystem = 'manual_add_system',
   manualAddConnection = 'manual_add_connection',

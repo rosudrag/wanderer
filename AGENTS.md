@@ -34,6 +34,8 @@ This file is OURS — upstream has no `AGENTS.md`, so it never conflicts on a me
 | Feature | Env var | Entry point |
 |---|---|---|
 | Tracking survives the browser being closed | `WANDERER_PERSIST_TRACKING` | `lib/wanderer_app/map/persistent_tracking.ex` (+ 4 one-line hooks in `map_server_impl.ex`, `map_pool.ex`, `map_manager.ex`) |
+| Map beautifier (auto-layout: Dotlan-geometry k-space, tidy-tree wormhole chains) | `WANDERER_MAP_BEAUTIFIER` | `assets/js/hooks/Mapper/components/map/layout/` + `components/map/hooks/useBeautify.ts`, `lib/wanderer_app/map/bulk_reposition.ex` (+ `update_system_positions_bulk` event) |
+| Direction-aware placement for newly added systems | `WANDERER_TIDY_INSERT` | `lib/wanderer_app/map/map_position_calculator.ex` |
 
 ## Loop
 

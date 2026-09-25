@@ -18,6 +18,8 @@ import { PingsInterface } from '@/hooks/Mapper/components/mapInterface/component
 import { OldSettingsDialog } from '@/hooks/Mapper/components/mapRootContent/components/OldSettingsDialog.tsx';
 import { TopSearch } from '@/hooks/Mapper/components/mapRootContent/components/TopSearch';
 import { JumpPlanner, JumpPlannerInitialSystem } from '@/hooks/Mapper/components/mapRootContent/components/JumpPlanner';
+// CHEWY PATCH: map beautifier.
+import { useBeautify } from '@/hooks/Mapper/components/map/hooks/useBeautify.ts';
 
 interface JumpPlannerDialogState {
   visible: boolean;
@@ -34,7 +36,7 @@ export interface MapRootContentProps {}
 // eslint-disable-next-line no-empty-pattern
 export const MapRootContent = ({}: MapRootContentProps) => {
   const {
-    storedSettings: { interfaceSettings, isReady, hasOldSettings },
+    storedSettings: { interfaceSettings, isReady, hasOldSettings, settingsBeautify },
     data,
   } = useMapRootState();
   const { isShowMenu } = interfaceSettings;
@@ -66,6 +68,17 @@ export const MapRootContent = ({}: MapRootContentProps) => {
     setJumpPlannerState(CLOSED_JUMP_PLANNER_STATE);
   }, []);
 
+  // CHEWY PATCH: map beautifier — RightBar button is threaded the same way as onShowMapSettings.
+  const { beautify, isEnabled: isBeautifyEnabled, isBeautifying } = useBeautify();
+  const handleBeautifyWholeMap = useCallback(() => {
+    beautify({
+      scope: 'all',
+      rootId: settingsBeautify.rootId,
+      axis: settingsBeautify.axis,
+      kspaceMode: settingsBeautify.kspaceMode,
+    });
+  }, [beautify, settingsBeautify]);
+
   useMapEventListener(event => {
     if (event.name === Commands.showTracking) {
       setShowTrackingDialog(true);
@@ -96,6 +109,9 @@ export const MapRootContent = ({}: MapRootContentProps) => {
                 onShowTrackingDialog={handleShowTrackingDialog}
                 onShowWormholesReference={handleShowWormholesReference}
                 onShowJumpPlanner={handleShowJumpPlanner}
+                onBeautify={handleBeautifyWholeMap}
+                isBeautifyEnabled={isBeautifyEnabled}
+                isBeautifying={isBeautifying}
                 additionalContent={<PingsInterface hasLeftOffset />}
               />
             </div>

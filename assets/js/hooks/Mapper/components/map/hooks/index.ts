@@ -8,4 +8,6 @@ export * from './useNodesEdgesState';
 export * from './useSolarSystemNode';
 export * from './useUnsplashedSignatures';
 export * from './useUpdateNodes';
+// CHEWY PATCH: map beautifier hook.
+export * from './useBeautify';
 export * from './useNodeKillsCount';
