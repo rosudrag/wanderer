@@ -144,6 +144,11 @@ exactly what the engine's own contract promises).
   column span from 12 to 25, i.e. it destroyed the geometry the pocket exists
   to protect. Cost of the shipped approach: taller map (yugen 8 -> 14 rows at
   standoff 2) and longer chain connectors (`whMean` 1.1 -> 5.4 cells).
+  The rule is enforced on BOTH paths: full re-solve places chains in the band,
+  and the incremental path (what the sparkles button runs on an already laid
+  out map) treats "chain system within `standoff` of the lattice" as an
+  invalid placement, re-places it in the band, and forbids the repair pass
+  from pulling it back.
 - **determinism** — the scenario is laid out twice from identical input;
   `true` iff the two `JSON.stringify`d results are byte-identical. A `false`
   here is also a hard failure.

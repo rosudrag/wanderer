@@ -150,6 +150,8 @@ export const classifyNodes = (
   chainEdges: LayoutEdgeInput[],
   kspaceMemberIds: ReadonlySet<string>,
   regionData: RegionLayoutData | null,
+  /** CHEWY PATCH: see BeautifyOptions.chainStandoff — 0 keeps upstream validity rules exactly. */
+  chainStandoff = 0,
 ): NodeClassification => {
   const nodeById = new Map(nodes.map(n => [n.id, n]));
 
@@ -271,11 +273,42 @@ export const classifyNodes = (
     }
   }
 
+  // CHEWY PATCH (chain standoff): a wormhole-chain system sitting inside the
+  // k-space lattice is not "validly placed" either. Without this rule the
+  // incremental path — which is what the sparkles button actually runs on a
+  // map that is already laid out — left every existing chain exactly where it
+  // was, so turning the feature on only affected brand-new systems and full
+  // re-solves (measured on live yugen: auto mode kept every chain 1 cell from
+  // the lattice while a full re-solve moved them out to 2).
+  const crowdedIds = new Set<string>();
+  if (chainStandoff > 0) {
+    const latticeCells: CellCoord[] = [];
+    for (const n of nodes) {
+      if (kspaceMemberIds.has(n.id)) latticeCells.push(cellOf(n));
+    }
+    for (const n of nodes) {
+      if (n.locked || kspaceMemberIds.has(n.id)) continue;
+      const cell = cellOf(n);
+      for (const lattice of latticeCells) {
+        const distance = Math.max(Math.abs(cell.col - lattice.col), Math.abs(cell.row - lattice.row));
+        if (distance < chainStandoff) {
+          crowdedIds.add(n.id);
+          break;
+        }
+      }
+    }
+  }
+
   const validCells = new Map<string, CellCoord>();
   const toPlace: string[] = [];
   for (const n of nodes) {
     if (n.locked) continue;
-    const valid = isOnGrid(n) && !collidingIds.has(n.id) && !invertedIds.has(n.id) && !occludingIds.has(n.id);
+    const valid =
+      isOnGrid(n) &&
+      !collidingIds.has(n.id) &&
+      !invertedIds.has(n.id) &&
+      !occludingIds.has(n.id) &&
+      !crowdedIds.has(n.id);
     if (valid) validCells.set(n.id, cellOf(n));
     else toPlace.push(n.id);
   }
@@ -417,6 +450,13 @@ interface PlacementCtx {
   chainAdj: ReadonlyMap<string, string[]>;
   allEdges: readonly LayoutEdgeInput[];
   lockedPositions: ReadonlyMap<string, CellCoord>;
+  /**
+   * CHEWY PATCH: hard "this node may not go here" filter, used for chain
+   * standoff — otherwise the nearest-acceptable-cell search happily walks a
+   * chain system back toward the lattice when its ideal band cell is taken
+   * (measured on live yugen: J165815 ended 1 cell from Ibani).
+   */
+  isCellAllowed?: (id: string, cell: CellCoord) => boolean;
 }
 
 const commit = (ctx: PlacementCtx, id: string, cell: CellCoord): void => {
@@ -490,12 +530,20 @@ const pickPlacementCell = (id: string, ideal: CellCoord, ctx: PlacementCtx): Cel
     return true;
   };
 
+  // CHEWY PATCH: `ctx.isCellAllowed` is a hard constraint (chain standoff), so
+  // it gates BOTH the clean search and the "any free cell" fallback; only if
+  // even that finds nothing does the ideal cell get used as-is.
+  const allowed = (cell: CellCoord): boolean => !ctx.isCellAllowed || ctx.isCellAllowed(id, cell);
   const clean = nearestAcceptableCell(
     ideal,
-    cell => !ctx.occupied.has(cellKey(cell)) && isClean(cell),
+    cell => !ctx.occupied.has(cellKey(cell)) && allowed(cell) && isClean(cell),
     CLEAN_SEARCH_RADIUS,
   );
-  return clean ?? nearestAcceptableCell(ideal, cell => !ctx.occupied.has(cellKey(cell)), 4000) ?? ideal;
+  return (
+    clean ??
+    nearestAcceptableCell(ideal, cell => !ctx.occupied.has(cellKey(cell)) && allowed(cell), 4000) ??
+    ideal
+  );
 };
 
 /**
@@ -606,6 +654,37 @@ const placeAdjacentNode = (
   return pickPlacementCell(nodeId, ideal, ctx);
 };
 
+/**
+ * CHEWY PATCH: a chain node whose neighbour is a k-space system is placed OUT
+ * past the lattice edge, in that neighbour's own column (row, for
+ * top_to_bottom), `chainStandoff` cells clear of it — the incremental twin of
+ * the band placement full mode does in layout/index.ts. Growing the chain
+ * further from there is ordinary chain-to-chain adjacency, so only this first
+ * hop needs the special case.
+ */
+const placeChainBandNode = (
+  nodeId: string,
+  neighbourCell: CellCoord,
+  latticeCells: readonly CellCoord[],
+  axis: BeautifyAxis,
+  standoff: number,
+  ctx: PlacementCtx,
+): CellCoord => {
+  const alongRows = axis !== 'top_to_bottom';
+  const values = latticeCells.map(cell => (alongRows ? cell.row : cell.col));
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  const anchorValue = alongRows ? neighbourCell.row : neighbourCell.col;
+  // Nearest lattice edge keeps the connector back to the anchor short; ties go
+  // to the high side so chains read as "hanging below the map".
+  const useHighSide = high - anchorValue <= anchorValue - low;
+  const edgeValue = useHighSide ? high + standoff + 1 : low - standoff - 1;
+  const ideal: CellCoord = alongRows
+    ? { col: neighbourCell.col, row: edgeValue }
+    : { col: edgeValue, row: neighbourCell.row };
+  return pickPlacementCell(nodeId, ideal, ctx);
+};
+
 export interface IncrementalLayoutResult {
   positions: Record<string, { x: number; y: number }>;
   movedCount: number;
@@ -645,6 +724,18 @@ export const placeIncrementalNodes = (
   // off-grid — real position feeds pickPlacementCell's geometry checks
   // (`lockedPositions`), since a locked node's real edges are real too.
   const lockedPositions = new Map<string, CellCoord>();
+  // CHEWY PATCH: a chain system may never be placed within `chainStandoff` of
+  // the k-space lattice, whatever the search would otherwise prefer. Lattice
+  // cells are read from each member's own current cell (they are never moved
+  // by this pass).
+  const latticeCellList: CellCoord[] = [];
+  if (chainStandoff > 0) {
+    for (const n of nodes) {
+      if (kspaceMemberIds.has(n.id)) {
+        latticeCellList.push({ col: Math.round(n.x / CELL_W), row: Math.round(n.y / CELL_H) });
+      }
+    }
+  }
   const ctx: PlacementCtx = {
     cells: new Map(classification.validCells),
     occupied: new Set(),
@@ -652,6 +743,16 @@ export const placeIncrementalNodes = (
     chainAdj,
     allEdges: [...gateEdges, ...chainEdges],
     lockedPositions,
+    isCellAllowed:
+      latticeCellList.length > 0
+        ? (id, cell) => {
+            if (kspaceMemberIds.has(id)) return true;
+            return !latticeCellList.some(
+              member =>
+                Math.max(Math.abs(cell.col - member.col), Math.abs(cell.row - member.row)) < chainStandoff,
+            );
+          }
+        : undefined,
   };
   for (const cell of ctx.cells.values()) ctx.occupied.add(cellKey(cell));
   for (const n of nodes) {
@@ -668,7 +769,14 @@ export const placeIncrementalNodes = (
   // one (e.g. two new systems chained onto each other), so single-pass
   // alphabetical order is enough — it never stalls (every case below has
   // an unconditional fallback) and never depends on Map/Set iteration order.
-  for (const id of [...classification.toPlace].sort()) {
+  // CHEWY PATCH: place in waves — every pass places only the nodes that
+  // already have a placed neighbour, so a chain is always laid out outward
+  // from its attachment instead of a deep member being placed first (sorted
+  // id order alone put `Anckee` at its raw lattice cell because its chain
+  // parent had not been placed yet). Remaining nodes (no placed neighbour at
+  // all) are handled by the final unconditional pass, exactly as before.
+  const pending = [...classification.toPlace].sort();
+  const placeOne = (id: string): void => {
     const node = nodeById.get(id)!;
 
     // CHEWY PATCH: graph adjacency is now computed unconditionally (not
@@ -682,10 +790,27 @@ export const placeIncrementalNodes = (
     const viaChain = (chainAdj.get(id) ?? []).filter(n2 => ctx.cells.has(n2));
     const viaGate = (gateAdj.get(id) ?? []).filter(n2 => ctx.cells.has(n2));
 
-    const lattice = latticeById.get(id);
-    let target: CellCoord | null = lattice
-      ? placeLatticeNode(id, lattice, latticeById, [...viaGate, ...viaChain], ctx)
-      : null;
+    // CHEWY PATCH: a chain system attached to the lattice goes OUT to the band
+    // first — before the lattice branch, which would otherwise park a k-space
+    // system that is only reachable by wormhole (Anckee, Gomati, Toon on the
+    // live yugen map) right back inside the lattice it is not gated to.
+    const isChainNode = chainStandoff > 0 && !kspaceMemberIds.has(id);
+    const latticeNeighbour = viaChain.find(n2 => kspaceMemberIds.has(n2));
+    const latticeCells: CellCoord[] = [];
+    if (isChainNode && latticeNeighbour) {
+      for (const memberId of kspaceMemberIds) {
+        const cell = ctx.cells.get(memberId) ?? lockedPositions.get(memberId);
+        if (cell) latticeCells.push({ col: Math.round(cell.col), row: Math.round(cell.row) });
+      }
+    }
+
+    const lattice = isChainNode ? undefined : latticeById.get(id);
+    let target: CellCoord | null =
+      latticeCells.length > 0 && latticeNeighbour
+        ? placeChainBandNode(id, ctx.cells.get(latticeNeighbour)!, latticeCells, axis, chainStandoff, ctx)
+        : lattice
+          ? placeLatticeNode(id, lattice, latticeById, [...viaGate, ...viaChain], ctx)
+          : null;
     if (!target) {
       if (viaChain.length > 0) {
         target = placeAdjacentNode(id, viaChain, chainAdj, axis, ctx, chainStandoff, kspaceMemberIds);
@@ -700,6 +825,19 @@ export const placeIncrementalNodes = (
     commit(ctx, id, target);
     positions[id] = { x: target.col * CELL_W, y: target.row * CELL_H };
     movedCount += 1;
+  };
+
+  let remaining = pending;
+  while (remaining.length > 0) {
+    const ready = remaining.filter(
+      id =>
+        (chainAdj.get(id) ?? []).some(n2 => ctx.cells.has(n2)) ||
+        (gateAdj.get(id) ?? []).some(n2 => ctx.cells.has(n2)),
+    );
+    const wave = ready.length > 0 ? ready : remaining.slice(0, 1);
+    for (const id of wave) placeOne(id);
+    const placed = new Set(wave);
+    remaining = remaining.filter(id => !placed.has(id));
   }
 
   return { positions, movedCount };

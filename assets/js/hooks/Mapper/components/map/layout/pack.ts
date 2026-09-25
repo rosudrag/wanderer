@@ -641,6 +641,13 @@ export const reduceCrossings = (
   cells: Map<string, CellCoord>,
   edges: CrossingEdge[],
   movableIds: ReadonlySet<string>,
+  /**
+   * CHEWY PATCH: optional hard constraint on where a node may be put. Used for
+   * chain standoff: without it this pass happily pulled a chain system back to
+   * within one cell of the k-space lattice it had just been moved clear of
+   * (measured on live yugen: Raihbaka and J165815, 2 cells back in).
+   */
+  isCellAllowed?: (id: string, cell: CellCoord) => boolean,
 ): Map<string, CellCoord> => {
   const result = new Map(cells);
 
@@ -710,6 +717,7 @@ export const reduceCrossings = (
         if (occupied.has(key(to))) continue;
         const displacement = displacementFrom(id, to);
         if (displacement > MAX_NODE_DISPLACEMENT_CELLS) continue;
+        if (isCellAllowed && !isCellAllowed(id, to)) continue;
         result.set(id, to);
         const next = violationScore(edges, result);
         const nextLength = totalEdgeLength(edges, result);
@@ -752,6 +760,7 @@ export const reduceCrossings = (
           const cellHi = result.get(hi)!;
           if (displacementFrom(lo, cellHi) > MAX_NODE_DISPLACEMENT_CELLS) continue;
           if (displacementFrom(hi, cellLo) > MAX_NODE_DISPLACEMENT_CELLS) continue;
+          if (isCellAllowed && (!isCellAllowed(lo, cellHi) || !isCellAllowed(hi, cellLo))) continue;
 
           result.set(lo, cellHi);
           result.set(hi, cellLo);

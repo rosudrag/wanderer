@@ -191,6 +191,25 @@ export const beautifyLayout = async (
   const kspaceClusters = gateComponents.filter(c => c.length >= 2);
   const kspaceMemberIds = new Set<string>(kspaceClusters.flat());
 
+  // CHEWY PATCH: the repair pass may not undo chain standoff. It is allowed to
+  // move a chain system, but never into a cell within `chainStandoff` of the
+  // k-space lattice — without this it pulled chains straight back in (measured
+  // on live yugen: two systems dragged 2 cells back to 1 cell of the lattice).
+  const isCellAllowed =
+    chainStandoff > 0
+      ? (id: string, cell: CellCoord): boolean => {
+          if (kspaceMemberIds.has(id)) return true;
+          for (const memberId of kspaceMemberIds) {
+            const member = inputCells.get(memberId);
+            if (!member) continue;
+            if (Math.max(Math.abs(cell.col - member.col), Math.abs(cell.row - member.row)) < chainStandoff) {
+              return false;
+            }
+          }
+          return true;
+        }
+      : undefined;
+
   // CHEWY PATCH: mode resolution. regionData is needed both by the full
   // pipeline's geographic k-space layout (kspaceMode === 'geographic') and
   // by classifyNodes/placeIncrementalNodes' lattice-order check whenever we
@@ -206,7 +225,7 @@ export const beautifyLayout = async (
   if (requestedMode === 'full') {
     resolvedMode = 'full';
   } else {
-    classification = classifyNodes(nodes, gateEdges, chainEdges, kspaceMemberIds, regionData);
+    classification = classifyNodes(nodes, gateEdges, chainEdges, kspaceMemberIds, regionData, chainStandoff);
     const eligibleCount = nodes.filter(n => !n.locked).length;
     const validFraction = eligibleCount > 0 ? classification.validCells.size / eligibleCount : 0;
     resolvedMode =
@@ -310,18 +329,37 @@ export const beautifyLayout = async (
       for (const [id, cell] of placedCell) {
         if (!allowedIds || allowedIds.has(id)) cells.set(id, cell);
       }
-      return reduceCrossings(cells, cleanEdges, movableIds);
+      return reduceCrossings(cells, cleanEdges, movableIds, isCellAllowed);
+    };
+
+    // CHEWY PATCH: chains crowding the lattice count as defects too, or the
+    // minimal candidate (which only places off-grid/stacked systems) always
+    // ties on crossings and wins, leaving every existing chain exactly where
+    // it was — measured on live yugen: auto mode moved 2 systems and left
+    // clearance at 1 cell while a full re-solve moved the chains out.
+    const crowdedCount = (cells: Map<string, CellCoord>): number => {
+      if (chainStandoff <= 0) return 0;
+      let count = 0;
+      for (const [id, cell] of cells) {
+        if (kspaceMemberIds.has(id) || nodeById.get(id)?.locked) continue;
+        for (const memberId of kspaceMemberIds) {
+          const member = cells.get(memberId);
+          if (!member) continue;
+          if (Math.max(Math.abs(cell.col - member.col), Math.abs(cell.row - member.row)) < chainStandoff) {
+            count += 1;
+            break;
+          }
+        }
+      }
+      return count;
     };
 
     const candidates = [candidateFor(mustMoveIds), candidateFor(null)].map(cells => {
       const quality = measureLayout(cleanEdges, cells);
-      return { cells, quality, emitted: emit(cells) };
+      return { cells, quality, emitted: emit(cells), score: defectScore(quality) + crowdedCount(cells) };
     });
     const best = candidates.reduce((a, b) =>
-      defectScore(b.quality) < defectScore(a.quality) ||
-      (defectScore(b.quality) === defectScore(a.quality) && b.emitted.movedCount < a.emitted.movedCount)
-        ? b
-        : a,
+      b.score < a.score || (b.score === a.score && b.emitted.movedCount < a.emitted.movedCount) ? b : a,
     );
 
     return {
@@ -577,7 +615,7 @@ export const beautifyLayout = async (
   // are endpoints of the same crossing, evaluated canonically (not
   // first-come) each sweep and displacement-capped. Only nodes that aren't
   // locked are eligible, so locked nodes never move.
-  const globalCells = reduceCrossings(packedCells, cleanEdges, movableIds);
+  const globalCells = reduceCrossings(packedCells, cleanEdges, movableIds, isCellAllowed);
   const fullQuality = measureLayout(cleanEdges, globalCells);
 
   // --- 5. Auto-mode regression guard --------------------------------------
@@ -597,7 +635,7 @@ export const beautifyLayout = async (
   // off-grid imports, stacked nodes — keeping it is never the better answer,
   // and a 2-cell-capped repair cannot fix it either.
   if (requestedMode === 'auto' && inputWellFormed) {
-    const repaired = reduceCrossings(inputCells, cleanEdges, movableIds);
+    const repaired = reduceCrossings(inputCells, cleanEdges, movableIds, isCellAllowed);
     const repairedQuality = measureLayout(cleanEdges, repaired);
     if (qualityScore(repairedQuality) < qualityScore(fullQuality)) {
       const repairedEmit = emit(repaired);
