@@ -23,7 +23,7 @@
 
 import { pickChainRoot, layoutChainTree } from './chainLayout';
 import { layoutGeographicSet, layoutTopologicalGroup } from './kspaceLayout';
-import { packBoxes, reduceCrossings } from './pack';
+import { packBoxes, reduceCrossings, measureLayout, qualityScore } from './pack';
 import { loadRegionLayouts } from './regionData';
 // CHEWY PATCH: mode: 'auto' | 'incremental' | 'full' support (see the
 // mode-resolution block in beautifyLayout below and anchor.ts's header).
@@ -38,11 +38,20 @@ import type {
   LayoutBox,
   LayoutEdgeInput,
   LayoutNodeInput,
+  LayoutQuality,
   LayoutResult,
 } from './types';
 
 export { CELL_W, CELL_H, pickChainRoot };
-export type { BeautifyAxis, BeautifyOptions, KSpaceMode, LayoutEdgeInput, LayoutNodeInput, LayoutResult };
+export type {
+  BeautifyAxis,
+  BeautifyOptions,
+  KSpaceMode,
+  LayoutEdgeInput,
+  LayoutNodeInput,
+  LayoutQuality,
+  LayoutResult,
+} from './types';
 
 // ---------------------------------------------------------------------------
 // Graph sanitation & partitioning helpers
@@ -97,6 +106,16 @@ const connectedComponents = (ids: string[], edges: Array<{ source: string; targe
 const edgesWithin = (edges: LayoutEdgeInput[], idSet: ReadonlySet<string>): LayoutEdgeInput[] =>
   edges.filter(e => idSet.has(e.source) && idSet.has(e.target));
 
+/**
+ * CHEWY PATCH: hidden-connection-first comparison of two layouts of the same
+ * graph, ignoring the edge-length tie-breaker `qualityScore` carries. Used
+ * wherever "is this candidate actually better for the user" must not be
+ * decided by a fraction of a cell of total edge length.
+ */
+const defectScore = (quality: LayoutQuality): number =>
+  (quality.occlusions + quality.overlaps) * 1000 + quality.crossings;
+
+
 // ---------------------------------------------------------------------------
 // beautifyLayout
 // ---------------------------------------------------------------------------
@@ -106,8 +125,15 @@ export const beautifyLayout = async (
   edges: LayoutEdgeInput[],
   options: BeautifyOptions = {},
 ): Promise<LayoutResult> => {
+  const emptyQuality: LayoutQuality = { crossings: 0, overlaps: 0, occlusions: 0, edgeLength: 0 };
   if (nodes.length === 0) {
-    return { positions: {}, rootId: null, movedCount: 0, mode: 'full' };
+    return {
+      positions: {},
+      rootId: null,
+      movedCount: 0,
+      mode: 'full',
+      quality: { before: emptyQuality, after: emptyQuality },
+    };
   }
 
   const axis: BeautifyAxis = options.axis ?? 'left_to_right';
@@ -121,6 +147,40 @@ export const beautifyLayout = async (
   const cleanEdges = sanitizeEdges(edges, nodeIds);
   const gateEdges = cleanEdges.filter(e => e.type === 1);
   const chainEdges = cleanEdges.filter(e => e.type === 0 || e.type === 2);
+
+  // CHEWY PATCH: the layout the user actually has right now, quantized to
+  // cells — the baseline every result is measured against (and, for
+  // `mode: 'auto'`, the fallback a worse re-solve is rejected in favour of).
+  const inputCells = new Map<string, CellCoord>(
+    nodes.map(n => [n.id, { col: Math.round(n.x / CELL_W), row: Math.round(n.y / CELL_H) }]),
+  );
+  const inputQuality = measureLayout(cleanEdges, inputCells);
+  const movableIds = new Set([...nodeIds].filter(id => !nodeById.get(id)!.locked));
+
+  // CHEWY PATCH: is the layout the user has right now already a legal one —
+  // every unlocked node exactly on the grid, no two nodes sharing a cell?
+  // Both "don't churn a clean map" guards below hang off this: a layout that
+  // is well-formed AND no worse than anything we can produce must be left
+  // exactly alone, however many times the user presses the button.
+  const inputCellKeys = new Set([...inputCells.values()].map(c => `${c.col},${c.row}`));
+  const inputWellFormed =
+    nodes.every(n => n.locked || (n.x % CELL_W === 0 && n.y % CELL_H === 0)) &&
+    inputCellKeys.size === inputCells.size;
+  /** Emits only nodes whose integer cell differs from their current position; locked nodes are never emitted. */
+  const emit = (cells: Map<string, CellCoord>): { positions: Record<string, { x: number; y: number }>; movedCount: number } => {
+    const positions: Record<string, { x: number; y: number }> = {};
+    let movedCount = 0;
+    for (const [id, cell] of cells) {
+      const original = nodeById.get(id);
+      if (!original || original.locked) continue;
+      const x = cell.col * CELL_W;
+      const y = cell.row * CELL_H;
+      if (x === original.x && y === original.y) continue;
+      positions[id] = { x, y };
+      movedCount += 1;
+    }
+    return { positions, movedCount };
+  };
 
   // --- 1. Partition -------------------------------------------------------
 
@@ -195,11 +255,77 @@ export const beautifyLayout = async (
       }
     }
 
+    // CHEWY PATCH (local repair + smallest honest edit). Two things were
+    // wrong with "place the invalid nodes and return":
+    //
+    //  1. Placing nodes is not the whole job. A map whose nodes are ALL
+    //     individually "validly placed" can still hide connections — the
+    //     live production map `yugen` had six links running under a foreign
+    //     node box while this path returned ZERO moves for it. So the result
+    //     now goes through the same bounded repair pass full mode uses (only
+    //     nodes party to a real violation move, each capped at
+    //     MAX_NODE_DISPLACEMENT_CELLS).
+    //
+    //  2. classifyNodes also re-places nodes that are merely out of lattice
+    //     ORDER, which is a relative judgement — re-placing A changes whether
+    //     B looks inverted. On a hand-built map that never settles: pressing
+    //     beautify on live `yugen` moved 6, then 4, then 4 nodes with
+    //     identical crossing/occlusion counts, and adding ONE system moved 10
+    //     untouched ones and took crossings from 5 to 12 (placing just the
+    //     new system: still 5).
+    //
+    // So build BOTH candidates — the engine's full suggestion, and the
+    // minimal edit that only places nodes which are genuinely unplaced
+    // (off-grid or stacked on another node) — repair each, and emit whichever
+    // actually measures better. Ties go to the one that moves fewer systems,
+    // so "already as good as we can make it" emits nothing at all.
+    const placedCell = new Map<string, CellCoord>(
+      Object.entries(incremental.positions).map(([id, position]) => [
+        id,
+        { col: Math.round(position.x / CELL_W), row: Math.round(position.y / CELL_H) },
+      ]),
+    );
+    const occupiedInputCells = new Map<string, number>();
+    for (const cell of inputCells.values()) {
+      const cellKey = `${cell.col},${cell.row}`;
+      occupiedInputCells.set(cellKey, (occupiedInputCells.get(cellKey) ?? 0) + 1);
+    }
+    const mustMoveIds = new Set(
+      nodes
+        .filter(n => {
+          if (n.locked) return false;
+          if (n.x % CELL_W !== 0 || n.y % CELL_H !== 0) return true;
+          const cell = inputCells.get(n.id)!;
+          return (occupiedInputCells.get(`${cell.col},${cell.row}`) ?? 0) > 1;
+        })
+        .map(n => n.id),
+    );
+
+    const candidateFor = (allowedIds: ReadonlySet<string> | null): Map<string, CellCoord> => {
+      const cells = new Map(inputCells);
+      for (const [id, cell] of placedCell) {
+        if (!allowedIds || allowedIds.has(id)) cells.set(id, cell);
+      }
+      return reduceCrossings(cells, cleanEdges, movableIds);
+    };
+
+    const candidates = [candidateFor(mustMoveIds), candidateFor(null)].map(cells => {
+      const quality = measureLayout(cleanEdges, cells);
+      return { cells, quality, emitted: emit(cells) };
+    });
+    const best = candidates.reduce((a, b) =>
+      defectScore(b.quality) < defectScore(a.quality) ||
+      (defectScore(b.quality) === defectScore(a.quality) && b.emitted.movedCount < a.emitted.movedCount)
+        ? b
+        : a,
+    );
+
     return {
-      positions: incremental.positions,
+      positions: best.emitted.positions,
       rootId: reportedRootId,
-      movedCount: incremental.movedCount,
+      movedCount: best.emitted.movedCount,
       mode: 'incremental',
+      quality: { before: inputQuality, after: best.quality },
     };
   }
 
@@ -377,22 +503,49 @@ export const beautifyLayout = async (
   // are endpoints of the same crossing, evaluated canonically (not
   // first-come) each sweep and displacement-capped. Only nodes that aren't
   // locked are eligible, so locked nodes never move.
-  const movableIds = new Set([...nodeIds].filter(id => !nodeById.get(id)!.locked));
   const globalCells = reduceCrossings(packedCells, cleanEdges, movableIds);
+  const fullQuality = measureLayout(cleanEdges, globalCells);
 
-  // --- 5. Emit only genuinely-changed, unlocked nodes ----------------------
-
-  const positions: Record<string, { x: number; y: number }> = {};
-  let movedCount = 0;
-  for (const [id, cell] of globalCells) {
-    const original = nodeById.get(id);
-    if (!original || original.locked) continue;
-    const x = cell.col * CELL_W;
-    const y = cell.row * CELL_H;
-    if (x === original.x && y === original.y) continue;
-    positions[id] = { x, y };
-    movedCount += 1;
+  // --- 5. Auto-mode regression guard --------------------------------------
+  //
+  // CHEWY PATCH: a from-scratch re-solve is not automatically better than
+  // the map the user built. Measured on the live `yugen` map: full mode
+  // rewrites nearly every position and, on the 40-system snapshot, doubles
+  // the crossing count (5 -> 10) and adds 14% edge length for the same zero
+  // hidden connections a bounded repair of the user's own layout achieves by
+  // moving 11 nodes. When the user asks for 'full' explicitly that is their
+  // call and it is applied as-is; when 'auto' picked full on their behalf,
+  // the alternative (repair what they already have) is scored too and the
+  // better of the two wins.
+  // The guard only applies to an input layout that is itself well-formed
+  // (every unlocked node exactly on the grid, no two nodes in one cell).
+  // When 'auto' falls back to full because the map is genuinely unplaced —
+  // off-grid imports, stacked nodes — keeping it is never the better answer,
+  // and a 2-cell-capped repair cannot fix it either.
+  if (requestedMode === 'auto' && inputWellFormed) {
+    const repaired = reduceCrossings(inputCells, cleanEdges, movableIds);
+    const repairedQuality = measureLayout(cleanEdges, repaired);
+    if (qualityScore(repairedQuality) < qualityScore(fullQuality)) {
+      const repairedEmit = emit(repaired);
+      return {
+        positions: repairedEmit.positions,
+        rootId: reportedRootId,
+        movedCount: repairedEmit.movedCount,
+        mode: 'incremental',
+        quality: { before: inputQuality, after: repairedQuality },
+      };
+    }
   }
 
-  return { positions, rootId: reportedRootId, movedCount, mode: 'full' };
+  // --- 6. Emit only genuinely-changed, unlocked nodes ----------------------
+
+  const { positions, movedCount } = emit(globalCells);
+
+  return {
+    positions,
+    rootId: reportedRootId,
+    movedCount,
+    mode: 'full',
+    quality: { before: inputQuality, after: fullQuality },
+  };
 };

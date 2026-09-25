@@ -21,6 +21,10 @@ defmodule WandererApp.Env do
   # CHEWY PATCH: map beautifier / tidy-insert layout feature flags, default off.
   def map_beautifier?(), do: get_key(:map_beautifier, false)
   def tidy_insert?(), do: get_key(:tidy_insert, false)
+  # CHEWY PATCH: keep map_chain_v1.count_of_passage current and broadcast it,
+  # so the UI can weight a connection by how much it is actually used.
+  # See WandererApp.Map.ConnectionTraffic.
+  def connection_traffic?(), do: get_key(:connection_traffic, false)
 
   # CHEWY PATCH: DEV-ONLY authentication bypass token for exercising the map
   # UI without EVE SSO (see WandererAppWeb.DevAuthController). Config always

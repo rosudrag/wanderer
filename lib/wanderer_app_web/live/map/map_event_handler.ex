@@ -345,7 +345,7 @@ defmodule WandererAppWeb.MapEventHandler do
           type: type,
           ship_size_type: ship_size_type,
           locked: locked
-        } = _connection
+        } = connection
       ),
       do: %{
         id: "#{solar_system_source}_#{solar_system_target}",
@@ -355,7 +355,11 @@ defmodule WandererAppWeb.MapEventHandler do
         ship_size_type: ship_size_type,
         locked: locked,
         source: "#{solar_system_source}",
-        target: "#{solar_system_target}"
+        target: "#{solar_system_target}",
+        # CHEWY PATCH: recorded jumps through this connection, so the map can
+        # weight a used route (see WandererApp.Map.ConnectionTraffic). Always
+        # 0 unless WANDERER_CONNECTION_TRAFFIC is on.
+        count_of_passage: Map.get(connection, :count_of_passage) || 0
       }
 
   def map_ui_system(

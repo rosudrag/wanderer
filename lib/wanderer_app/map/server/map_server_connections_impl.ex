@@ -652,6 +652,15 @@ defmodule WandererApp.Map.Server.ConnectionsImpl do
           solar_system_source_id: old_location.solar_system_id,
           solar_system_target_id: location.solar_system_id
         })
+
+      # CHEWY PATCH: mirror the passage onto the connection's own counter so
+      # the UI can see it (no-op unless WANDERER_CONNECTION_TRAFFIC is set).
+      :ok =
+        WandererApp.Map.ConnectionTraffic.record_passage(
+          map_id,
+          old_location.solar_system_id,
+          location.solar_system_id
+        )
     end
 
     case WandererApp.Map.check_connection(map_id, location, old_location) do
@@ -706,7 +715,12 @@ defmodule WandererApp.Map.Server.ConnectionsImpl do
             time_status: time_status,
             mass_status: mass_status,
             locked: locked,
-            wormhole_type: wormhole_type
+            wormhole_type: wormhole_type,
+            # CHEWY PATCH: the jump that CREATES a connection is itself a
+            # passage — record_passage above could not count it (there was no
+            # connection yet), so seed the counter here. 0 unless
+            # WANDERER_CONNECTION_TRAFFIC is set, i.e. upstream behaviour.
+            count_of_passage: WandererApp.Map.ConnectionTraffic.initial_count(is_manual)
           })
 
         if connection_type == @connection_type_wormhole do

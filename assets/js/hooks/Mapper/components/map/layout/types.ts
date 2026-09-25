@@ -11,6 +11,15 @@
 export const CELL_W = 180;
 export const CELL_H = 75;
 
+/**
+ * Rendered node box size in pixels (convertSystem2Node.ts / DotlanEdge.tsx's
+ * own fallback constants). Connections are drawn as straight centre-to-centre
+ * lines under these boxes, so any geometry check that wants to answer "can
+ * the user see this link" has to reason about the box, not the cell centre.
+ */
+export const NODE_W_PX = 130;
+export const NODE_H_PX = 34;
+
 export type BeautifyAxis = 'left_to_right' | 'top_to_bottom';
 export type KSpaceMode = 'geographic' | 'topological';
 
@@ -50,12 +59,32 @@ export interface BeautifyOptions {
   mode?: 'auto' | 'incremental' | 'full';
 }
 
+/**
+ * CHEWY PATCH: how readable a layout is, in the terms the engine optimises.
+ * `occlusions`/`overlaps` are hidden connections (a node box drawn over a
+ * link, or a link drawn inside another), which cost a user far more than a
+ * visible crossing — see pack.ts's weights.
+ */
+export interface LayoutQuality {
+  crossings: number;
+  overlaps: number;
+  occlusions: number;
+  /** Total drawn edge length, in cells. */
+  edgeLength: number;
+}
+
 export interface LayoutResult {
   positions: Record<string, { x: number; y: number }>;
   rootId: string | null;
   movedCount: number;
   /** Which algorithm actually ran — see BeautifyOptions.mode. */
   mode: 'incremental' | 'full';
+  /**
+   * CHEWY PATCH: quality of the layout the caller passed in vs the one this
+   * result produces. Lets the UI say what actually improved, and lets
+   * `mode: 'auto'` refuse a re-solve that would make the map worse.
+   */
+  quality: { before: LayoutQuality; after: LayoutQuality };
 }
 
 /** Integer cell coordinate (pre pixel-conversion). */

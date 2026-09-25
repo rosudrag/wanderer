@@ -9,7 +9,8 @@
 // regions, rounding) are considered. The safety net makes "no two nodes
 // ever share a cell" a hard invariant regardless of upstream logic.
 
-import type { CellCoord, LayoutBox } from './types';
+import { segmentHitsNodeBox } from './geometry';
+import type { CellCoord, LayoutBox, LayoutQuality } from './types';
 
 interface Rect {
   minCol: number;
@@ -345,18 +346,25 @@ const countEdgeOverlapPairs = (edges: CrossingEdge[], cells: Map<string, CellCoo
 };
 
 /**
- * CHEWY PATCH: a node "occludes" an edge when its own cell lies exactly on
- * that edge's segment (collinear + within the bounding box, both exact
- * integer checks in cell space) and it is not one of the edge's own two
- * endpoints — e.g. Raihbaka sitting on the midpoint of Ibani->Irmalin. Since
- * `dedupeCells`/the occupied-cell bookkeeping below guarantee no two node
- * ids ever share a cell, a node can never coincide with an edge endpoint's
- * cell while having a different id, so this is automatically strict
- * ("touching an endpoint" cannot arise here without also being a node/node
- * collision, which is a separate, already-hard-zero invariant).
+ * CHEWY PATCH: a node "occludes" an edge when the edge's drawn line passes
+ * through that node's RENDERED BOX and the node is not one of the edge's own
+ * two endpoints — e.g. Raihbaka sitting on Ibani->Irmalin.
+ *
+ * This used to be an exact point-on-segment test on cell coordinates, which
+ * matched only the rare case of a node landing precisely on the line, and so
+ * scored the live `yugen` map as occlusion-free while six of its connections
+ * ran under a foreign node box. The rule (and the evidence behind it) now
+ * lives in ./geometry.ts, shared with anchor.ts and the benchmark so all
+ * three judge "hidden connection" identically.
+ *
+ * Endpoint exclusion is free here: `dedupeCells` and the occupied-cell
+ * bookkeeping below guarantee no two node ids share a cell, so a non-endpoint
+ * node can never coincide with an endpoint's cell — but its BOX can now
+ * overlap an endpoint's box, which is exactly the "drawn on top of a
+ * neighbour's link" case we want counted.
  */
 const nodeOccludesEdge = (px: number, py: number, ax: number, ay: number, bx: number, by: number): boolean =>
-  orient(ax, ay, bx, by, px, py) === 0 && onSegment(ax, ay, px, py, bx, by);
+  segmentHitsNodeBox({ col: ax, row: ay }, { col: bx, row: by }, { col: px, row: py });
 
 const countNodeOcclusions = (edges: CrossingEdge[], cells: Map<string, CellCoord>): number => {
   let total = 0;
@@ -513,8 +521,34 @@ const violationScore = (edges: CrossingEdge[], cells: Map<string, CellCoord>): n
   countEdgeOverlapPairs(edges, cells) * OVERLAP_WEIGHT +
   countNodeOcclusions(edges, cells) * OCCLUSION_WEIGHT;
 
+// CHEWY PATCH: total drawn edge length (in cells), used ONLY to choose
+// between repair moves that remove the same violations (see
+// candidateCompare). It matters because the move that clears an occlusion is
+// rarely unique: preferring the shorter-edge variant took the live `yugen`
+// snapshot from 106.7 to 89.3 cells of total edge while fixing the same six
+// hidden connections.
+
+const totalEdgeLength = (edges: CrossingEdge[], cells: Map<string, CellCoord>): number => {
+  let total = 0;
+  for (const edge of edges) {
+    const a = cells.get(edge.source);
+    const b = cells.get(edge.target);
+    if (!a || !b) continue;
+    total += Math.hypot(a.col - b.col, a.row - b.row);
+  }
+  return total;
+};
+
 type CrossingCandidate =
-  | { kind: 'relocate'; id: string; to: CellCoord; delta: number; displacement: number; tieId: string }
+  | {
+      kind: 'relocate';
+      id: string;
+      to: CellCoord;
+      delta: number;
+      lengthDelta: number;
+      displacement: number;
+      tieId: string;
+    }
   | {
       kind: 'swap';
       idLo: string;
@@ -522,13 +556,58 @@ type CrossingCandidate =
       cellForLo: CellCoord;
       cellForHi: CellCoord;
       delta: number;
+      lengthDelta: number;
       displacement: number;
       tieId: string;
     };
 
-/** Canonical acceptance order: crossings removed desc, then displacement asc, then id asc — a pure function of the candidate's own numbers, never of discovery order. */
+/**
+ * Canonical acceptance order: violations removed desc, then edge length
+ * removed desc, then displacement asc, then id asc — a pure function of the
+ * candidate's own numbers, never of discovery order.
+ *
+ * CHEWY PATCH: `lengthDelta` is a TIE-BREAK ONLY, never an acceptance
+ * criterion. A move must still strictly reduce the violation score to be
+ * accepted at all; among moves that remove the same violations, the one that
+ * also shortens the drawn edges wins. Making length part of the accepted
+ * objective instead was measured to destroy idempotence: with any crossing
+ * left anywhere on the map (score > 0, e.g. the live yugen map's 5), the pass
+ * kept finding equal-violation/shorter-length moves forever, so beautifying
+ * an already-beautified map moved 7-11 nodes every time and eventually
+ * wandered into MORE crossings (5 -> 12 over four passes).
+ */
 const candidateCompare = (x: CrossingCandidate, y: CrossingCandidate): number =>
-  y.delta - x.delta || x.displacement - y.displacement || (x.tieId < y.tieId ? -1 : x.tieId > y.tieId ? 1 : 0);
+  y.delta - x.delta ||
+  y.lengthDelta - x.lengthDelta ||
+  x.displacement - y.displacement ||
+  (x.tieId < y.tieId ? -1 : x.tieId > y.tieId ? 1 : 0);
+
+// CHEWY PATCH: the same numbers the repair objective optimises, exposed so a
+// caller can compare two candidate layouts (see index.ts's auto-mode guard:
+// a full re-solve that scores WORSE than the map the user already has is
+// never applied) and so the UI can tell the user what changed.
+
+export const measureLayout = (edges: CrossingEdge[], cells: Map<string, CellCoord>): LayoutQuality => ({
+  crossings: countCrossings(edges, cells),
+  overlaps: countEdgeOverlapPairs(edges, cells),
+  occlusions: countNodeOcclusions(edges, cells),
+  edgeLength: totalEdgeLength(edges, cells),
+});
+
+/**
+ * Weight of total edge length when COMPARING two whole layouts of the same
+ * graph (index.ts's auto-mode guard). Small enough to never outrank a single
+ * crossing: length only settles ties between layouts with identical hidden
+ * connections and crossings.
+ */
+const LENGTH_WEIGHT = 1e-6;
+
+/** Single comparable scalar for two layouts of the SAME graph: hidden connections first, then crossings, then edge length. */
+export const qualityScore = (quality: LayoutQuality): number =>
+  quality.occlusions * OCCLUSION_WEIGHT +
+  quality.overlaps * OVERLAP_WEIGHT +
+  quality.crossings * CROSSING_WEIGHT +
+  quality.edgeLength * LENGTH_WEIGHT;
 
 /**
  * Final improvement pass: mutates a copy of `cells` toward a lower weighted
@@ -565,8 +644,8 @@ export const reduceCrossings = (
 ): Map<string, CellCoord> => {
   const result = new Map(cells);
 
-  let current = violationScore(edges, result);
-  if (current === 0) return result;
+  let hard = violationScore(edges, result);
+  if (hard === 0) return result;
 
   // Reference cell for MAX_NODE_DISPLACEMENT_CELLS: each node's cell as
   // packBoxes handed it, fixed for the life of this whole pass (not reset
@@ -586,11 +665,12 @@ export const reduceCrossings = (
 
   let iterations = 0;
 
-  while (current > 0 && iterations < MAX_CROSSING_ITERATIONS) {
+  while (hard > 0 && iterations < MAX_CROSSING_ITERATIONS) {
     const crossingPairs = findCrossingPairs(edges, result);
     const overlapPairs = findEdgeOverlapPairs(edges, result);
     const occlusions = findNodeOcclusions(edges, result);
     if (crossingPairs.length === 0 && overlapPairs.length === 0 && occlusions.length === 0) break;
+    const currentLength = totalEdgeLength(edges, result);
 
     // CHEWY PATCH: candidate pool now spans every kind of violation, not
     // just crossings — the endpoints of an overlapping edge pair, and both
@@ -632,10 +712,19 @@ export const reduceCrossings = (
         if (displacement > MAX_NODE_DISPLACEMENT_CELLS) continue;
         result.set(id, to);
         const next = violationScore(edges, result);
+        const nextLength = totalEdgeLength(edges, result);
         iterations++;
         result.set(id, cellNow);
-        if (next < current) {
-          candidates.push({ kind: 'relocate', id, to, delta: current - next, displacement, tieId: id });
+        if (next < hard) {
+          candidates.push({
+            kind: 'relocate',
+            id,
+            to,
+            delta: hard - next,
+            lengthDelta: currentLength - nextLength,
+            displacement,
+            tieId: id,
+          });
         }
       }
     }
@@ -667,18 +756,20 @@ export const reduceCrossings = (
           result.set(lo, cellHi);
           result.set(hi, cellLo);
           const next = violationScore(edges, result);
+          const nextLength = totalEdgeLength(edges, result);
           iterations++;
           result.set(lo, cellLo);
           result.set(hi, cellHi);
 
-          if (next < current) {
+          if (next < hard) {
             candidates.push({
               kind: 'swap',
               idLo: lo,
               idHi: hi,
               cellForLo: cellHi,
               cellForHi: cellLo,
-              delta: current - next,
+              delta: hard - next,
+              lengthDelta: currentLength - nextLength,
               // Consistent with the relocate branch and the cap check above:
               // "displacement" is each moved node's post-move distance from
               // its OWN origin cell, not the distance between the two swap
@@ -704,7 +795,7 @@ export const reduceCrossings = (
     let appliedAny = false;
 
     for (const candidate of candidates) {
-      if (current === 0 || iterations >= MAX_CROSSING_ITERATIONS) break;
+      if (hard === 0 || iterations >= MAX_CROSSING_ITERATIONS) break;
 
       if (candidate.kind === 'relocate') {
         if (touched.has(candidate.id)) continue;
@@ -713,10 +804,10 @@ export const reduceCrossings = (
         result.set(candidate.id, candidate.to);
         const next = violationScore(edges, result);
         iterations++;
-        if (next < current) {
+        if (next < hard) {
           occupied.delete(key(cellNow));
           occupied.add(key(candidate.to));
-          current = next;
+          hard = next;
           touched.add(candidate.id);
           appliedAny = true;
         } else {
@@ -730,8 +821,8 @@ export const reduceCrossings = (
         result.set(candidate.idHi, candidate.cellForHi);
         const next = violationScore(edges, result);
         iterations++;
-        if (next < current) {
-          current = next;
+        if (next < hard) {
+          hard = next;
           touched.add(candidate.idLo);
           touched.add(candidate.idHi);
           appliedAny = true;

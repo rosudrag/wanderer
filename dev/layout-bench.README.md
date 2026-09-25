@@ -102,13 +102,35 @@ exactly what the engine's own contract promises).
   (both endpoints landing on the same cell) are excluded from both rules
   below entirely — a point can't have a "positive-length stretch" with
   anything. Must always be `0`; same hard-failure treatment as `overlaps`.
-- **nodeOcclusions** — nodes whose centre lies **strictly between** (not
-  at) the two endpoints of an edge they are not one of the endpoints of,
-  in CELL space. Touching an endpoint doesn't count (that's just another
-  edge legitimately ending at that node); landing anywhere on the open
-  interior of the segment does, gate or wormhole, regardless of whether
-  that node is also connected to one of the edge's endpoints by some other
-  edge. Must always be `0`; same hard-failure treatment as `overlaps`.
+- **nodeOcclusions** — nodes whose **rendered box** (130x34px, the size the
+  map actually draws a system at) is crossed by an edge they are not one of
+  the endpoints of, in CELL space. Being an endpoint doesn't count (that's
+  just another edge legitimately ending at that node); anything else does,
+  gate or wormhole, regardless of whether that node is also connected to one
+  of the edge's endpoints by some other edge. Must always be `0`; same
+  hard-failure treatment as `overlaps`.
+
+  This rule used to be "the node's CENTRE lies strictly between the edge's
+  endpoints", which only fires when a node lands exactly on the line.
+  Measured on the live production map `yugen` (2026-09-25, 32 systems): that
+  rule reported **zero** occlusions while **six** connections ran under a
+  foreign node box — `Toon` swallowing 102px of `Auga -> Siseide` and 62px of
+  `Dal -> Amamake`, `Dal` 43px of `Auga -> Kourmonen`. `DotlanEdge` draws one
+  straight centre-to-centre line clipped only to the two ENDPOINT boxes, so
+  every one of those is a link the user genuinely cannot see. The engine
+  (`layout/geometry.ts`, shared by `anchor.ts` and `pack.ts`) and this
+  benchmark now use the same box test; the old centre rule is a strict subset
+  of it, so nothing it caught is lost.
+
+  Tightening it costs crossings, by design — hiding a link is weighted far
+  above crossing one (`pack.ts`, 1000:1). On the same code, old rule vs new:
+  `yugen` went from 4 hidden links / 0 crossings / 47.0 cells of edge to
+  **0 hidden links** / 4 crossings / 43.8 cells, and `occlusion` from 6 / 5 /
+  90.1 to **0** / 6 / 84.4. Both scenarios come out with shorter total edge.
+- **totalEdgeCells** (`edgeLen` column) — total drawn edge length in cells.
+  Not a pass/fail gate; it is the repair pass's tie-breaker
+  (`pack.ts` `candidateCompare`), so it is tracked to catch "cleared an
+  occlusion by flinging a node across the map".
 - **determinism** — the scenario is laid out twice from identical input;
   `true` iff the two `JSON.stringify`d results are byte-identical. A `false`
   here is also a hard failure.

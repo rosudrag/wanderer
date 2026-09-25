@@ -114,6 +114,12 @@ export const DotlanEdge = ({ id, source, target, markerEnd, style, data }: EdgeP
 
   const path = `M ${sourcePoint.x},${sourcePoint.y} L ${targetPoint.x},${targetPoint.y}`;
 
+  // CHEWY PATCH: recorded jumps through this connection (see
+  // WandererApp.Map.ConnectionTraffic). 0 — every connection, when the
+  // feature is off — renders exactly as before.
+  const passages = data.count_of_passage ?? 0;
+  const trafficTier = passages >= 25 ? 3 : passages >= 8 ? 2 : passages >= 1 ? 1 : 0;
+
   return (
     <>
       <path
@@ -127,6 +133,9 @@ export const DotlanEdge = ({ id, source, target, markerEnd, style, data }: EdgeP
           [classes.BoundaryNone]: isBoundaryColored && boundary === 'none',
           [classes.BoundaryConstellation]: isBoundaryColored && boundary === 'constellation',
           [classes.BoundaryRegion]: isBoundaryColored && boundary === 'region',
+          [classes.Traffic1]: trafficTier === 1,
+          [classes.Traffic2]: trafficTier === 2,
+          [classes.Traffic3]: trafficTier === 3,
         })}
         d={path}
         markerEnd={markerEnd}
@@ -199,6 +208,22 @@ export const DotlanEdge = ({ id, source, target, markerEnd, style, data }: EdgeP
               )}
             >
               {SHIP_SIZES_NAMES_SHORT[data.ship_size_type]}
+            </WdTooltipWrapper>
+          )}
+
+          {/* CHEWY PATCH: exact jump count, but only on the busiest tier, so a
+              map with traffic data everywhere doesn't turn into a wall of
+              numbers — the line weight already carries the lower tiers. */}
+          {trafficTier === 3 && (
+            <WdTooltipWrapper
+              content={`${passages} recorded jumps`}
+              position={TooltipPosition.top}
+              className={clsx(
+                classes.LinkLabel,
+                'pointer-events-auto rounded opacity-100 cursor-auto bg-stone-800 text-stone-200 font-bold',
+              )}
+            >
+              {passages}
             </WdTooltipWrapper>
           )}
         </div>

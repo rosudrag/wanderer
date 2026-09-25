@@ -101,6 +101,8 @@ defmodule WandererApp.Api.MapConnection do
     define(:update_custom_info, action: :update_custom_info)
     define(:update_type, action: :update_type)
     define(:update_wormhole_type, action: :update_wormhole_type)
+    # CHEWY PATCH: see WandererApp.Map.ConnectionTraffic.
+    define(:update_count_of_passage, action: :update_count_of_passage)
   end
 
   actions do
@@ -234,6 +236,14 @@ defmodule WandererApp.Api.MapConnection do
 
     update :update_wormhole_type do
       accept [:wormhole_type]
+      require_atomic? false
+    end
+
+    # CHEWY PATCH: see WandererApp.Map.ConnectionTraffic — `count_of_passage`
+    # is declared upstream but never written, so the jump counts already
+    # recorded in map_chain_passages_v1 never reach the map UI.
+    update :update_count_of_passage do
+      accept [:count_of_passage]
       require_atomic? false
     end
   end

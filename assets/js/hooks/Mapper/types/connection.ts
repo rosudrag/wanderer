@@ -36,6 +36,8 @@ export type SolarSystemConnection = {
   mass_status: MassState;
   ship_size_type: ShipSizeStatus;
   locked: boolean;
+  /** CHEWY PATCH: recorded jumps through this connection (WandererApp.Map.ConnectionTraffic); 0 when the feature is off. */
+  count_of_passage?: number;
 
   source: string;
   target: string;

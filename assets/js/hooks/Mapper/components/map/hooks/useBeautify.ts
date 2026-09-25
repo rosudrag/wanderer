@@ -127,7 +127,19 @@ export const useBeautify = () => {
           mode,
         });
 
+        // CHEWY PATCH: a no-op used to return silently, so the button looked
+        // broken on exactly the maps where nothing needed moving. Say so.
         if (result.movedCount === 0) {
+          show({
+            severity: 'info',
+            life: 4000,
+            content: createElement(
+              'div',
+              { className: 'flex items-center gap-2 py-1' },
+              createElement('i', { className: 'pi pi-check text-emerald-400' }),
+              createElement('span', null, 'Layout is already clean — nothing to move'),
+            ),
+          });
           return;
         }
 
@@ -152,12 +164,16 @@ export const useBeautify = () => {
 
         await applyPositions(newPositions);
 
+        const { before, after } = result.quality;
+
         show({
           severity: 'info',
           life: 8000,
           content: createElement(BeautifyUndoToastContent, {
             movedCount: result.movedCount,
             mode: result.mode,
+            fixedHidden: before.occlusions + before.overlaps - (after.occlusions + after.overlaps),
+            crossingsDelta: after.crossings - before.crossings,
             onUndo: () => undo(),
           }),
         });

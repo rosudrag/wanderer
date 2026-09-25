@@ -74,6 +74,23 @@
     stroke-dasharray: var(--rf-edge-bridge-dasharray, 10 5);
     stroke-linecap: var(--rf-edge-bridge-linecap, round);
   }
+
+  // CHEWY PATCH: traffic weighting. The BACK path is the halo behind the
+  // line, so widening it reads as "this route is used" without touching the
+  // front path, which carries the wormhole mass/frigate semantics. Applied
+  // only when the server actually reports jumps (count_of_passage > 0, i.e.
+  // WANDERER_CONNECTION_TRAFFIC is on) — with it off every edge is unchanged.
+  &.Traffic1 {
+    stroke-width: calc(var(--rf-edge-time-normal-width, 3px) + 2px);
+  }
+
+  &.Traffic2 {
+    stroke-width: calc(var(--rf-edge-time-normal-width, 3px) + 4px);
+  }
+
+  &.Traffic3 {
+    stroke-width: calc(var(--rf-edge-time-normal-width, 3px) + 6px);
+  }
 }
 
 .EdgePathFront {

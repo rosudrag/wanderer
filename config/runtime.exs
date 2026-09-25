@@ -151,6 +151,13 @@ tidy_insert =
   |> get_var_from_path_or_env("WANDERER_TIDY_INSERT", "false")
   |> String.to_existing_atom()
 
+# CHEWY PATCH: connection traffic counter (see WandererApp.Map.ConnectionTraffic),
+# default off (upstream behaviour: count_of_passage is never written).
+connection_traffic =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_CONNECTION_TRAFFIC", "false")
+  |> String.to_existing_atom()
+
 # CHEWY PATCH: DEV-ONLY authentication bypass token for GET /dev/login (see
 # WandererApp.Env.dev_auth_enabled?/0 and WandererAppWeb.DevAuthController).
 # No default, no boolean flag — unset/empty means the endpoint stays a 404.
@@ -220,6 +227,8 @@ config :wanderer_app,
   # CHEWY PATCH: map beautifier / tidy-insert feature flags.
   map_beautifier: map_beautifier,
   tidy_insert: tidy_insert,
+  # CHEWY PATCH: connection traffic counter, see WandererApp.Map.ConnectionTraffic.
+  connection_traffic: connection_traffic,
   # CHEWY PATCH: DEV-ONLY authentication bypass token, see dev_auth_token above.
   dev_auth_token: dev_auth_token,
   restrict_maps_creation: restrict_maps_creation,

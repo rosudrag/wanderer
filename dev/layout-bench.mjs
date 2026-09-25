@@ -330,11 +330,26 @@ function edgeOverlapPairs(edges, finalPos, CELL_W, CELL_H) {
   return pairs;
 }
 
-/** Rule 2: a node "occludes" an edge when its centre lies STRICTLY between
- *  (not at) that edge's two endpoints (CELL space). Touching an endpoint
- *  does not count — only strictly-interior points do. */
+/** Node box size in px (assets/.../layout/types.ts NODE_W_PX/NODE_H_PX): the
+ *  map draws every system as this box and every connection as a straight
+ *  centre-to-centre line under it. */
+const NODE_W_PX = 130;
+const NODE_H_PX = 34;
+
+/** Rule 2: a node "occludes" an edge when the edge's drawn line passes
+ *  through that node's RENDERED BOX and the node is not one of the edge's
+ *  own endpoints (CELL space; the box is the same rect around every node, so
+ *  the centre offset cancels — see layout/geometry.ts, which the engine uses
+ *  and this metric must agree with).
+ *
+ *  This used to be "the node's centre lies exactly on the segment", which
+ *  only fires when a node lands precisely on the line: the live production
+ *  map `yugen` scored 0 under that rule while six of its connections ran
+ *  under a node box. */
 function nodeOcclusions(nodeIds, edges, finalPos, CELL_W, CELL_H) {
   const segs = overlapSegs(edges, finalPos, CELL_W, CELL_H);
+  const halfW = NODE_W_PX / 2 / CELL_W;
+  const halfH = NODE_H_PX / 2 / CELL_H;
   let count = 0;
   for (const id of nodeIds) {
     const p = finalPos.get(id);
@@ -344,11 +359,41 @@ function nodeOcclusions(nodeIds, edges, finalPos, CELL_W, CELL_H) {
       if (id === s.source || id === s.target) continue;
       const dx = s.p2.x - s.p1.x;
       const dy = s.p2.y - s.p1.y;
-      const vx = c.x - s.p1.x;
-      const vy = c.y - s.p1.y;
-      if (Math.abs(dx * vy - dy * vx) > OVERLAP_EPS) continue; // not on the line
-      const t = (vx * dx + vy * dy) / (dx * dx + dy * dy);
-      if (t > OVERLAP_EPS && t < 1 - OVERLAP_EPS) count++;
+      // Liang-Barsky clip of the segment against the node's box.
+      const ps = [-dx, dx, -dy, dy];
+      const qs = [
+        s.p1.x - (c.x - halfW),
+        c.x + halfW - s.p1.x,
+        s.p1.y - (c.y - halfH),
+        c.y + halfH - s.p1.y,
+      ];
+      let t0 = 0;
+      let t1 = 1;
+      let outside = false;
+      for (let i = 0; i < 4; i++) {
+        if (ps[i] === 0) {
+          if (qs[i] < 0) {
+            outside = true;
+            break;
+          }
+          continue;
+        }
+        const t = qs[i] / ps[i];
+        if (ps[i] < 0) {
+          if (t > t1) {
+            outside = true;
+            break;
+          }
+          if (t > t0) t0 = t;
+        } else {
+          if (t < t0) {
+            outside = true;
+            break;
+          }
+          if (t < t1) t1 = t;
+        }
+      }
+      if (!outside && t1 > t0) count++;
     }
   }
   return count;
@@ -795,6 +840,13 @@ function computeQuality(nodes, edges, finalPos, CELL_W, CELL_H) {
     // see the geometry helpers above segmentsIntersect for the exact rules.
     edgeOverlapPairs: edgeOverlapPairs(edges, finalPos, CELL_W, CELL_H),
     nodeOcclusions: nodeOcclusions(ids, edges, finalPos, CELL_W, CELL_H),
+    // CHEWY PATCH: total drawn edge length in cells — the repair pass's
+    // tie-breaker term (pack.ts LENGTH_WEIGHT), tracked so "fixed an
+    // occlusion by flinging a node across the map" shows up as a regression.
+    totalEdgeCells: segs.reduce(
+      (sum, s) => sum + cellDist(s.p2.x - s.p1.x, s.p2.y - s.p1.y, CELL_W, CELL_H),
+      0,
+    ),
   };
 }
 
@@ -1157,6 +1209,7 @@ function printQualityTable(scenarios) {
     "offGrid",
     "edgeOverlap",
     "occlusion",
+    "edgeLen",
     "determ.",
     "idempotent",
   ];
@@ -1173,6 +1226,7 @@ function printQualityTable(scenarios) {
     s.quality.offGrid,
     s.quality.edgeOverlapPairs,
     s.quality.nodeOcclusions,
+    fmt(s.quality.totalEdgeCells),
     s.determinism.ok ? "yes" : "NO",
     s.idempotent.movedFraction === 0
       ? "0"
@@ -1457,6 +1511,7 @@ function flattenScenarioMetrics(s) {
     offGrid: s.quality.offGrid,
     edgeOverlapPairs: s.quality.edgeOverlapPairs,
     nodeOcclusions: s.quality.nodeOcclusions,
+    totalEdgeCells: s.quality.totalEdgeCells,
     "gateEdgeCells.mean": s.quality.gateEdgeCells.mean,
     "gateEdgeCells.max": s.quality.gateEdgeCells.max,
     "wormholeEdgeCells.mean": s.quality.wormholeEdgeCells.mean,

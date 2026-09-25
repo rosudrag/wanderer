@@ -37,6 +37,7 @@ This file is OURS — upstream has no `AGENTS.md`, so it never conflicts on a me
 | Map beautifier (auto-layout: Dotlan-geometry k-space, tidy-tree wormhole chains) | `WANDERER_MAP_BEAUTIFIER` | `assets/js/hooks/Mapper/components/map/layout/` + `components/map/hooks/useBeautify.ts`, `lib/wanderer_app/map/bulk_reposition.ex` (+ `update_system_positions_bulk` event) |
 | Direction-aware placement for newly added systems | `WANDERER_TIDY_INSERT` | `lib/wanderer_app/map/map_position_calculator.ex` |
 | Agent dev access: log in and seed a map with no EVE account | `WANDERER_DEV_AUTH_TOKEN` (unset = endpoint is a plain 404; **never set in production**) | `lib/wanderer_app_web/controllers/dev_auth_controller.ex`, `lib/wanderer_app/dev/seed.ex`, `dev/` (compose stack, README, smoke script) |
+| Connection traffic: recorded jumps kept on the connection and drawn as a weighted line | `WANDERER_CONNECTION_TRAFFIC` | `lib/wanderer_app/map/connection_traffic.ex` (+ hooks in `map_server_connections_impl.ex`, `map_ui_connection/1`, `DotlanEdge.tsx`) |
 
 ## Testing the map without an EVE account
 

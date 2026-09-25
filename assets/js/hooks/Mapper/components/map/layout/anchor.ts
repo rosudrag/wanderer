@@ -20,6 +20,7 @@
 
 import { getGlobalSystemCell } from './regionData';
 import type { RegionLayoutData } from './regionData';
+import { segmentHitsNodeBox } from './geometry';
 import { CELL_H, CELL_W } from './types';
 import type { BeautifyAxis, CellCoord, LayoutEdgeInput, LayoutNodeInput } from './types';
 
@@ -336,23 +337,20 @@ const cellsCollinear = (a: CellCoord, b: CellCoord, c: CellCoord): boolean =>
 const isSameCell = (a: CellCoord, b: CellCoord): boolean =>
   Math.abs(a.col - b.col) < GEOMETRY_EPS && Math.abs(a.row - b.row) < GEOMETRY_EPS;
 
-/** True when point `p` lies ON segment [a,b]: collinear with it AND within its closed bounding box. */
-const pointOnSegment = (a: CellCoord, b: CellCoord, p: CellCoord): boolean =>
-  cellsCollinear(a, b, p) &&
-  p.col >= Math.min(a.col, b.col) - GEOMETRY_EPS &&
-  p.col <= Math.max(a.col, b.col) + GEOMETRY_EPS &&
-  p.row >= Math.min(a.row, b.row) - GEOMETRY_EPS &&
-  p.row <= Math.max(a.row, b.row) + GEOMETRY_EPS;
-
 /**
- * Node-occlusion rule: `node` occludes edge [a,b] when it sits strictly ON
- * the segment but is NOT one of the edge's own two endpoints — touching an
- * endpoint means it IS one of that edge's own systems, which is fine;
- * sitting anywhere strictly between them hides the connection (the
- * yugen defect: Raihbaka sitting exactly on Ibani->Irmalin's midpoint).
+ * Node-occlusion rule: `node` occludes edge [a,b] when the drawn line passes
+ * under its rendered box but it is NOT one of the edge's own two endpoints —
+ * touching an endpoint means it IS one of that edge's own systems, which is
+ * fine; anything else hides part of the connection (the yugen defect:
+ * Raihbaka on Ibani->Irmalin).
+ *
+ * CHEWY PATCH: the test is the node's BOX, not its cell centre — see
+ * ./geometry.ts for why (the point rule scored the live yugen map as
+ * occlusion-free while six connections ran under a node box) and for the one
+ * shared implementation that pack.ts and dev/layout-bench.mjs also use.
  */
 const nodeOccludesEdge = (node: CellCoord, a: CellCoord, b: CellCoord): boolean =>
-  !isSameCell(node, a) && !isSameCell(node, b) && pointOnSegment(a, b, node);
+  !isSameCell(node, a) && !isSameCell(node, b) && segmentHitsNodeBox(a, b, node);
 
 /**
  * Edge-overlap rule: two edges overlap when they are COLLINEAR (every
@@ -474,7 +472,7 @@ const pickPlacementCell = (id: string, ideal: CellCoord, ctx: PlacementCtx): Cel
 
   const isClean = (candidate: CellCoord): boolean => {
     for (const [a, b] of knownEdges) {
-      if (pointOnSegment(a, b, candidate)) return false;
+      if (nodeOccludesEdge(candidate, a, b)) return false;
     }
     for (let i = 0; i < neighbourEntries.length; i++) {
       const neighbour = neighbourEntries[i];

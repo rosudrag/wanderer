@@ -96,6 +96,12 @@ defmodule WandererApp.MapConnectionRepo do
       connection
       |> WandererApp.Api.MapConnection.update_custom_info(update)
 
+  # CHEWY PATCH: see WandererApp.Map.ConnectionTraffic.
+  def update_count_of_passage(connection, update),
+    do:
+      connection
+      |> WandererApp.Api.MapConnection.update_count_of_passage(update)
+
   def get_by_id(map_id, id) do
     # Use read_by_map action which doesn't have the FilterConnectionsByActorMap preparation
     # that was causing "filter being false" errors in tests
