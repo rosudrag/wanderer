@@ -48,6 +48,38 @@ put the printed `WANDERER_IMAGE=` into `.env` → `.\deploy.ps1`.
 
 **It builds `origin/chewy`, not your working tree.** An uncommitted edit is not deployed.
 
+## Reaching the deploy config from here
+
+`infra/` is a **junction** to the monorepo's `projects/infrastructure/hetzner/wanderer/`
+(`.env`, `.env.example`, `deploy.ps1`, `docker-compose.yml`, `README.md`). It is untracked —
+listed in `.git/info/exclude`, not `.gitignore`, so it costs nothing on an upstream merge and
+can never be committed. Recreate it after a fresh clone:
+
+```powershell
+New-Item -ItemType Junction -Path infra `
+  -Target I:\Development\azure\chewytech\projects\infrastructure\hetzner\wanderer
+Add-Content .git\info\exclude "infra/"
+```
+
+What works through it and what does not:
+
+| | |
+|---|---|
+| `read infra/.env`, `edit infra/docker-compose.yml`, `glob infra/*` | work |
+| `grep … path=infra/README.md` (explicit file) | works |
+| `grep`/`rg`/`grep -r` **recursing into** `infra/` | silently finds nothing — no tool follows the junction |
+| recursive search of the deploy config | use the real path: `I:/Development/azure/chewytech/projects/infrastructure/hetzner/wanderer` |
+
+"Silently finds nothing" is the trap: a search that should have matched returns clean, and the
+absence reads like the config not containing the thing. Search the absolute path instead.
+
+Editing `infra/**` edits the monorepo working tree; commit it from the monorepo, not here. The
+reverse junction also exists — `infra/wanderer` points back at this repo — but nothing traverses
+it, so there is no recursion.
+
+`deploy.ps1` must be **run** from the monorepo (it resolves siblings like
+`hetzner/reverse-proxy`), and it builds `origin/chewy`, not `infra/wanderer`.
+
 ## Taking an upstream release
 
 ```bash
