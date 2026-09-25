@@ -162,6 +162,10 @@ config :wanderer_app,
   git_sha: System.get_env("GIT_SHA", "111"),
   custom_route_base_url: System.get_env("CUSTOM_ROUTE_BASE_URL"),
   invites: System.get_env("WANDERER_INVITES", "false") |> String.to_existing_atom(),
+  # CHEWY PATCH: WandererApp.Map.PersistentTracking — keep DB-tracked
+  # characters polling (and their map server alive) with no browser open.
+  persist_tracking:
+    System.get_env("WANDERER_PERSIST_TRACKING", "false") |> String.to_existing_atom(),
   admin_username: System.get_env("WANDERER_ADMIN_USERNAME", "admin"),
   admin_password: System.get_env("WANDERER_ADMIN_PASSWORD"),
   admins: admins,

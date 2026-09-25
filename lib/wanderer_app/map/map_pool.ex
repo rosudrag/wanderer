@@ -671,7 +671,12 @@ defmodule WandererApp.Map.MapPool do
           presence_character_ids =
             WandererApp.Cache.lookup!("map_#{map_id}:presence_character_ids", [])
 
-          if presence_character_ids |> Enum.empty?() do
+          # CHEWY PATCH: `and not keep_map_running?` — stopping the map server
+          # stops the ESI polling that feeds it, so a map with DB-tracked
+          # characters must survive an empty presence list. No-op unless
+          # WANDERER_PERSIST_TRACKING=true.
+          if presence_character_ids |> Enum.empty?() and
+               not WandererApp.Map.PersistentTracking.keep_map_running?(map_id) do
             Logger.info(
               "#{uuid}: No more characters present on: #{map_id}, shutting down map server..."
             )

@@ -177,6 +177,12 @@ defmodule WandererApp.Map.Server.Impl do
 
           WandererApp.Cache.insert("map_#{map_id}:started", true)
 
+          # CHEWY PATCH: a map can now start with nobody present (boot, or a
+          # restart while tracking was on), and upstream only ever starts
+          # tracking from a presence join. No-op unless
+          # WANDERER_PERSIST_TRACKING=true.
+          WandererApp.Map.PersistentTracking.resume(map_id)
+
           # Initialize zkb cache structure to prevent timing issues
           WandererApp.Cache.insert("map:#{map_id}:zkb:detailed_kills", %{}, ttl: :timer.hours(24))
 
@@ -709,7 +715,12 @@ defmodule WandererApp.Map.Server.Impl do
           )
         end
 
-        CharactersImpl.untrack_characters(map_id, not_present_character_ids)
+        # CHEWY PATCH: characters the user explicitly tracked keep polling even
+        # with no browser open. No-op unless WANDERER_PERSIST_TRACKING=true.
+        CharactersImpl.untrack_characters(
+          map_id,
+          WandererApp.Map.PersistentTracking.filter_untrack(map_id, not_present_character_ids)
+        )
 
         broadcast!(
           map_id,

@@ -15,6 +15,9 @@ defmodule WandererApp.Env do
   def base_metrics_only(), do: get_key(:base_metrics_only, false)
   def custom_route_base_url(), do: get_key(:custom_route_base_url, "<CUSTOM_ROUTE_BASE_URL>")
   def invites(), do: get_key(:invites, false)
+  # CHEWY PATCH: keep DB-tracked characters polling while no browser is open.
+  # See WandererApp.Map.PersistentTracking.
+  def persist_tracking?(), do: get_key(:persist_tracking, false)
 
   def map_subscriptions_enabled?(), do: get_key(:map_subscriptions_enabled, false)
   def public_api_disabled?(), do: get_key(:public_api_disabled, false)

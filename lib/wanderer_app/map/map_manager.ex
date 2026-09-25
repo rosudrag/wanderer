@@ -19,6 +19,9 @@ defmodule WandererApp.Map.Manager do
   @pings_cleanup_interval :timer.minutes(5)
   @pings_expire_minutes 60
 
+  # CHEWY PATCH: see :start_persistently_tracked_maps below.
+  @persistent_maps_start_delay :timer.seconds(30)
+
   # Test-aware async task runner
   defp safe_async_task(fun) do
     if @environment == :test do
@@ -60,6 +63,12 @@ defmodule WandererApp.Map.Manager do
     {:ok, pings_cleanup_timer} =
       :timer.send_interval(@pings_cleanup_interval, :cleanup_pings)
 
+    # CHEWY PATCH: bring back maps that have DB-tracked characters, so a deploy
+    # or restart does not silently end tracking until someone opens the site.
+    # Delayed, not inline: the DB and the map pools are not necessarily up yet
+    # at manager init, and a failure here must not take the manager down.
+    Process.send_after(self(), :start_persistently_tracked_maps, @persistent_maps_start_delay)
+
     {:ok,
      %{
        check_maps_queue_timer: check_maps_queue_timer,
@@ -69,6 +78,27 @@ defmodule WandererApp.Map.Manager do
 
   def handle_info({ref, _result}, state) do
     Process.demonitor(ref, [:flush])
+
+    {:noreply, state}
+  end
+
+  # CHEWY PATCH: WandererApp.Map.PersistentTracking. Returns [] unless
+  # WANDERER_PERSIST_TRACKING=true, so on a stock instance this is one query
+  # and nothing else.
+  @impl true
+  def handle_info(:start_persistently_tracked_maps, state) do
+    case WandererApp.Map.PersistentTracking.map_ids_to_start() do
+      [] ->
+        :ok
+
+      map_ids ->
+        Logger.info(fn ->
+          "[PersistentTracking] Starting #{length(map_ids)} map(s) with tracked characters: " <>
+            "#{inspect(map_ids)}"
+        end)
+
+        Enum.each(map_ids, &start_map/1)
+    end
 
     {:noreply, state}
   end
