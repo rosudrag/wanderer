@@ -37,12 +37,25 @@ export interface BeautifyOptions {
   rootId?: string | null;
   hubs?: string[];
   kspaceMode?: KSpaceMode;
+  /**
+   * 'full' — re-solve every node from scratch (today's behaviour).
+   * 'incremental' — keep every already-validly-placed node exactly where
+   *   it is; place only the nodes that are new or out of place (see
+   *   anchor.ts).
+   * 'auto' (default) — pick 'incremental' when the input already looks
+   *   laid out, else 'full' (see beautifyLayout's mode-resolution doc in
+   *   index.ts). This is what makes "beautify after adding one system"
+   *   stable without ever needing an explicit flag from the caller.
+   */
+  mode?: 'auto' | 'incremental' | 'full';
 }
 
 export interface LayoutResult {
   positions: Record<string, { x: number; y: number }>;
   rootId: string | null;
   movedCount: number;
+  /** Which algorithm actually ran — see BeautifyOptions.mode. */
+  mode: 'incremental' | 'full';
 }
 
 /** Integer cell coordinate (pre pixel-conversion). */

@@ -1,11 +1,15 @@
 // Wormhole chain layout: BFS a rooted spanning tree out of the wormhole
 // (type 0) and bridge (type 2) edges of one connected component, then lay
-// it out with the Reingold–Tilford / Buchheim–Jünger–Leipert "linear time"
-// tidy-tree algorithm — depth maps to the primary axis (one cell per
-// level), siblings are packed along the secondary axis with exactly one
-// cell of contour separation, and every subtree is centred over its
-// children. Non-tree edges (loops, K162 back-links, multi-parent cycles)
-// are simply never consulted for geometry, per the assignment.
+// it out with a parent-anchored tidy tree — depth maps to the primary
+// axis (one cell per level); the secondary axis is assigned greedily,
+// node by node, anchored at each node's own already-placed parent rather
+// than by compacting whole subtree contours against each other.
+// CHEWY PATCH: replaces the previous Buchheim–Jünger–Leipert contour
+// compaction, which reflowed the whole tree (and could shift every
+// unrelated branch) whenever one leaf was added anywhere — see
+// placeSecondary() below for the rule and why it is insertion-stable.
+// Non-tree edges (loops, K162 back-links, multi-parent cycles) are simply
+// never consulted for geometry, per the assignment.
 
 import type { BeautifyAxis, CellCoord, LayoutEdgeInput, LayoutNodeInput } from './types';
 
@@ -26,14 +30,51 @@ const isKSpaceLike = (node: LayoutNodeInput): boolean =>
 /**
  * Deterministic root selection for a rooted tree layout:
  *   1. first id from `hubs` that is present in `nodes`;
- *   2. else the node with the most wormhole/bridge connections;
+ *   2. else the node with the highest "hub score" (defined below) — ties
+ *      are broken by the lexicographically smallest id;
  *   3. else a node whose systemClass/security marks it as k-space (a
  *      natural chain root — chains grow out of a known-space entry);
  *   4. else the lexicographically smallest id.
  *
- * Operates on whatever node/edge set it is given, so callers laying out
- * several disconnected components must call this once per component with
- * pre-filtered inputs (it does not itself partition the graph).
+ * Hub score, and why it is insertion-stable:
+ *
+ * CHEWY PATCH: previously this compared raw degree first and only used
+ * `nonLeafNeighborCount` (a node's count of neighbours that are
+ * themselves non-leaves, i.e. degree >= 2) as a tie-break. That let a
+ * single new pendant leaf attached to ANY interior node of an otherwise
+ * degree-tied run (e.g. every interior node of a long, unbranched chain
+ * has raw degree 2) push that one node's raw degree to 3 — strictly
+ * ahead of the tie, never even reaching the tie-break — and re-root the
+ * whole tree. A 10-node chain with one new leaf hung off node 5 (not
+ * the tail) mirrored all 10 positions on the next beautify.
+ *
+ * The fix promotes that tie-break to the primary key, but a plain
+ * `nonLeafNeighborCount`-first comparison would mis-rank a pure "star"
+ * hub (one node directly holding several pendant leaves) below its own
+ * leaves, because ALL of the hub's neighbours are leaves — its
+ * `nonLeafNeighborCount` is 0 even though it is obviously the right
+ * root. `hubScore` resolves this: use `nonLeafNeighborCount` whenever it
+ * is positive, and only fall back to raw degree when it is zero (i.e.
+ * every neighbour of this node is a leaf — the star-hub / degenerate
+ * case, where raw degree IS the right signal). A tree can have at most
+ * one node with an all-leaf neighbourhood and degree >= 2 — any second
+ * such "leaf-collector" would have to connect to the first through some
+ * intermediate node, and that intermediate node has degree >= 2 and so
+ * counts as a non-leaf neighbour of whichever collector it touches,
+ * contradicting the all-leaf assumption — so this fallback never has two
+ * competing candidates for a new leaf to tip.
+ *
+ * This makes hub score immune to a fresh pendant leaf attached ANYWHERE
+ * except directly on a current degree-1 tip (extending the tail, which
+ * is expected to matter): attaching a leaf L to node p only changes
+ * degree(p), never degree of p's existing neighbours, and L itself has
+ * degree 1 so it never counts toward anyone's `nonLeafNeighborCount` —
+ * not p's (L isn't a non-leaf neighbour of p) and not any other node's
+ * (L is only adjacent to p). The one case that DOES shift a score is
+ * when p was itself a degree-1 tip before the attachment: p's own
+ * leaf/non-leaf status flips, which changes p's *parent's*
+ * `nonLeafNeighborCount` — but that is exactly "growing the tail",
+ * which is allowed to matter.
  */
 export const pickChainRoot = (nodes: LayoutNodeInput[], edges: LayoutEdgeInput[], hubs?: string[]): string | null => {
   if (nodes.length === 0) return null;
@@ -48,24 +89,41 @@ export const pickChainRoot = (nodes: LayoutNodeInput[], edges: LayoutEdgeInput[]
 
   const degree = new Map<string, number>();
   for (const id of idSet) degree.set(id, 0);
+  const neighbors = new Map<string, string[]>();
+  for (const id of idSet) neighbors.set(id, []);
   for (const edge of edges) {
     if (edge.type !== 0 && edge.type !== 2) continue;
     if (edge.source === edge.target) continue;
     if (!idSet.has(edge.source) || !idSet.has(edge.target)) continue;
     degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
     degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1);
+    neighbors.get(edge.source)!.push(edge.target);
+    neighbors.get(edge.target)!.push(edge.source);
   }
+  // How many of a node's neighbours are themselves connected to something
+  // else (degree >= 2), i.e. not a bare pendant leaf. A freshly-attached
+  // system is always a leaf at the moment it's added, so this count is
+  // immune to it, unlike raw degree.
+  const nonLeafNeighborCount = (id: string): number => neighbors.get(id)!.filter(n => (degree.get(n) ?? 0) >= 2).length;
+
+  // CHEWY PATCH: primary key described above the function — prefer
+  // nonLeafNeighborCount (immune to a fresh pendant leaf), falling back
+  // to raw degree only for a node whose neighbours are all leaves.
+  const hubScore = (id: string): number => {
+    const nl = nonLeafNeighborCount(id);
+    return nl > 0 ? nl : (degree.get(id) ?? 0);
+  };
 
   let best: string | null = null;
-  let bestDegree = -1;
+  let bestScore = -1;
   for (const node of nodes) {
-    const d = degree.get(node.id) ?? 0;
-    if (d > bestDegree || (d === bestDegree && best !== null && node.id < best)) {
+    const score = hubScore(node.id);
+    if (score > bestScore || (score === bestScore && best !== null && node.id < best)) {
       best = node.id;
-      bestDegree = d;
+      bestScore = score;
     }
   }
-  if (bestDegree > 0 && best !== null) return best;
+  if (bestScore > 0 && best !== null) return best;
 
   const kspaceCandidates = nodes
     .filter(isKSpaceLike)
@@ -77,62 +135,56 @@ export const pickChainRoot = (nodes: LayoutNodeInput[], edges: LayoutEdgeInput[]
 };
 
 // ---------------------------------------------------------------------------
-// Tidy tree (Buchheim, Jünger & Leipert 2002)
+// Tidy tree — parent-anchored placement
 // ---------------------------------------------------------------------------
-
-/** One unit of separation between adjacent nodes/subtree contours, in cells. */
-const DISTANCE = 1;
 
 interface TNode {
   id: string;
   parent: TNode | null;
   children: TNode[];
-  /** Index among parent's (already-sorted) children. */
-  index: number;
   subtreeSize: number;
-  /** Original secondary-axis input coordinate, used only for sibling-order tie-breaking. */
+  /**
+   * Original secondary-axis input coordinate: a real position for a node
+   * already on the map, a deterministic drop-point jitter for a brand-new
+   * one. Used for sibling-order tie-breaking (see sortChildren below) and
+   * as the anchor for placeSecondary()'s local free-cell search.
+   */
   secondaryHint: number;
-
-  // Buchheim algorithm working state.
-  prelim: number;
-  mod: number;
-  shift: number;
-  change: number;
-  ancestor: TNode;
-  thread: TNode | null;
 
   // Results.
   depth: number;
-  secondary: number; // float, pre-integerization
+  secondary: number;
 }
 
-const makeNode = (id: string, parent: TNode | null, index: number, secondaryHint: number): TNode => {
-  const node: TNode = {
-    id,
-    parent,
-    children: [],
-    index,
-    subtreeSize: 1,
-    secondaryHint,
-    prelim: 0,
-    mod: 0,
-    shift: 0,
-    change: 0,
-    ancestor: null as unknown as TNode,
-    thread: null,
-    depth: 0,
-    secondary: 0,
-  };
-  node.ancestor = node;
-  return node;
-};
+const makeNode = (id: string, parent: TNode | null, secondaryHint: number): TNode => ({
+  id,
+  parent,
+  children: [],
+  subtreeSize: 1,
+  secondaryHint,
+  depth: 0,
+  secondary: 0,
+});
 
 /**
  * BFS from `rootId` over wormhole/bridge edges to build a spanning tree,
- * ordering each node's children by descending subtree size (fat branches
- * to the outside) then ascending original secondary-axis coordinate (so a
- * beautify preserves the user's existing top-to-bottom / left-to-right
- * reading order), then id (final deterministic tie-break).
+ * ordering each node's children by ascending original secondary-axis
+ * coordinate (insertion-stable: this value never changes when a sibling
+ * is added or grows), then descending subtree size as a tie-break, then id
+ * (final deterministic tie-break) — see sortChildren below.
+ *
+ * Depth-stability rule: a node's depth is simply which BFS layer first
+ * discovers it, and a brand-new system is always attached with exactly
+ * one edge to something already on the map (that's what "discovering a
+ * system" means, here and in every caller). A degree-1 newcomer can never
+ * shorten the graph distance between two nodes that were already present
+ * — doing that requires being a bridge with two or more edges into the
+ * existing graph — so every existing node keeps the exact depth it had
+ * before the new node arrived; there is nothing to "prefer the old depth"
+ * over, because the BFS can't produce a different one. This holds
+ * regardless of root, as long as root selection itself doesn't change
+ * (see pickChainRoot's non-leaf-neighbour tie-break above, which is what
+ * keeps *that* stable too).
  */
 const buildTree = (
   nodes: LayoutNodeInput[],
@@ -159,7 +211,7 @@ const buildTree = (
   };
 
   const nodeById = new Map<string, TNode>();
-  const root = makeNode(rootId, null, 0, secondaryOf(rootId));
+  const root = makeNode(rootId, null, secondaryOf(rootId));
   nodeById.set(rootId, root);
 
   const visited = new Set<string>([rootId]);
@@ -171,7 +223,7 @@ const buildTree = (
     neighborIds.sort();
     for (const id of neighborIds) {
       visited.add(id);
-      const child = makeNode(id, current, current.children.length, secondaryOf(id));
+      const child = makeNode(id, current, secondaryOf(id));
       current.children.push(child);
       nodeById.set(id, child);
       queue.push(child);
@@ -189,11 +241,20 @@ const buildTree = (
   }
   const sortChildren = (node: TNode): void => {
     node.children.sort((a, b) => {
-      if (a.subtreeSize !== b.subtreeSize) return b.subtreeSize - a.subtreeSize;
+      // Primary key: the child's own secondary-axis input coordinate. This
+      // is a per-node quantity that never changes when a sibling is added
+      // or a sibling's subtree grows, so — unlike sorting by subtreeSize —
+      // it cannot reorder already-placed siblings. For a node that already
+      // has a real position on the map this is that position; for a
+      // brand-new node it is the caller-supplied (deterministic, jittered)
+      // drop point near its parent, which still yields a stable, decided
+      // key with no extra bookkeeping required.
       if (a.secondaryHint !== b.secondaryHint) return a.secondaryHint - b.secondaryHint;
+      // subtreeSize is demoted to a tie-break at most: it only matters
+      // between two siblings whose input coordinates coincide exactly.
+      if (a.subtreeSize !== b.subtreeSize) return b.subtreeSize - a.subtreeSize;
       return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
     });
-    node.children.forEach((c, i) => (c.index = i));
     node.children.forEach(sortChildren);
   };
   sortChildren(root);
@@ -212,150 +273,88 @@ const depthOfPath = (node: TNode): number => {
   return d;
 };
 
-const nextLeft = (v: TNode): TNode | null => (v.children.length ? v.children[0] : v.thread);
-const nextRight = (v: TNode): TNode | null => (v.children.length ? v.children[v.children.length - 1] : v.thread);
-
-const moveSubtree = (wLeft: TNode, wRight: TNode, shift: number): void => {
-  const subtrees = wRight.index - wLeft.index;
-  if (subtrees <= 0) return;
-  wRight.change -= shift / subtrees;
-  wRight.shift += shift;
-  wLeft.change += shift / subtrees;
-  wRight.prelim += shift;
-  wRight.mod += shift;
-};
-
-const ancestorOf = (vIm: TNode, v: TNode, defaultAncestor: TNode): TNode =>
-  vIm.ancestor.parent === v.parent ? vIm.ancestor : defaultAncestor;
-
-const executeShifts = (v: TNode): void => {
-  let shift = 0;
-  let change = 0;
-  for (let i = v.children.length - 1; i >= 0; i--) {
-    const w = v.children[i];
-    w.prelim += shift;
-    w.mod += shift;
-    change += w.change;
-    shift += w.shift + change;
-  }
-};
-
-const apportion = (v: TNode, defaultAncestor: TNode): TNode => {
-  if (v.index === 0 || !v.parent) return defaultAncestor;
-  const w = v.parent.children[v.index - 1];
-
-  let vip: TNode = v;
-  let vop: TNode = v;
-  let vim: TNode = w;
-  let vom: TNode = v.parent.children[0];
-
-  let sip = vip.mod;
-  let sop = vop.mod;
-  let sim = vim.mod;
-  let som = vom.mod;
-
-  let nr = nextRight(vim);
-  let nl = nextLeft(vip);
-  while (nr && nl) {
-    vim = nr;
-    vip = nl;
-    vom = nextLeft(vom)!;
-    vop = nextRight(vop)!;
-    vop.ancestor = v;
-
-    const shift = vim.prelim + sim - (vip.prelim + sip) + DISTANCE;
-    if (shift > 0) {
-      moveSubtree(ancestorOf(vim, v, defaultAncestor), v, shift);
-      sip += shift;
-      sop += shift;
-    }
-    sim += vim.mod;
-    sip += vip.mod;
-    som += vom.mod;
-    sop += vop.mod;
-
-    nr = nextRight(vim);
-    nl = nextLeft(vip);
-  }
-
-  if (nr && !nextRight(vop)) {
-    vop.thread = nr;
-    vop.mod += sim - sop;
-  }
-  if (nl && !nextLeft(vom)) {
-    vom.thread = nl;
-    vom.mod += sip - som;
-    return v;
-  }
-
-  return defaultAncestor;
-};
-
-const firstWalk = (v: TNode): void => {
-  if (v.children.length === 0) {
-    if (v.index > 0) {
-      v.prelim = v.parent!.children[v.index - 1].prelim + DISTANCE;
-    } else {
-      v.prelim = 0;
-    }
-    return;
-  }
-
-  let defaultAncestor = v.children[0];
-  for (const child of v.children) {
-    firstWalk(child);
-    defaultAncestor = apportion(child, defaultAncestor);
-  }
-  executeShifts(v);
-
-  const first = v.children[0];
-  const last = v.children[v.children.length - 1];
-  const midpoint = (first.prelim + last.prelim) / 2;
-
-  if (v.index > 0) {
-    v.prelim = v.parent!.children[v.index - 1].prelim + DISTANCE;
-    v.mod = v.prelim - midpoint;
-  } else {
-    v.prelim = midpoint;
-  }
-};
-
-const secondWalk = (v: TNode, m: number, depth: number): void => {
-  v.secondary = v.prelim + m;
-  v.depth = depth;
-  for (const child of v.children) secondWalk(child, m + v.mod, depth + 1);
-};
-
 /**
- * Snap the float secondary-axis coordinates produced by the Buchheim walk
- * onto the integer cell grid, one depth level at a time. The algorithm
- * above guarantees >=1 unit of separation between any two nodes sharing a
- * depth (that is the whole point of contour-following apportionment), but
- * relies on that being exact in floating point; rounding independently
- * could in principle let two nodes collapse onto the same integer. This
- * pass removes that risk entirely and deterministically: sort each depth
- * band by (float secondary, id), then assign strictly increasing integers,
- * bumping up only when a naive round would collide with the previous node.
+ * Assigns every node's secondary-axis coordinate one BFS level at a time
+ * (so a parent is always placed before its children), anchored on that
+ * parent's own already-decided cell rather than on any subtree-width
+ * bookkeeping:
+ *
+ *   - the root sits at 0;
+ *   - a lone child continues straight out from its parent (same cell);
+ *   - when two or more children want the same cell (a fork, or two
+ *     unrelated branches landing on the same row/column), whichever one
+ *     sits closest to the parent in the *original* input coordinates
+ *     claims it, and the rest are pushed to the nearest still-free cell at
+ *     that depth, searching outward in the direction their own input
+ *     coordinate points (so a branch still reads as growing "away from"
+ *     its parent). A node that already has a real position on the map
+ *     sits at a fixed distance from its parent that never changes just
+ *     because a sibling is added, so it reliably keeps first claim over a
+ *     brand-new sibling whose jittered "just discovered it" coordinate
+ *     only coincidentally lands close to the parent.
+ *
+ * CHEWY PATCH: this is the whole fix for "adding one leaf moves the whole
+ * map". A node's cell is a pure function of (its parent's already-fixed
+ * cell, which other nodes happen to already occupy at its own depth) —
+ * never of a sibling subtree's size or a global compaction pass. Adding a
+ * brand-new leaf can therefore only ever perturb the direct siblings it
+ * collides with (and their own descendants, re-anchored one cell over) —
+ * it cannot ripple into an unrelated branch, because branches never share
+ * a "width budget" that has to be renegotiated when one of them grows.
+ * One cell of separation between any two same-depth nodes is guaranteed
+ * structurally (occupancy is tracked as a set of distinct integers), so
+ * the contour-separation guarantee holds without any contour math.
  */
-const integerizeByDepth = (root: TNode): void => {
-  const byDepth = new Map<number, TNode[]>();
-  const collect = (node: TNode): void => {
-    const bucket = byDepth.get(node.depth);
-    if (bucket) bucket.push(node);
-    else byDepth.set(node.depth, [node]);
-    node.children.forEach(collect);
-  };
-  collect(root);
+const placeSecondary = (root: TNode): void => {
+  root.secondary = 0;
+  root.depth = 0;
 
-  for (const bucket of byDepth.values()) {
-    bucket.sort((a, b) => a.secondary - b.secondary || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-    let prev = -Infinity;
-    for (const node of bucket) {
-      let v = Math.round(node.secondary);
-      if (v <= prev) v = prev + 1;
-      node.secondary = v;
-      prev = v;
+  let frontier: TNode[] = [root];
+  let depth = 0;
+  while (frontier.length > 0) {
+    depth++;
+    // Visit each already-placed parent's children, closest-to-parent
+    // first (in the original input coordinates), so a child that already
+    // has a real position claims the parent's cell before an unrelated
+    // newcomer's jitter can steal it.
+    const level: TNode[] = [];
+    for (const parent of frontier) {
+      const kids = [...parent.children].sort((a, b) => {
+        const da = Math.abs(a.secondaryHint - parent.secondaryHint);
+        const db = Math.abs(b.secondaryHint - parent.secondaryHint);
+        if (da !== db) return da - db;
+        if (a.secondaryHint !== b.secondaryHint) return a.secondaryHint - b.secondaryHint;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
+      level.push(...kids);
     }
+    if (level.length === 0) break;
+
+    const occupied = new Set<number>();
+    for (const node of level) {
+      const parent = node.parent!;
+      const anchor = parent.secondary;
+      const towardPositive = node.secondaryHint >= parent.secondaryHint;
+      let cell = anchor;
+      if (occupied.has(cell)) {
+        for (let step = 1; ; step++) {
+          const forward = anchor + (towardPositive ? step : -step);
+          if (!occupied.has(forward)) {
+            cell = forward;
+            break;
+          }
+          const backward = anchor + (towardPositive ? -step : step);
+          if (!occupied.has(backward)) {
+            cell = backward;
+            break;
+          }
+        }
+      }
+      node.secondary = cell;
+      node.depth = depth;
+      occupied.add(cell);
+    }
+    frontier = level;
   }
 };
 
@@ -381,9 +380,7 @@ export const layoutChainTree = (
   const root = buildTree(nodes, edges, rootId, axis);
   if (!root) return { localCells: new Map(), depths: new Map() };
 
-  firstWalk(root);
-  secondWalk(root, 0, 0);
-  integerizeByDepth(root);
+  placeSecondary(root);
 
   const localCells = new Map<string, CellCoord>();
   const depths = new Map<string, number>();

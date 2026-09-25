@@ -14,12 +14,16 @@ import {
 import { BeautifyUndoToastContent } from '@/hooks/Mapper/components/map/hooks/BeautifyUndoToastContent.tsx';
 
 export type BeautifyScope = 'all' | 'selection';
+// CHEWY PATCH: layout mode — 'auto' keeps every validly-placed node untouched and only
+// places new/misplaced ones, 'full' re-solves the whole map, 'auto' picks between them.
+export type BeautifyMode = 'auto' | 'incremental' | 'full';
 
 export interface BeautifyParams {
   scope: BeautifyScope;
   rootId?: string | null;
   axis?: BeautifyAxis;
   kspaceMode?: KSpaceMode;
+  mode?: BeautifyMode;
 }
 
 type PositionUpdate = { solar_system_id: string; position: { x: number; y: number } };
@@ -66,7 +70,13 @@ export const useBeautify = () => {
   }, [applyPositions]);
 
   const beautify = useCallback(
-    async ({ scope, rootId = null, axis = 'left_to_right', kspaceMode = 'geographic' }: BeautifyParams) => {
+    async ({
+      scope,
+      rootId = null,
+      axis = 'left_to_right',
+      kspaceMode = 'geographic',
+      mode = 'auto',
+    }: BeautifyParams) => {
       const { systems, connections, selectedSystems, hubs, options } = ref.current;
 
       if (options.beautifier_enabled !== 'true') {
@@ -114,6 +124,7 @@ export const useBeautify = () => {
           rootId: scope === 'selection' ? null : rootId,
           hubs,
           kspaceMode,
+          mode,
         });
 
         if (result.movedCount === 0) {
@@ -146,6 +157,7 @@ export const useBeautify = () => {
           life: 8000,
           content: createElement(BeautifyUndoToastContent, {
             movedCount: result.movedCount,
+            mode: result.mode,
             onUndo: () => undo(),
           }),
         });

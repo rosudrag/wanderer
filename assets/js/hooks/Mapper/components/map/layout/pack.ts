@@ -78,7 +78,20 @@ const findFreeShift = (rect: Rect, placed: Rect[], maxRadius = 2000): { dCol: nu
   return { dCol: 0, dRow: 0 };
 };
 
-const areaOf = (r: Rect): number => (r.maxCol - r.minCol + 1) * (r.maxRow - r.minRow + 1);
+// CHEWY PATCH: box order used to be size-rank (largest area first), so a box
+// that merely grew by one node (a new system added to its cluster/branch)
+// could jump the rank and reorder every other box's placement — the exact
+// packing-side cascade the stability work targets. Order is now a pure
+// function of each box's OWN proposed rect origin (col, then row — its
+// anchor/seed node's existing position, quantized: the geographic k-space
+// box's own compressed-lattice origin, or a chain box's translation off its
+// pinned anchor's real current cell) plus its id, never of other boxes'
+// current sizes, so adding a system to one component no longer perturbs the
+// relative placement order of the others.
+const floatBoxOrderKey = (box: LayoutBox): [number, number, string] => {
+  const rect = rectOf(box.cells);
+  return [rect.minCol, rect.minRow, box.id];
+};
 
 export const packBoxes = (boxes: LayoutBox[]): Map<string, CellCoord> => {
   const placedRects: Rect[] = [];
@@ -88,8 +101,9 @@ export const packBoxes = (boxes: LayoutBox[]): Map<string, CellCoord> => {
 
   const fixedBoxes = [...boxes.filter(b => b.fixed)].sort((a, b) => a.id.localeCompare(b.id));
   const floatBoxes = [...boxes.filter(b => !b.fixed)].sort((a, b) => {
-    const areaDiff = areaOf(rectOf(b.cells)) - areaOf(rectOf(a.cells));
-    return areaDiff !== 0 ? areaDiff : a.id.localeCompare(b.id);
+    const [aCol, aRow, aId] = floatBoxOrderKey(a);
+    const [bCol, bRow, bId] = floatBoxOrderKey(b);
+    return aCol !== bCol ? aCol - bCol : aRow !== bRow ? aRow - bRow : aId.localeCompare(bId);
   });
 
   for (const box of fixedBoxes) {
@@ -110,7 +124,7 @@ export const packBoxes = (boxes: LayoutBox[]): Map<string, CellCoord> => {
 /**
  * Hard safety net: walk the deterministically-ordered candidate list and
  * guarantee no two node ids ever resolve to the same cell. Earlier entries
- * (fixed boxes first, then largest-first floating boxes) keep their exact
+ * (fixed boxes first, then floating boxes in stable position order) keep their exact
  * cell; a later entry that collides is nudged to the nearest still-free
  * cell via a small expanding search, so the invariant holds even if box-level
  * placement above ever produced a spurious internal collision.
@@ -140,6 +154,389 @@ const dedupeCells = (ordered: Array<{ id: string; cell: CellCoord }>): Map<strin
     const finalCell = nearestFree(cell);
     used.add(key(finalCell));
     result.set(id, finalCell);
+  }
+
+  return result;
+};
+
+// ---------------------------------------------------------------------------
+// CHEWY PATCH: final crossing-reduction pass
+// ---------------------------------------------------------------------------
+//
+// A cheap, deterministic local-search cleanup over pack.ts's own output.
+// packBoxes places whole boxes (trees, region groups) without overlap, but
+// has no notion of edges, so it can leave individual nodes on the wrong
+// side of a neighbour — most visibly in `yugen`, which is essentially one
+// k-space cluster plus a few short wormhole branches.
+//
+// CHEWY PATCH (stability fix): the previous version of this pass greedily
+// accepted the FIRST trial (nudge, then any nearby swap) that helped, in
+// sorted-id order. That made the outcome depend on which nodes happened to
+// be candidates and in what order the loop reached them — exactly the kind
+// of cascade the rewrite was meant to remove, just moved into this pass.
+// `StableKSpace` proved a node's ideal lattice cell could be byte-identical
+// before and after an insertion while this pass still changed its final
+// row. The pass is now:
+//   1. Relocation-first: a node prefers moving into a FREE cell within
+//      MAX_NODE_DISPLACEMENT_CELLS of its own current cell over swapping.
+//   2. Swaps are restricted to node pairs that are endpoints of the SAME
+//      crossing edge pair (one endpoint from each of the two edges that
+//      actually cross) — the literal "these two are on the wrong side of
+//      each other" case a swap models, not "any two candidates within N
+//      cells", which could invert order between nodes that had nothing to
+//      do with each other's crossing.
+//   3. Acceptance is canonical, not first-come: every sweep evaluates ALL
+//      candidate moves against the same starting state, sorts them by
+//      (crossings removed desc, displacement asc, id asc), and applies
+//      them in that order. The result is a pure function of the current
+//      graph + cell layout, never of iteration/insertion order.
+//   4. Every move is capped at MAX_NODE_DISPLACEMENT_CELLS away from the
+//      node's OWN pre-pass ("origin") cell, for the life of the whole
+//      pass — a node this pass touches ends up adjacent to where the
+//      geometry put it, never reshuffled across the map.
+// Because a rejected trial is always reverted, and moves only ever land on
+// already-free cells, `overlaps === 0` and `offGrid === 0` cannot regress;
+// locked nodes are simply never included in `movableIds` by the caller, so
+// they never move. A hard iteration cap (MAX_CROSSING_ITERATIONS) keeps the
+// pass bounded regardless of graph size.
+
+interface CrossingEdge {
+  source: string;
+  target: string;
+}
+
+const orient = (px: number, py: number, qx: number, qy: number, rx: number, ry: number): number =>
+  Math.sign((qx - px) * (ry - py) - (qy - py) * (rx - px));
+
+const onSegment = (px: number, py: number, qx: number, qy: number, rx: number, ry: number): boolean =>
+  Math.min(px, rx) <= qx && qx <= Math.max(px, rx) && Math.min(py, ry) <= qy && qy <= Math.max(py, ry);
+
+/**
+ * Proper segment intersection (including collinear overlap), mirroring
+ * dev/layout-bench.mjs's `segmentsIntersect` exactly but operating directly
+ * in (col, row) cell space instead of pixels: scaling every point by the
+ * same positive per-axis factor (×CELL_W, ×CELL_H) is a linear map with a
+ * positive-diagonal matrix, which never changes orientation sign or
+ * collinearity, so which segment pairs cross is identical either way —
+ * cell space is just cheaper to work in for a search loop.
+ */
+const segmentsIntersect = (
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  dx: number,
+  dy: number,
+): boolean => {
+  const o1 = orient(ax, ay, bx, by, cx, cy);
+  const o2 = orient(ax, ay, bx, by, dx, dy);
+  const o3 = orient(cx, cy, dx, dy, ax, ay);
+  const o4 = orient(cx, cy, dx, dy, bx, by);
+  if (o1 !== o2 && o3 !== o4) return true;
+  if (o1 === 0 && onSegment(ax, ay, cx, cy, bx, by)) return true;
+  if (o2 === 0 && onSegment(ax, ay, dx, dy, bx, by)) return true;
+  if (o3 === 0 && onSegment(cx, cy, ax, ay, dx, dy)) return true;
+  if (o4 === 0 && onSegment(cx, cy, bx, by, dx, dy)) return true;
+  return false;
+};
+
+const countCrossings = (edges: CrossingEdge[], cells: Map<string, CellCoord>): number => {
+  let total = 0;
+  for (let i = 0; i < edges.length; i++) {
+    const a = edges[i];
+    const pa = cells.get(a.source);
+    const pb = cells.get(a.target);
+    if (!pa || !pb) continue;
+    for (let j = i + 1; j < edges.length; j++) {
+      const b = edges[j];
+      if (a.source === b.source || a.source === b.target || a.target === b.source || a.target === b.target) continue;
+      const pc = cells.get(b.source);
+      const pd = cells.get(b.target);
+      if (!pc || !pd) continue;
+      if (segmentsIntersect(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) total++;
+    }
+  }
+  return total;
+};
+
+const MAX_CROSSING_ITERATIONS = 20000;
+
+// CHEWY PATCH: a node's displacement is measured from its OWN post-pack
+// cell (the cell packBoxes handed it, before this pass ever touches it)
+// and capped for the WHOLE pass, not per move. This is the fix for the
+// proven failure mode: a node whose ideal lattice cell never changed still
+// ended up on a different final row because an unbounded chain of accepted
+// swaps/nudges could walk it arbitrarily far from where the geometry put
+// it. With the cap, the worst this pass can do to any single node is leave
+// it MAX_NODE_DISPLACEMENT_CELLS away from its geometric position — "the
+// neighbour that was on the wrong side", never "reshuffled". Relocation
+// candidates are searched directly out to this same radius as ONE move
+// (not a chain of 1-cell steps), so the pass can still find the cell that
+// actually clears a crossing instead of stalling short of it.
+const MAX_NODE_DISPLACEMENT_CELLS = 2;
+
+/** Every candidate offset within MAX_NODE_DISPLACEMENT_CELLS of a node's CURRENT cell, nearest first then column/row for fully deterministic trial generation (final acceptance order is the canonical sort below regardless — this just keeps the trial list itself reproducible). */
+const NUDGE_OFFSETS: ReadonlyArray<readonly [number, number]> = (() => {
+  const radius = Math.ceil(MAX_NODE_DISPLACEMENT_CELLS);
+  const offsets: Array<[number, number]> = [];
+  for (let dCol = -radius; dCol <= radius; dCol++) {
+    for (let dRow = -radius; dRow <= radius; dRow++) {
+      if (dCol === 0 && dRow === 0) continue;
+      if (Math.hypot(dCol, dRow) > MAX_NODE_DISPLACEMENT_CELLS) continue;
+      offsets.push([dCol, dRow]);
+    }
+  }
+  offsets.sort(([aCol, aRow], [bCol, bRow]) => {
+    const da = Math.hypot(aCol, aRow);
+    const db = Math.hypot(bCol, bRow);
+    return da - db || aCol - bCol || aRow - bRow;
+  });
+  return offsets;
+})();
+
+interface CrossingPair {
+  a: CrossingEdge;
+  b: CrossingEdge;
+}
+
+/**
+ * Every pair of edges that currently properly intersect (same definition as
+ * countCrossings). Used both to derive the candidate node pool for a sweep
+ * and — for swaps — to restrict partners to nodes that actually belong to
+ * the SAME crossing, instead of any two candidates that happen to be near
+ * each other.
+ */
+const findCrossingPairs = (edges: CrossingEdge[], cells: Map<string, CellCoord>): CrossingPair[] => {
+  const pairs: CrossingPair[] = [];
+  for (let i = 0; i < edges.length; i++) {
+    const a = edges[i];
+    const pa = cells.get(a.source);
+    const pb = cells.get(a.target);
+    if (!pa || !pb) continue;
+    for (let j = i + 1; j < edges.length; j++) {
+      const b = edges[j];
+      if (a.source === b.source || a.source === b.target || a.target === b.source || a.target === b.target) continue;
+      const pc = cells.get(b.source);
+      const pd = cells.get(b.target);
+      if (!pc || !pd) continue;
+      if (segmentsIntersect(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) {
+        pairs.push({ a, b });
+      }
+    }
+  }
+  return pairs;
+};
+
+type CrossingCandidate =
+  | { kind: 'relocate'; id: string; to: CellCoord; delta: number; displacement: number; tieId: string }
+  | {
+      kind: 'swap';
+      idLo: string;
+      idHi: string;
+      cellForLo: CellCoord;
+      cellForHi: CellCoord;
+      delta: number;
+      displacement: number;
+      tieId: string;
+    };
+
+/** Canonical acceptance order: crossings removed desc, then displacement asc, then id asc — a pure function of the candidate's own numbers, never of discovery order. */
+const candidateCompare = (x: CrossingCandidate, y: CrossingCandidate): number =>
+  y.delta - x.delta || x.displacement - y.displacement || (x.tieId < y.tieId ? -1 : x.tieId > y.tieId ? 1 : 0);
+
+/**
+ * Final improvement pass: mutates a copy of `cells` toward fewer crossings
+ * among `edges`, touching only ids in `movableIds`, and returns the result.
+ *
+ * The candidate pool for every sweep is NOT "every movable node" — it's
+ * recomputed each sweep from `findCrossingPairs() ∩ movableIds`, i.e. only
+ * nodes that are currently an endpoint of an actual crossing. A scenario
+ * with zero crossings (or a part of the map with none) is never touched at
+ * all, and a new node only perturbs the pass if it actually creates a new
+ * crossing.
+ *
+ * Within a sweep, every candidate move (a relocation onto a free adjacent
+ * cell, or a swap between two nodes that are endpoints of the SAME
+ * crossing pair — see the file header) is trialled against the SAME
+ * starting state and kept only if it strictly reduces the crossing count.
+ * All keepers are then sorted canonically (candidateCompare) and applied in
+ * that order, skipping any a higher-priority move already invalidated (its
+ * target cell got taken, or one of its nodes already moved this sweep) or
+ * that no longer helps once re-checked against the live state. Every move
+ * is also rejected up front if it would push a node more than
+ * `MAX_NODE_DISPLACEMENT_CELLS` from its own pre-pass cell.
+ *
+ * Runs to a local fixed point (a sweep with zero accepted changes) or
+ * `MAX_CROSSING_ITERATIONS` trials, whichever comes first.
+ */
+export const reduceCrossings = (
+  cells: Map<string, CellCoord>,
+  edges: CrossingEdge[],
+  movableIds: ReadonlySet<string>,
+): Map<string, CellCoord> => {
+  const result = new Map(cells);
+
+  let current = countCrossings(edges, result);
+  if (current === 0) return result;
+
+  // Reference cell for MAX_NODE_DISPLACEMENT_CELLS: each node's cell as
+  // packBoxes handed it, fixed for the life of this whole pass (not reset
+  // sweep to sweep), so displacement never silently accumulates past the cap
+  // through a chain of individually-small moves.
+  const origin = new Map(cells);
+
+  const key = (c: CellCoord) => `${c.col},${c.row}`;
+  const occupied = new Set<string>();
+  for (const c of result.values()) occupied.add(key(c));
+
+  const displacementFrom = (id: string, cell: CellCoord): number => {
+    const o = origin.get(id);
+    if (!o) return 0;
+    return Math.hypot(cell.col - o.col, cell.row - o.row);
+  };
+
+  let iterations = 0;
+
+  while (current > 0 && iterations < MAX_CROSSING_ITERATIONS) {
+    const crossingPairs = findCrossingPairs(edges, result);
+    if (crossingPairs.length === 0) break;
+
+    const candidateIds = new Set<string>();
+    for (const { a, b } of crossingPairs) {
+      candidateIds.add(a.source);
+      candidateIds.add(a.target);
+      candidateIds.add(b.source);
+      candidateIds.add(b.target);
+    }
+    const movableCandidates = [...candidateIds].filter(id => movableIds.has(id)).sort();
+    if (movableCandidates.length === 0) break;
+
+    const candidates: CrossingCandidate[] = [];
+
+    // Relocation trials: every candidate node x every free adjacent cell.
+    for (const id of movableCandidates) {
+      const cellNow = result.get(id)!;
+      for (const [dCol, dRow] of NUDGE_OFFSETS) {
+        if (iterations >= MAX_CROSSING_ITERATIONS) break;
+        const to = { col: cellNow.col + dCol, row: cellNow.row + dRow };
+        if (occupied.has(key(to))) continue;
+        const displacement = displacementFrom(id, to);
+        if (displacement > MAX_NODE_DISPLACEMENT_CELLS) continue;
+        result.set(id, to);
+        const next = countCrossings(edges, result);
+        iterations++;
+        result.set(id, cellNow);
+        if (next < current) {
+          candidates.push({ kind: 'relocate', id, to, delta: current - next, displacement, tieId: id });
+        }
+      }
+    }
+
+    // Swap trials: ONLY between nodes that are endpoints of the SAME
+    // crossing edge pair — one node from each of the two edges that
+    // actually cross. This is the literal "swap two neighbours that are on
+    // the wrong side of each other" case; it excludes the previous, much
+    // broader "any two candidates within N cells" search, which could
+    // invert order between nodes that had nothing to do with each other's
+    // crossing.
+    const seenSwapPairs = new Set<string>();
+    for (const { a, b } of crossingPairs) {
+      for (const rawLo of [a.source, a.target]) {
+        for (const rawHi of [b.source, b.target]) {
+          if (rawLo === rawHi) continue;
+          if (!movableIds.has(rawLo) || !movableIds.has(rawHi)) continue;
+          const [lo, hi] = rawLo < rawHi ? [rawLo, rawHi] : [rawHi, rawLo];
+          const pairKey = `${lo}|${hi}`;
+          if (seenSwapPairs.has(pairKey)) continue;
+          seenSwapPairs.add(pairKey);
+          if (iterations >= MAX_CROSSING_ITERATIONS) continue;
+
+          const cellLo = result.get(lo)!;
+          const cellHi = result.get(hi)!;
+          if (displacementFrom(lo, cellHi) > MAX_NODE_DISPLACEMENT_CELLS) continue;
+          if (displacementFrom(hi, cellLo) > MAX_NODE_DISPLACEMENT_CELLS) continue;
+
+          result.set(lo, cellHi);
+          result.set(hi, cellLo);
+          const next = countCrossings(edges, result);
+          iterations++;
+          result.set(lo, cellLo);
+          result.set(hi, cellHi);
+
+          if (next < current) {
+            candidates.push({
+              kind: 'swap',
+              idLo: lo,
+              idHi: hi,
+              cellForLo: cellHi,
+              cellForHi: cellLo,
+              delta: current - next,
+              // Consistent with the relocate branch and the cap check above:
+              // "displacement" is each moved node's post-move distance from
+              // its OWN origin cell, not the distance between the two swap
+              // partners (which is a different, unrelated number).
+              displacement: Math.max(displacementFrom(lo, cellHi), displacementFrom(hi, cellLo)),
+              tieId: lo,
+            });
+          }
+        }
+      }
+    }
+
+    if (candidates.length === 0) break;
+
+    // Canonical acceptance: sort every candidate found against this sweep's
+    // shared starting state and apply in that order — never "first trial
+    // that happened to help" — so the outcome is a pure function of the
+    // graph and current cell layout, not of which node the sweep happened
+    // to reach first.
+    candidates.sort(candidateCompare);
+
+    const touched = new Set<string>();
+    let appliedAny = false;
+
+    for (const candidate of candidates) {
+      if (current === 0 || iterations >= MAX_CROSSING_ITERATIONS) break;
+
+      if (candidate.kind === 'relocate') {
+        if (touched.has(candidate.id)) continue;
+        if (occupied.has(key(candidate.to))) continue; // target taken by an earlier accepted move this sweep
+        const cellNow = result.get(candidate.id)!;
+        result.set(candidate.id, candidate.to);
+        const next = countCrossings(edges, result);
+        iterations++;
+        if (next < current) {
+          occupied.delete(key(cellNow));
+          occupied.add(key(candidate.to));
+          current = next;
+          touched.add(candidate.id);
+          appliedAny = true;
+        } else {
+          result.set(candidate.id, cellNow);
+        }
+      } else {
+        if (touched.has(candidate.idLo) || touched.has(candidate.idHi)) continue;
+        const cellLo = result.get(candidate.idLo)!;
+        const cellHi = result.get(candidate.idHi)!;
+        result.set(candidate.idLo, candidate.cellForLo);
+        result.set(candidate.idHi, candidate.cellForHi);
+        const next = countCrossings(edges, result);
+        iterations++;
+        if (next < current) {
+          current = next;
+          touched.add(candidate.idLo);
+          touched.add(candidate.idHi);
+          appliedAny = true;
+        } else {
+          result.set(candidate.idLo, cellLo);
+          result.set(candidate.idHi, cellHi);
+        }
+      }
+    }
+
+    if (!appliedAny) break;
   }
 
   return result;

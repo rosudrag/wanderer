@@ -63,6 +63,18 @@ export const MapContextMenu = ({
     });
   }, [beautify, settingsBeautify]);
 
+  // CHEWY PATCH: explicit "re-solve everything" command — mode: 'full' overrides the
+  // default 'auto' behaviour that otherwise leaves already-placed systems untouched.
+  const handleBeautifyRebuild = useCallback(() => {
+    beautify({
+      scope: 'all',
+      rootId: settingsBeautify.rootId,
+      axis: settingsBeautify.axis,
+      kspaceMode: settingsBeautify.kspaceMode,
+      mode: 'full',
+    });
+  }, [beautify, settingsBeautify]);
+
   const handleToggleBeautifyAxis = useCallback(() => {
     settingsBeautifyUpdate(prev => ({
       ...prev,
@@ -112,16 +124,23 @@ export const MapContextMenu = ({
                 visible: true,
                 items: [
                   {
-                    label: 'Whole map',
+                    label: 'Tidy whole map',
                     icon: 'pi pi-sitemap',
                     command: handleBeautifyWholeMap,
                     disabled: isBeautifying,
                   },
                   {
-                    label: 'Selection',
+                    label: 'Tidy selection',
                     icon: 'pi pi-check-square',
                     command: handleBeautifySelection,
                     disabled: isBeautifying || selectedSystems.length === 0,
+                  },
+                  { separator: true },
+                  {
+                    label: 'Rebuild layout',
+                    icon: 'pi pi-refresh',
+                    command: handleBeautifyRebuild,
+                    disabled: isBeautifying,
                   },
                   { separator: true },
                   {
@@ -167,6 +186,7 @@ export const MapContextMenu = ({
     settingsBeautify,
     handleBeautifyWholeMap,
     handleBeautifySelection,
+    handleBeautifyRebuild,
     handleToggleBeautifyAxis,
   ]);
 
