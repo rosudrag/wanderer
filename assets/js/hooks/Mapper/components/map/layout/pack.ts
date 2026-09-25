@@ -160,7 +160,7 @@ const dedupeCells = (ordered: Array<{ id: string; cell: CellCoord }>): Map<strin
 };
 
 // ---------------------------------------------------------------------------
-// CHEWY PATCH: final crossing-reduction pass
+// CHEWY PATCH: final crossing/overlap/occlusion-reduction pass
 // ---------------------------------------------------------------------------
 //
 // A cheap, deterministic local-search cleanup over pack.ts's own output.
@@ -187,9 +187,9 @@ const dedupeCells = (ordered: Array<{ id: string; cell: CellCoord }>): Map<strin
 //      do with each other's crossing.
 //   3. Acceptance is canonical, not first-come: every sweep evaluates ALL
 //      candidate moves against the same starting state, sorts them by
-//      (crossings removed desc, displacement asc, id asc), and applies
-//      them in that order. The result is a pure function of the current
-//      graph + cell layout, never of iteration/insertion order.
+//      (violation score removed desc, displacement asc, id asc), and
+//      applies them in that order. The result is a pure function of the
+//      current graph + cell layout, never of iteration/insertion order.
 //   4. Every move is capped at MAX_NODE_DISPLACEMENT_CELLS away from the
 //      node's OWN pre-pass ("origin") cell, for the life of the whole
 //      pass — a node this pass touches ends up adjacent to where the
@@ -199,6 +199,26 @@ const dedupeCells = (ordered: Array<{ id: string; cell: CellCoord }>): Map<strin
 // locked nodes are simply never included in `movableIds` by the caller, so
 // they never move. A hard iteration cap (MAX_CROSSING_ITERATIONS) keeps the
 // pass bounded regardless of graph size.
+//
+// CHEWY PATCH (occlusion fix): "zero crossings" was never the same claim as
+// "no connection is hidden". Two edges sharing an endpoint and running along
+// the exact same line (Irmalin->Ibani and Ibani->Raihbaka in the real
+// `yugen` data, all three on row 675) were deliberately EXCLUDED from
+// `countCrossings`/`findCrossingPairs` — "shares an endpoint" is the normal
+// signal for "meets at an angle, fine" — so the shorter edge sat invisibly
+// inside the longer one, and a third node (`Raihbaka`) landed exactly on
+// the midpoint of the edge it wasn't even part of. Both are real defects a
+// pure crossing count is blind to, so the objective this pass optimises is
+// now a single weighted violation score — crossings, collinear edge-overlap
+// pairs (`countEdgeOverlapPairs`, checked WITHOUT the shared-endpoint skip,
+// on purpose), and node-on-edge occlusions (`countNodeOcclusions`) — instead
+// of a raw crossing count. Every other property above is unchanged: the
+// early-exit only fires when the WHOLE score is zero (so a `yugen`-shaped
+// map with zero crossings but a live occlusion is no longer left untouched),
+// candidate nodes are still only ones that are party to a CURRENT violation
+// of any of the three kinds, and moves are still relocation-first,
+// canonically accepted, and displacement-capped — so fixing occlusion does
+// not reopen the exact cascade the stability rewrite closed.
 
 interface CrossingEdge {
   source: string;
@@ -256,6 +276,98 @@ const countCrossings = (edges: CrossingEdge[], cells: Map<string, CellCoord>): n
       const pd = cells.get(b.target);
       if (!pc || !pd) continue;
       if (segmentsIntersect(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) total++;
+    }
+  }
+  return total;
+};
+
+/**
+ * CHEWY PATCH: two edges are an "overlap pair" when they are collinear AND
+ * their 1-D projections along that shared line cover more than a single
+ * point — one edge fully or partially hiding the other, e.g. Ibani->Irmalin
+ * with Ibani->Raihbaka running along the exact same row. This is
+ * deliberately NOT the same shape as a "crossing": `segmentsIntersect`
+ * above (correctly) treats two edges that merely MEET at a shared endpoint,
+ * at any angle, as fine, and `countCrossings`/`findCrossingPairs` skip any
+ * pair sharing a source/target id for exactly that reason. An overlap pair
+ * is checked WITHOUT that skip on purpose — the real yugen defect is two
+ * edges that share the endpoint Ibani and run along the same line, which a
+ * "shares an endpoint → ignore" rule would hide forever.
+ */
+const edgesOverlap = (
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  dx: number,
+  dy: number,
+): boolean => {
+  const dirCol = bx - ax;
+  const dirRow = by - ay;
+  if (dirCol === 0 && dirRow === 0) return false; // degenerate edge, no line to share
+  if (orient(ax, ay, bx, by, cx, cy) !== 0) return false;
+  if (orient(ax, ay, bx, by, dx, dy) !== 0) return false;
+
+  // Both segments are collinear, so a single scalar parameter along
+  // (dirCol, dirRow) — computed with exact integer dot products, no epsilon
+  // needed in cell space — orders every point on the shared line
+  // consistently for both edges. Overlap is a real (>0), not just touching
+  // (=0), stretch.
+  const paramOf = (x: number, y: number): number => (x - ax) * dirCol + (y - ay) * dirRow;
+  const aHi = paramOf(bx, by); // > 0 since (dirCol, dirRow) !== (0, 0)
+  const cParam = paramOf(cx, cy);
+  const dParam = paramOf(dx, dy);
+  const bLo = Math.min(cParam, dParam);
+  const bHi = Math.max(cParam, dParam);
+  return Math.min(aHi, bHi) > Math.max(0, bLo);
+};
+
+const countEdgeOverlapPairs = (edges: CrossingEdge[], cells: Map<string, CellCoord>): number => {
+  let total = 0;
+  for (let i = 0; i < edges.length; i++) {
+    const a = edges[i];
+    if (a.source === a.target) continue;
+    const pa = cells.get(a.source);
+    const pb = cells.get(a.target);
+    if (!pa || !pb) continue;
+    for (let j = i + 1; j < edges.length; j++) {
+      const b = edges[j];
+      if (b.source === b.target) continue;
+      const pc = cells.get(b.source);
+      const pd = cells.get(b.target);
+      if (!pc || !pd) continue;
+      if (edgesOverlap(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) total++;
+    }
+  }
+  return total;
+};
+
+/**
+ * CHEWY PATCH: a node "occludes" an edge when its own cell lies exactly on
+ * that edge's segment (collinear + within the bounding box, both exact
+ * integer checks in cell space) and it is not one of the edge's own two
+ * endpoints — e.g. Raihbaka sitting on the midpoint of Ibani->Irmalin. Since
+ * `dedupeCells`/the occupied-cell bookkeeping below guarantee no two node
+ * ids ever share a cell, a node can never coincide with an edge endpoint's
+ * cell while having a different id, so this is automatically strict
+ * ("touching an endpoint" cannot arise here without also being a node/node
+ * collision, which is a separate, already-hard-zero invariant).
+ */
+const nodeOccludesEdge = (px: number, py: number, ax: number, ay: number, bx: number, by: number): boolean =>
+  orient(ax, ay, bx, by, px, py) === 0 && onSegment(ax, ay, px, py, bx, by);
+
+const countNodeOcclusions = (edges: CrossingEdge[], cells: Map<string, CellCoord>): number => {
+  let total = 0;
+  for (const edge of edges) {
+    if (edge.source === edge.target) continue;
+    const pa = cells.get(edge.source);
+    const pb = cells.get(edge.target);
+    if (!pa || !pb) continue;
+    for (const [nodeId, p] of cells) {
+      if (nodeId === edge.source || nodeId === edge.target) continue;
+      if (nodeOccludesEdge(p.col, p.row, pa.col, pa.row, pb.col, pb.row)) total++;
     }
   }
   return total;
@@ -329,6 +441,78 @@ const findCrossingPairs = (edges: CrossingEdge[], cells: Map<string, CellCoord>)
   return pairs;
 };
 
+interface OverlapPair {
+  a: CrossingEdge;
+  b: CrossingEdge;
+}
+
+/** Same predicate as `countEdgeOverlapPairs`, collected as pairs for candidate-node derivation below. */
+const findEdgeOverlapPairs = (edges: CrossingEdge[], cells: Map<string, CellCoord>): OverlapPair[] => {
+  const pairs: OverlapPair[] = [];
+  for (let i = 0; i < edges.length; i++) {
+    const a = edges[i];
+    if (a.source === a.target) continue;
+    const pa = cells.get(a.source);
+    const pb = cells.get(a.target);
+    if (!pa || !pb) continue;
+    for (let j = i + 1; j < edges.length; j++) {
+      const b = edges[j];
+      if (b.source === b.target) continue;
+      const pc = cells.get(b.source);
+      const pd = cells.get(b.target);
+      if (!pc || !pd) continue;
+      if (edgesOverlap(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) {
+        pairs.push({ a, b });
+      }
+    }
+  }
+  return pairs;
+};
+
+interface NodeOcclusion {
+  nodeId: string;
+  edge: CrossingEdge;
+}
+
+/** Same predicate as `countNodeOcclusions`, collected for candidate-node derivation (see reduceCrossings below). */
+const findNodeOcclusions = (edges: CrossingEdge[], cells: Map<string, CellCoord>): NodeOcclusion[] => {
+  const occlusions: NodeOcclusion[] = [];
+  for (const edge of edges) {
+    if (edge.source === edge.target) continue;
+    const pa = cells.get(edge.source);
+    const pb = cells.get(edge.target);
+    if (!pa || !pb) continue;
+    for (const [nodeId, p] of cells) {
+      if (nodeId === edge.source || nodeId === edge.target) continue;
+      if (nodeOccludesEdge(p.col, p.row, pa.col, pa.row, pb.col, pb.row)) {
+        occlusions.push({ nodeId, edge });
+      }
+    }
+  }
+  return occlusions;
+};
+
+// CHEWY PATCH: the pass's objective generalises from "number of crossings"
+// to a weighted violation score. A hidden connection (one edge's line
+// swallowing another, or a node sitting on top of a line it doesn't touch)
+// is worse for a user than two lines visibly crossing, so both new
+// violation kinds are weighted far above a single crossing: 1000 vs 1 means
+// no plausible single-move swing in crossing count (bounded by the graph's
+// max node degree, nowhere near 1000 for any real map) can ever outweigh
+// clearing one overlap/occlusion. This makes the score a strict
+// lexicographic priority — eliminate every hidden-connection violation
+// first, and only break remaining ties by crossing count — while staying a
+// single scalar so the existing canonical-sort/acceptance machinery below
+// needs no changes.
+const CROSSING_WEIGHT = 1;
+const OVERLAP_WEIGHT = 1000;
+const OCCLUSION_WEIGHT = 1000;
+
+const violationScore = (edges: CrossingEdge[], cells: Map<string, CellCoord>): number =>
+  countCrossings(edges, cells) * CROSSING_WEIGHT +
+  countEdgeOverlapPairs(edges, cells) * OVERLAP_WEIGHT +
+  countNodeOcclusions(edges, cells) * OCCLUSION_WEIGHT;
+
 type CrossingCandidate =
   | { kind: 'relocate'; id: string; to: CellCoord; delta: number; displacement: number; tieId: string }
   | {
@@ -347,20 +531,23 @@ const candidateCompare = (x: CrossingCandidate, y: CrossingCandidate): number =>
   y.delta - x.delta || x.displacement - y.displacement || (x.tieId < y.tieId ? -1 : x.tieId > y.tieId ? 1 : 0);
 
 /**
- * Final improvement pass: mutates a copy of `cells` toward fewer crossings
- * among `edges`, touching only ids in `movableIds`, and returns the result.
+ * Final improvement pass: mutates a copy of `cells` toward a lower weighted
+ * violation score (crossings + collinear edge-overlap pairs + node-on-edge
+ * occlusions — see `violationScore` and the file header) among `edges`,
+ * touching only ids in `movableIds`, and returns the result.
  *
  * The candidate pool for every sweep is NOT "every movable node" — it's
- * recomputed each sweep from `findCrossingPairs() ∩ movableIds`, i.e. only
- * nodes that are currently an endpoint of an actual crossing. A scenario
- * with zero crossings (or a part of the map with none) is never touched at
- * all, and a new node only perturbs the pass if it actually creates a new
- * crossing.
+ * recomputed each sweep from the union of `findCrossingPairs()`,
+ * `findEdgeOverlapPairs()`, and `findNodeOcclusions()`, intersected with
+ * `movableIds`, i.e. only nodes that are currently party to an actual
+ * violation. A scenario with a zero score (or a part of the map with none)
+ * is never touched at all, and a new node only perturbs the pass if it
+ * actually creates a new violation.
  *
  * Within a sweep, every candidate move (a relocation onto a free adjacent
  * cell, or a swap between two nodes that are endpoints of the SAME
  * crossing pair — see the file header) is trialled against the SAME
- * starting state and kept only if it strictly reduces the crossing count.
+ * starting state and kept only if it strictly reduces the violation score.
  * All keepers are then sorted canonically (candidateCompare) and applied in
  * that order, skipping any a higher-priority move already invalidated (its
  * target cell got taken, or one of its nodes already moved this sweep) or
@@ -378,7 +565,7 @@ export const reduceCrossings = (
 ): Map<string, CellCoord> => {
   const result = new Map(cells);
 
-  let current = countCrossings(edges, result);
+  let current = violationScore(edges, result);
   if (current === 0) return result;
 
   // Reference cell for MAX_NODE_DISPLACEMENT_CELLS: each node's cell as
@@ -401,14 +588,33 @@ export const reduceCrossings = (
 
   while (current > 0 && iterations < MAX_CROSSING_ITERATIONS) {
     const crossingPairs = findCrossingPairs(edges, result);
-    if (crossingPairs.length === 0) break;
+    const overlapPairs = findEdgeOverlapPairs(edges, result);
+    const occlusions = findNodeOcclusions(edges, result);
+    if (crossingPairs.length === 0 && overlapPairs.length === 0 && occlusions.length === 0) break;
 
+    // CHEWY PATCH: candidate pool now spans every kind of violation, not
+    // just crossings — the endpoints of an overlapping edge pair, and both
+    // the occluding node and the occluded edge's own endpoints, are exactly
+    // as much "party to a violation" as a crossing's endpoints, per the
+    // rule that a node NOT involved in any current violation is never
+    // touched.
     const candidateIds = new Set<string>();
     for (const { a, b } of crossingPairs) {
       candidateIds.add(a.source);
       candidateIds.add(a.target);
       candidateIds.add(b.source);
       candidateIds.add(b.target);
+    }
+    for (const { a, b } of overlapPairs) {
+      candidateIds.add(a.source);
+      candidateIds.add(a.target);
+      candidateIds.add(b.source);
+      candidateIds.add(b.target);
+    }
+    for (const { nodeId, edge } of occlusions) {
+      candidateIds.add(nodeId);
+      candidateIds.add(edge.source);
+      candidateIds.add(edge.target);
     }
     const movableCandidates = [...candidateIds].filter(id => movableIds.has(id)).sort();
     if (movableCandidates.length === 0) break;
@@ -425,7 +631,7 @@ export const reduceCrossings = (
         const displacement = displacementFrom(id, to);
         if (displacement > MAX_NODE_DISPLACEMENT_CELLS) continue;
         result.set(id, to);
-        const next = countCrossings(edges, result);
+        const next = violationScore(edges, result);
         iterations++;
         result.set(id, cellNow);
         if (next < current) {
@@ -460,7 +666,7 @@ export const reduceCrossings = (
 
           result.set(lo, cellHi);
           result.set(hi, cellLo);
-          const next = countCrossings(edges, result);
+          const next = violationScore(edges, result);
           iterations++;
           result.set(lo, cellLo);
           result.set(hi, cellHi);
@@ -505,7 +711,7 @@ export const reduceCrossings = (
         if (occupied.has(key(candidate.to))) continue; // target taken by an earlier accepted move this sweep
         const cellNow = result.get(candidate.id)!;
         result.set(candidate.id, candidate.to);
-        const next = countCrossings(edges, result);
+        const next = violationScore(edges, result);
         iterations++;
         if (next < current) {
           occupied.delete(key(cellNow));
@@ -522,7 +728,7 @@ export const reduceCrossings = (
         const cellHi = result.get(candidate.idHi)!;
         result.set(candidate.idLo, candidate.cellForLo);
         result.set(candidate.idHi, candidate.cellForHi);
-        const next = countCrossings(edges, result);
+        const next = violationScore(edges, result);
         iterations++;
         if (next < current) {
           current = next;

@@ -143,7 +143,7 @@ export const beautifyLayout = async (
   if (requestedMode === 'full') {
     resolvedMode = 'full';
   } else {
-    classification = classifyNodes(nodes, gateEdges, kspaceMemberIds, regionData);
+    classification = classifyNodes(nodes, gateEdges, chainEdges, kspaceMemberIds, regionData);
     const eligibleCount = nodes.filter(n => !n.locked).length;
     const validFraction = eligibleCount > 0 ? classification.validCells.size / eligibleCount : 0;
     resolvedMode =

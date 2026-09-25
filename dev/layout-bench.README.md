@@ -20,7 +20,7 @@ Flags:
 
 | flag | effect |
 |---|---|
-| `--scenario <name>` | run only one of `yugen`, `chain`, `kspace-wide`, `mixed` |
+| `--scenario <name>` | run only one of `yugen`, `chain`, `kspace-wide`, `mixed`, `occlusion` |
 | `--json <path>` | write the full structured result (every metric, every k, every scenario) to `<path>` |
 | `--compare <baseline.json>` | diff the current run against a prior `--json` output; prints a delta table and **exits 1** if anything regressed beyond tolerance |
 
@@ -50,6 +50,22 @@ node dev/layout-bench.mjs --json /tmp/after.json --compare /tmp/before.json
   thing is one connected component, same as adjacent regions in-game.
 - **mixed** — `kspace-wide` plus a 10-node wormhole chain hanging off one of
   its systems.
+- **occlusion** — regression fixture for the edge-overlap/node-occlusion
+  rules below. Four real systems, ids/positions/connection types copied
+  verbatim from a real production database row on map `yugen` (a live user
+  map — unrelated to the `yugen` *scenario* above, which is `seed.ex`
+  dev-seed data): `Ibani` (`30003933`, `-540,675`), `Raihbaka` (`30045315`,
+  `-360,675`) and `Irmalin` (`30003935`, `-180,675`) all on the same row,
+  plus `Timudan` (`30003932`, `-540,600`) one cell north of `Ibani`.
+  Connections: `Irmalin -> Ibani` (gate), `Ibani -> Raihbaka` (wormhole),
+  `Ibani -> Timudan` (gate). In this real layout the `Ibani -> Raihbaka`
+  wormhole lies entirely inside the `Irmalin -> Ibani` gate segment, and
+  `Raihbaka`'s own node sits exactly on that gate segment's midpoint — both
+  rules below are violated at once by input that already passed every
+  other quality check (it's grid-aligned, has zero `crossings` because the
+  offending pair shares the `Ibani` endpoint, and has zero `overlaps`
+  because no two nodes share a pixel). A correct engine must resolve both
+  to `0`; this scenario exists specifically to fail loudly until it does.
 
 ## Quality metrics (computed once per scenario, on `P1` — the from-scratch beautify)
 
@@ -70,6 +86,29 @@ exactly what the engine's own contract promises).
 - **offGrid** — count of final positions that aren't an exact multiple of
   `CELL_W`/`CELL_H`. Must always be 0; same hard-failure treatment as
   `overlaps`.
+- **edgeOverlapPairs** — unordered edge pairs whose segments are
+  **collinear** (same line, not merely crossing) and share a
+  **positive-length stretch** of that line, worked out in CELL space
+  (`col = x / CELL_W`, `row = y / CELL_H`) rather than pixels. Two edges
+  meeting at a shared node endpoint at an *angle* project to zero-length
+  overlap on the shared line and are fine (that's an ordinary fan-out, not
+  a hidden connection); two edges sharing that endpoint but continuing
+  **in the same direction past it** — like the fixture below, where
+  `Ibani -> Raihbaka` continues in the same direction as `Irmalin ->
+  Ibani` past their shared `Ibani` endpoint — share more than that single
+  point and count. A duplicate edge between the same two nodes is the
+  degenerate case of "one edge is a subset of the other": it shares its
+  *entire* length and always counts as a full overlap. Zero-length edges
+  (both endpoints landing on the same cell) are excluded from both rules
+  below entirely — a point can't have a "positive-length stretch" with
+  anything. Must always be `0`; same hard-failure treatment as `overlaps`.
+- **nodeOcclusions** — nodes whose centre lies **strictly between** (not
+  at) the two endpoints of an edge they are not one of the endpoints of,
+  in CELL space. Touching an endpoint doesn't count (that's just another
+  edge legitimately ending at that node); landing anywhere on the open
+  interior of the segment does, gate or wormhole, regardless of whether
+  that node is also connected to one of the edge's endpoints by some other
+  edge. Must always be `0`; same hard-failure treatment as `overlaps`.
 - **determinism** — the scenario is laid out twice from identical input;
   `true` iff the two `JSON.stringify`d results are byte-identical. A `false`
   here is also a hard failure.
@@ -149,6 +188,21 @@ trigger it.
      pooled over every new node across all 10 repeats. Not a hard
      invariant — judged against a threshold in the verdict table below.
 
+   And over the *whole* post-insertion graph (existing nodes/edges plus
+   the `k` new ones), the same two rules as the QUALITY section above,
+   re-checked because inserting new nodes/edges must not create a new
+   violation even when `P1` itself was clean — the exact defect class
+   that motivated these two metrics: a wormhole edge to a newly-added
+   system lying entirely inside an existing gate edge, or a newly-added
+   node landing exactly on top of an existing connection:
+   - **edgeOverlapPairs** — count, summed over all 10 repeats, of edge
+     pairs in `P2` that collinear-overlap (see the QUALITY definition
+     above). Hard invariant, same treatment as `newOffGrid`: must always
+     be `0`, independent of `--compare` tolerance.
+   - **nodeOcclusions** — count, summed over all 10 repeats, of nodes in
+     `P2` sitting strictly on an edge they aren't an endpoint of. Same
+     hard-invariant treatment as `edgeOverlapPairs`.
+
 A nonzero round-trip `movedFraction`/`rankInversions` while `mode` reads
 `'incremental'` is NOT a harness bug: `classifyNodes`/`placeIncrementalNodes`
 can legitimately re-place a handful of existing k-space members when a new
@@ -168,7 +222,12 @@ Same four metrics as round-trip, minus the mode column (it is always
 `'full'` by construction) and minus the new-node placement metrics
 (`newOffGrid`/`newUnplaced`/`newAnchorCells` are round-trip-only: cold's
 new nodes are added to a never-laid-out map, so "landed near its
-already-placed neighbour" isn't a meaningful question there).
+already-placed neighbour" isn't a meaningful question there) and minus
+`edgeOverlapPairs`/`nodeOcclusions` (also round-trip-only, for the same
+reason: cold's `P1` reference doesn't correspond to a tidy map the user
+ever actually saw, so "did adding a system break it" isn't a meaningful
+question there either — QUALITY already checks the raw beautify for both
+rules).
 
 The printed/JSON stability numbers are the mean over the 10 repeats (plus
 `max` for `rankInversions`, since one bad repeat matters even if the
@@ -188,8 +247,10 @@ over `k = 1, 3, 5` of each round-trip metric is checked against:
 | `newOffGrid` (summed over 10 repeats) | `== 0` |
 | `newUnplaced` (summed over 10 repeats) | `== 0` |
 | `newAnchorCells mean` / `max` | `<= 2.0` / `<= 4` cells |
+| `edgeOverlapPairs` (summed over 10 repeats) | `== 0` |
+| `nodeOcclusions` (summed over 10 repeats) | `== 0` |
 
-A scenario `PASS`es only if all seven hold. This is the pass/fail line the
+A scenario `PASS`es only if all nine hold. This is the pass/fail line the
 whole effort is judged against, independent of `--compare`/tolerances.
 
 ## `--compare` tolerances
@@ -217,9 +278,11 @@ direction: `baseline - current > max(abs, baseline * rel)`.
 | `stability.cold.maxShiftCells` (per k) | 5% | 0.1 cells |
 | `stability.cold.rankInversions` (per k) | 5% | 1 pair |
 
-`overlaps`, `offGrid`, `determinism`, `idempotent.movedFraction`, and (per
-k) `stability.roundTrip.newOffGrid`/`stability.roundTrip.newUnplaced` are
-hard invariants: any violation in the *current* run fails the whole
+`overlaps`, `offGrid`, `determinism`, `idempotent.movedFraction`,
+`edgeOverlapPairs`, `nodeOcclusions`, and (per k)
+`stability.roundTrip.newOffGrid`/`stability.roundTrip.newUnplaced`/
+`stability.roundTrip.edgeOverlapPairs`/`stability.roundTrip.nodeOcclusions`
+are hard invariants: any violation in the *current* run fails the whole
 comparison (and even a plain run with no `--compare` at all), independent
 of tolerance or baseline. A metric that improved is marked `better`;
 anything inside tolerance but not exactly equal is still listed so you can

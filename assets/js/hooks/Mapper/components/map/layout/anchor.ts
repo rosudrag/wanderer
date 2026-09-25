@@ -77,11 +77,30 @@ const cellKey = (c: CellCoord): string => `${c.col},${c.row}`;
  *     rankInversionCount uses, not merely "close enough". A k-space
  *     member that ISN'T established yet (see below) skips this check
  *     entirely and is judged on 1-2 alone — a one-cycle grace period, not
- *     a free pass forever (see ESTABLISHED).
+ *     a free pass forever (see ESTABLISHED);
+ *  4. CHEWY PATCH: it does not sit ON another connection's line — i.e. it
+ *     doesn't `nodeOccludesEdge` any gate or chain edge it isn't itself an
+ *     endpoint of (see the Placement section's geometry predicates below
+ *     for the exact rule and why this alone also catches every genuine
+ *     edge-overlap pair: if two edges collinearly overlap by more than a
+ *     point, at least one of them's endpoints necessarily sits strictly
+ *     inside the other's span). Unlike 3, this applies unconditionally —
+ *     no ESTABLISHED gate, no grace period — because occlusion is a
+ *     purely geometric fact, not a lattice-order judgement call: a node
+ *     sitting on top of a connection hides it right now regardless of
+ *     whether its neighbours are "established". This is exactly how
+ *     production map "yugen" got a real, live system (Raihbaka) sitting
+ *     precisely on another connection's line with its own edge fully
+ *     swallowed by that same line — copied straight off the live database
+ *     row, on-grid, non-colliding, yet clearly wrong. Without this check
+ *     such a node reads as "already validly placed" and is never even
+ *     offered to placeIncrementalNodes, so pickPlacementCell's clean-cell
+ *     search (see below) never gets a chance to rescue it.
  * Locked nodes are ground truth: they're never classified (a caller never
  * needs to place or keep them — they're excluded from output entirely,
  * exactly like every other layout box in this engine already treats them)
- * but they DO occupy their cell for everyone else's collision check.
+ * but they DO occupy their cell, and participate in edge geometry, for
+ * everyone else's checks.
  *
  * CHEWY PATCH: ESTABLISHED gate + one-cycle grace period. A k-space
  * member only enters the lattice-order check — as a judge (comparison
@@ -127,6 +146,7 @@ const cellKey = (c: CellCoord): string => `${c.col},${c.row}`;
 export const classifyNodes = (
   nodes: LayoutNodeInput[],
   gateEdges: LayoutEdgeInput[],
+  chainEdges: LayoutEdgeInput[],
   kspaceMemberIds: ReadonlySet<string>,
   regionData: RegionLayoutData | null,
 ): NodeClassification => {
@@ -231,11 +251,30 @@ export const classifyNodes = (
     [...inversionCount.entries()].filter(([, count]) => count > MAX_TOLERATED_INVERSIONS).map(([id]) => id),
   );
 
+  // CHEWY PATCH: rule 4 above — a node occluding a connection it isn't an
+  // endpoint of is never "already validly placed", ESTABLISHED or not.
+  // Uses each node's EXACT pixel-derived cell (not the rounded `cellOf`
+  // above): occlusion is a real, rendered-geometry fact, and a locked
+  // node's edge can be genuinely off-grid.
+  const exactCellOf = (n: LayoutNodeInput): CellCoord => ({ col: n.x / CELL_W, row: n.y / CELL_H });
+  const occludingIds = new Set<string>();
+  for (const e of [...gateEdges, ...chainEdges]) {
+    const source = nodeById.get(e.source);
+    const target = nodeById.get(e.target);
+    if (!source || !target) continue;
+    const a = exactCellOf(source);
+    const b = exactCellOf(target);
+    for (const n of nodes) {
+      if (n.id === e.source || n.id === e.target || occludingIds.has(n.id)) continue;
+      if (nodeOccludesEdge(exactCellOf(n), a, b)) occludingIds.add(n.id);
+    }
+  }
+
   const validCells = new Map<string, CellCoord>();
   const toPlace: string[] = [];
   for (const n of nodes) {
     if (n.locked) continue;
-    const valid = isOnGrid(n) && !collidingIds.has(n.id) && !invertedIds.has(n.id);
+    const valid = isOnGrid(n) && !collidingIds.has(n.id) && !invertedIds.has(n.id) && !occludingIds.has(n.id);
     if (valid) validCells.set(n.id, cellOf(n));
     else toPlace.push(n.id);
   }
@@ -246,17 +285,21 @@ export const classifyNodes = (
 // Placement — where does a new/invalid node go, without touching anyone else?
 // ---------------------------------------------------------------------------
 
-/** Deterministic expanding-ring search for the nearest free cell to `target` (Euclidean distance, then column, then row for reproducible ties). */
-const nearestFreeCell = (target: CellCoord, occupied: ReadonlySet<string>): CellCoord => {
-  if (!occupied.has(cellKey(target))) return target;
-  for (let radius = 1; radius <= 4000; radius++) {
+/** Deterministic expanding-ring search for the nearest cell satisfying `isAcceptable`, starting at `target` itself (Euclidean distance, then column, then row for reproducible ties). Returns null when nothing within `maxRadius` rings qualifies. */
+const nearestAcceptableCell = (
+  target: CellCoord,
+  isAcceptable: (cell: CellCoord) => boolean,
+  maxRadius: number,
+): CellCoord | null => {
+  if (isAcceptable(target)) return target;
+  for (let radius = 1; radius <= maxRadius; radius++) {
     let best: CellCoord | null = null;
     let bestDist = Infinity;
     for (let dCol = -radius; dCol <= radius; dCol++) {
       for (let dRow = -radius; dRow <= radius; dRow++) {
         if (Math.max(Math.abs(dCol), Math.abs(dRow)) !== radius) continue; // only this ring
         const candidate: CellCoord = { col: target.col + dCol, row: target.row + dRow };
-        if (occupied.has(cellKey(candidate))) continue;
+        if (!isAcceptable(candidate)) continue;
         const dist = Math.hypot(dCol, dRow);
         const better =
           dist < bestDist ||
@@ -271,8 +314,82 @@ const nearestFreeCell = (target: CellCoord, occupied: ReadonlySet<string>): Cell
     }
     if (best) return best;
   }
-  return target; // unreachable in practice (radius 4000 covers any real map)
+  return null;
 };
+
+// ---------------------------------------------------------------------------
+// CHEWY PATCH: the two geometry predicates this task exists to enforce.
+// Both operate in CELL space (col, row) = (x / CELL_W, y / CELL_H) — exact
+// integers for every candidate/committed/valid cell, floating point for a
+// locked node's real (possibly off-grid) position. dev/layout-bench.mjs's
+// new `occlusion` scenario and pack.ts implement the same two rules
+// independently for their own paths; all three MUST agree on the rules
+// themselves (see the ticket), which is exactly what's written out below.
+// ---------------------------------------------------------------------------
+
+const GEOMETRY_EPS = 1e-6;
+
+/** True when a, b, c are collinear in cell space (cross-product test). */
+const cellsCollinear = (a: CellCoord, b: CellCoord, c: CellCoord): boolean =>
+  Math.abs((b.col - a.col) * (c.row - a.row) - (b.row - a.row) * (c.col - a.col)) < GEOMETRY_EPS;
+
+const isSameCell = (a: CellCoord, b: CellCoord): boolean =>
+  Math.abs(a.col - b.col) < GEOMETRY_EPS && Math.abs(a.row - b.row) < GEOMETRY_EPS;
+
+/** True when point `p` lies ON segment [a,b]: collinear with it AND within its closed bounding box. */
+const pointOnSegment = (a: CellCoord, b: CellCoord, p: CellCoord): boolean =>
+  cellsCollinear(a, b, p) &&
+  p.col >= Math.min(a.col, b.col) - GEOMETRY_EPS &&
+  p.col <= Math.max(a.col, b.col) + GEOMETRY_EPS &&
+  p.row >= Math.min(a.row, b.row) - GEOMETRY_EPS &&
+  p.row <= Math.max(a.row, b.row) + GEOMETRY_EPS;
+
+/**
+ * Node-occlusion rule: `node` occludes edge [a,b] when it sits strictly ON
+ * the segment but is NOT one of the edge's own two endpoints — touching an
+ * endpoint means it IS one of that edge's own systems, which is fine;
+ * sitting anywhere strictly between them hides the connection (the
+ * yugen defect: Raihbaka sitting exactly on Ibani->Irmalin's midpoint).
+ */
+const nodeOccludesEdge = (node: CellCoord, a: CellCoord, b: CellCoord): boolean =>
+  !isSameCell(node, a) && !isSameCell(node, b) && pointOnSegment(a, b, node);
+
+/**
+ * Edge-overlap rule: two edges overlap when they are COLLINEAR (every
+ * endpoint on the same line) AND their 1-D projections along that line
+ * share MORE than a single point — two edges that merely touch at a
+ * shared endpoint, at any angle (including running the same direction
+ * from it, as long as they don't share any further stretch beyond that
+ * one point), are fine; lying along the same line and sharing any
+ * positive-length stretch is not (the yugen defect: Ibani->Raihbaka fully
+ * inside Ibani->Irmalin).
+ */
+const edgesOverlap = (a1: CellCoord, b1: CellCoord, a2: CellCoord, b2: CellCoord): boolean => {
+  if (isSameCell(a1, b1) || isSameCell(a2, b2)) return false; // degenerate edge can't overlap anything
+  if (!cellsCollinear(a1, b1, a2) || !cellsCollinear(a1, b1, b2)) return false;
+  // Project onto whichever axis edge1 spreads more along — avoids
+  // collapsing a purely-vertical or purely-horizontal line to one point.
+  const useCol = Math.abs(b1.col - a1.col) >= Math.abs(b1.row - a1.row);
+  const project = (p: CellCoord): number => (useCol ? p.col : p.row);
+  const lo1 = Math.min(project(a1), project(b1));
+  const hi1 = Math.max(project(a1), project(b1));
+  const lo2 = Math.min(project(a2), project(b2));
+  const hi2 = Math.max(project(a2), project(b2));
+  return Math.min(hi1, hi2) - Math.max(lo1, lo2) > GEOMETRY_EPS;
+};
+
+/**
+ * How far outward pickPlacementCell (below) widens its search for a CLEAN
+ * cell before giving up and falling back to the nearest merely-free cell
+ * (radius 4000, "any real map"). Every real placement branch's `ideal`
+ * target is one cell from an already-placed anchor, so a genuinely clean
+ * alternative — if the local neighbourhood has one at all — is found
+ * within a handful of rings in practice; 256 is generous headroom for a
+ * dense cluster while staying trivially cheap (worst case a few hundred
+ * thousand candidate checks, sub-millisecond for the graph sizes this
+ * engine ever sees).
+ */
+const CLEAN_SEARCH_RADIUS = 256;
 
 const buildAdjacency = (edges: LayoutEdgeInput[]): Map<string, string[]> => {
   const adj = new Map<string, string[]>();
@@ -289,11 +406,98 @@ interface PlacementCtx {
   /** node id -> cell, for every node placed so far (originally-valid plus everything placed earlier in this same pass). */
   cells: Map<string, CellCoord>;
   occupied: Set<string>;
+  // CHEWY PATCH: fixed for the whole placeIncrementalNodes call — geometry
+  // inputs pickPlacementCell needs to keep a newly placed node from ever
+  // hiding, or being hidden behind, an existing connection (see its own
+  // header below). `allEdges` is gate + chain together: the overlap rule
+  // cares about ANY two collinear edges regardless of connection type
+  // (the yugen defect this task fixes is a gate edge swallowing a
+  // wormhole edge). `lockedPositions` uses each locked node's EXACT
+  // (possibly off-grid) pixel-derived cell, never rounded — a locked
+  // node's real edge geometry must be judged on its real position.
+  gateAdj: ReadonlyMap<string, string[]>;
+  chainAdj: ReadonlyMap<string, string[]>;
+  allEdges: readonly LayoutEdgeInput[];
+  lockedPositions: ReadonlyMap<string, CellCoord>;
 }
 
 const commit = (ctx: PlacementCtx, id: string, cell: CellCoord): void => {
   ctx.cells.set(id, cell);
   ctx.occupied.add(cellKey(cell));
+};
+
+/** `id`'s own cell if already committed this pass, else its cell if it's a locked ground-truth node — the two sources of a "real, trustworthy" position pickPlacementCell can build edge geometry from. */
+const knownCellOf = (ctx: PlacementCtx, id: string): CellCoord | undefined =>
+  ctx.cells.get(id) ?? ctx.lockedPositions.get(id);
+
+/**
+ * CHEWY PATCH: the actual fix. Every placement branch below used to hand
+ * its `ideal` anchor cell straight to nearestFreeCell, whose only notion
+ * of "free" was "no other node's cell" — exactly how yugen's Raihbaka
+ * ended up sitting ON Ibani->Irmalin's line (node occlusion) with its own
+ * Ibani->Raihbaka edge fully swallowed by that same line (edge overlap).
+ * This widens the search: a candidate cell is acceptable only when it is
+ * unoccupied AND placing `id` there introduces neither defect against any
+ * OTHER node/edge with an already-known (committed-this-pass, valid, or
+ * locked) position:
+ *   - `id` itself must not land ON any existing edge (nodeOccludesEdge);
+ *   - no existing node may end up ON one of `id`'s own new edges (one per
+ *     already-known graph neighbour, gate or chain);
+ *   - none of `id`'s new edges may collinearly overlap an existing edge,
+ *     OR another of `id`'s own new edges (two edges sharing `id` as an
+ *     endpoint but extending the same way past each other still hide one
+ *     behind the other from that point on).
+ * Widens outward up to CLEAN_SEARCH_RADIUS; if nothing within that radius
+ * qualifies, falls back to the nearest merely-free cell — an imperfect
+ * placement beats no placement — but a further CLEAN cell always wins
+ * over a nearer dirty one, since the clean search exhausts its whole
+ * radius before that fallback ever runs.
+ */
+const pickPlacementCell = (id: string, ideal: CellCoord, ctx: PlacementCtx): CellCoord => {
+  const knownIds = new Set<string>([...ctx.cells.keys(), ...ctx.lockedPositions.keys()]);
+  knownIds.delete(id);
+
+  const knownEdges: Array<readonly [CellCoord, CellCoord]> = [];
+  for (const e of ctx.allEdges) {
+    if (e.source === id || e.target === id) continue;
+    const a = knownCellOf(ctx, e.source);
+    const b = knownCellOf(ctx, e.target);
+    if (a && b) knownEdges.push([a, b]);
+  }
+
+  const neighbourEntries: Array<{ id: string; cell: CellCoord }> = [];
+  const neighbourIdSet = new Set<string>([...(ctx.gateAdj.get(id) ?? []), ...(ctx.chainAdj.get(id) ?? [])]);
+  for (const neighbourId of neighbourIdSet) {
+    const cell = knownCellOf(ctx, neighbourId);
+    if (cell) neighbourEntries.push({ id: neighbourId, cell });
+  }
+
+  const isClean = (candidate: CellCoord): boolean => {
+    for (const [a, b] of knownEdges) {
+      if (pointOnSegment(a, b, candidate)) return false;
+    }
+    for (let i = 0; i < neighbourEntries.length; i++) {
+      const neighbour = neighbourEntries[i];
+      for (const otherId of knownIds) {
+        if (otherId === neighbour.id) continue;
+        if (nodeOccludesEdge(knownCellOf(ctx, otherId)!, candidate, neighbour.cell)) return false;
+      }
+      for (const [a, b] of knownEdges) {
+        if (edgesOverlap(candidate, neighbour.cell, a, b)) return false;
+      }
+      for (let j = i + 1; j < neighbourEntries.length; j++) {
+        if (edgesOverlap(candidate, neighbour.cell, candidate, neighbourEntries[j].cell)) return false;
+      }
+    }
+    return true;
+  };
+
+  const clean = nearestAcceptableCell(
+    ideal,
+    cell => !ctx.occupied.has(cellKey(cell)) && isClean(cell),
+    CLEAN_SEARCH_RADIUS,
+  );
+  return clean ?? nearestAcceptableCell(ideal, cell => !ctx.occupied.has(cellKey(cell)), 4000) ?? ideal;
 };
 
 /**
@@ -311,7 +515,8 @@ const commit = (ctx: PlacementCtx, id: string, cell: CellCoord): void => {
  * gate edge usually runs to its nearest not-yet-used lattice neighbour,
  * see dev/layout-bench.mjs's own extendGraph). Either way, lands one cell
  * further out in the same left/right + above/below direction the anchor
- * is from this node on the lattice, on the nearest free cell.
+ * is from this node on the lattice, on the nearest CLEAN free cell (see
+ * pickPlacementCell).
  *
  * CHEWY PATCH: returns `null` — never a raw, unsnapped fallback — when no
  * already-placed lattice member exists anywhere yet, instead of reaching
@@ -325,6 +530,7 @@ const commit = (ctx: PlacementCtx, id: string, cell: CellCoord): void => {
  * -position fallback if that also comes up empty.
  */
 const placeLatticeNode = (
+  id: string,
   lattice: CellCoord,
   latticeById: ReadonlyMap<string, CellCoord>,
   graphNeighbourIds: readonly string[],
@@ -333,13 +539,13 @@ const placeLatticeNode = (
   const nearestAnchor = (candidateIds: Iterable<string>): string | null => {
     let anchorId: string | null = null;
     let bestDist = Infinity;
-    for (const id of candidateIds) {
-      const otherLattice = latticeById.get(id);
-      if (!otherLattice || !ctx.cells.has(id)) continue;
+    for (const candidateId of candidateIds) {
+      const otherLattice = latticeById.get(candidateId);
+      if (!otherLattice || !ctx.cells.has(candidateId)) continue;
       const d = Math.hypot(otherLattice.col - lattice.col, otherLattice.row - lattice.row);
-      if (d < bestDist || (d === bestDist && (anchorId === null || id < anchorId))) {
+      if (d < bestDist || (d === bestDist && (anchorId === null || candidateId < anchorId))) {
         bestDist = d;
-        anchorId = id;
+        anchorId = candidateId;
       }
     }
     return anchorId;
@@ -353,7 +559,7 @@ const placeLatticeNode = (
   const dCol = Math.sign(lattice.col - anchorLattice.col);
   const dRow = Math.sign(lattice.row - anchorLattice.row);
   const ideal: CellCoord = { col: anchorCell.col + dCol, row: anchorCell.row + dRow };
-  return nearestFreeCell(ideal, ctx.occupied);
+  return pickPlacementCell(id, ideal, ctx);
 };
 
 /**
@@ -390,7 +596,7 @@ const placeAdjacentNode = (
     dRow = axis === 'top_to_bottom' ? 1 : 0;
   }
   const ideal: CellCoord = { col: neighbourCell.col + dCol, row: neighbourCell.row + dRow };
-  return nearestFreeCell(ideal, ctx.occupied);
+  return pickPlacementCell(nodeId, ideal, ctx);
 };
 
 export interface IncrementalLayoutResult {
@@ -425,12 +631,24 @@ export const placeIncrementalNodes = (
     }
   }
 
-  const ctx: PlacementCtx = { cells: new Map(classification.validCells), occupied: new Set() };
-  for (const cell of ctx.cells.values()) ctx.occupied.add(cellKey(cell));
   // Locked nodes are pinned ground truth: never placed, but their cell is
-  // off-limits to everyone else.
+  // off-limits to everyone else (`occupied`) and their EXACT — possibly
+  // off-grid — real position feeds pickPlacementCell's geometry checks
+  // (`lockedPositions`), since a locked node's real edges are real too.
+  const lockedPositions = new Map<string, CellCoord>();
+  const ctx: PlacementCtx = {
+    cells: new Map(classification.validCells),
+    occupied: new Set(),
+    gateAdj,
+    chainAdj,
+    allEdges: [...gateEdges, ...chainEdges],
+    lockedPositions,
+  };
+  for (const cell of ctx.cells.values()) ctx.occupied.add(cellKey(cell));
   for (const n of nodes) {
-    if (n.locked) ctx.occupied.add(cellKey({ col: Math.round(n.x / CELL_W), row: Math.round(n.y / CELL_H) }));
+    if (!n.locked) continue;
+    ctx.occupied.add(cellKey({ col: Math.round(n.x / CELL_W), row: Math.round(n.y / CELL_H) }));
+    lockedPositions.set(n.id, { col: n.x / CELL_W, row: n.y / CELL_H });
   }
 
   const positions: Record<string, { x: number; y: number }> = {};
@@ -457,7 +675,7 @@ export const placeIncrementalNodes = (
 
     const lattice = latticeById.get(id);
     let target: CellCoord | null = lattice
-      ? placeLatticeNode(lattice, latticeById, [...viaGate, ...viaChain], ctx)
+      ? placeLatticeNode(id, lattice, latticeById, [...viaGate, ...viaChain], ctx)
       : null;
     if (!target) {
       if (viaChain.length > 0) {
@@ -467,7 +685,7 @@ export const placeIncrementalNodes = (
       }
     }
     if (!target) {
-      target = nearestFreeCell({ col: Math.round(node.x / CELL_W), row: Math.round(node.y / CELL_H) }, ctx.occupied);
+      target = pickPlacementCell(id, { col: Math.round(node.x / CELL_W), row: Math.round(node.y / CELL_H) }, ctx);
     }
 
     commit(ctx, id, target);

@@ -8,9 +8,12 @@
 //   1. QUALITY   — does a from-scratch beautify produce a decent map (few
 //                  edge crossings, tight bounding box, short edges, no
 //                  overlapping systems, everything grid-aligned,
-//                  deterministic output for the same input, and
-//                  IDEMPOTENT: beautifying an already-beautified map with
-//                  nothing else changed moves nothing)?
+//                  deterministic output for the same input, IDEMPOTENT:
+//                  beautifying an already-beautified map with nothing else
+//                  changed moves nothing, and — the two rules this file
+//                  once missed entirely — no two edges COLLINEAR-OVERLAP
+//                  (one hiding another) and no node sits strictly on top
+//                  of an edge it isn't an endpoint of (hiding it)?
 //   2. STABILITY — when a system is added to an already-beautified map and
 //                  it's re-beautified, how much does the existing map
 //                  reshuffle? Measured two ways:
@@ -43,11 +46,15 @@
 //                  point, and landed near the already-placed neighbour
 //                  they were attached to — since a perfect "existing
 //                  nodes didn't move" score can otherwise hide a new
-//                  system dumped off-grid far from the map.
+//                  system dumped off-grid far from the map. It also
+//                  re-checks the same edge-overlap/node-occlusion rules
+//                  as QUALITY on the post-insertion layout: a newly added
+//                  system must not hide, or be hidden behind, a
+//                  connection either.
 //
 // Run: `node dev/layout-bench.mjs` (plain Node, no install step, no Bun).
 // Flags:
-//   --scenario <name>     limit to one scenario (yugen|chain|kspace-wide|mixed)
+//   --scenario <name>     limit to one scenario (yugen|chain|kspace-wide|mixed|occlusion)
 //   --json <path>         write the full structured result as JSON
 //   --compare <path.json> diff against a previous --json run; prints a
 //                         delta table and exits 1 if anything regressed
@@ -257,6 +264,94 @@ function segmentsIntersect(p1, p2, p3, p4) {
   if (o3 === 0 && onSeg(p3, p1, p4)) return true;
   if (o4 === 0 && onSeg(p3, p2, p4)) return true;
   return false;
+}
+
+// CHEWY PATCH: two geometric rules the crossings/overlaps metrics above
+// never checked — "lines can intersect but must never fully overlap in a
+// way that hides a connection". Both work in CELL space (col = x/CELL_W,
+// row = y/CELL_H), not pixels, per the fixture that exposed the bug.
+const OVERLAP_EPS = 1e-6;
+
+const toCell = (p, CELL_W, CELL_H) => ({ x: p.x / CELL_W, y: p.y / CELL_H });
+
+/** Edge segments in CELL space, skipping self-loops and zero-length edges
+ *  (a degenerate point can never "hide" a connection, so it is excluded
+ *  from both rules below rather than falsely matching everything). */
+function overlapSegs(edges, finalPos, CELL_W, CELL_H) {
+  const segs = [];
+  for (const e of edges) {
+    const p1 = finalPos.get(e.source);
+    const p2 = finalPos.get(e.target);
+    if (!p1 || !p2 || e.source === e.target) continue;
+    const c1 = toCell(p1, CELL_W, CELL_H);
+    const c2 = toCell(p2, CELL_W, CELL_H);
+    if (
+      Math.abs(c1.x - c2.x) < OVERLAP_EPS &&
+      Math.abs(c1.y - c2.y) < OVERLAP_EPS
+    )
+      continue;
+    segs.push({ source: e.source, target: e.target, p1: c1, p2: c2 });
+  }
+  return segs;
+}
+
+/** Length of the shared stretch of two COLLINEAR segments' 1-D projections
+ *  onto their common line; 0 (or negative) if they only touch at a single
+ *  point or don't touch at all. A single shared endpoint (two edges
+ *  fanning out from the same node) projects to a zero-length intersection
+ *  and is correctly NOT an overlap; anything sharing more than that single
+ *  point — including one edge being a subset of the other, e.g. a
+ *  duplicate edge between the same two nodes — returns a positive length. */
+function collinearOverlapLength(a, b) {
+  const d1x = a.p2.x - a.p1.x;
+  const d1y = a.p2.y - a.p1.y;
+  const d2x = b.p2.x - b.p1.x;
+  const d2y = b.p2.y - b.p1.y;
+  if (Math.abs(d1x * d2y - d1y * d2x) > OVERLAP_EPS) return 0; // not parallel
+  const vx = b.p1.x - a.p1.x;
+  const vy = b.p1.y - a.p1.y;
+  if (Math.abs(d1x * vy - d1y * vx) > OVERLAP_EPS) return 0; // parallel, different line
+  const useX = Math.abs(d1x) >= Math.abs(d1y);
+  const aLo = useX ? Math.min(a.p1.x, a.p2.x) : Math.min(a.p1.y, a.p2.y);
+  const aHi = useX ? Math.max(a.p1.x, a.p2.x) : Math.max(a.p1.y, a.p2.y);
+  const bLo = useX ? Math.min(b.p1.x, b.p2.x) : Math.min(b.p1.y, b.p2.y);
+  const bHi = useX ? Math.max(b.p1.x, b.p2.x) : Math.max(b.p1.y, b.p2.y);
+  return Math.min(aHi, bHi) - Math.max(aLo, bLo);
+}
+
+/** Rule 1: unordered edge pairs whose segments are collinear and share a
+ *  positive-length stretch (CELL space). Counts each pair exactly once. */
+function edgeOverlapPairs(edges, finalPos, CELL_W, CELL_H) {
+  const segs = overlapSegs(edges, finalPos, CELL_W, CELL_H);
+  let pairs = 0;
+  for (let i = 0; i < segs.length; i++)
+    for (let j = i + 1; j < segs.length; j++)
+      if (collinearOverlapLength(segs[i], segs[j]) > OVERLAP_EPS) pairs++;
+  return pairs;
+}
+
+/** Rule 2: a node "occludes" an edge when its centre lies STRICTLY between
+ *  (not at) that edge's two endpoints (CELL space). Touching an endpoint
+ *  does not count — only strictly-interior points do. */
+function nodeOcclusions(nodeIds, edges, finalPos, CELL_W, CELL_H) {
+  const segs = overlapSegs(edges, finalPos, CELL_W, CELL_H);
+  let count = 0;
+  for (const id of nodeIds) {
+    const p = finalPos.get(id);
+    if (!p) continue;
+    const c = toCell(p, CELL_W, CELL_H);
+    for (const s of segs) {
+      if (id === s.source || id === s.target) continue;
+      const dx = s.p2.x - s.p1.x;
+      const dy = s.p2.y - s.p1.y;
+      const vx = c.x - s.p1.x;
+      const vy = c.y - s.p1.y;
+      if (Math.abs(dx * vy - dy * vx) > OVERLAP_EPS) continue; // not on the line
+      const t = (vx * dx + vy * dy) / (dx * dx + dy * dy);
+      if (t > OVERLAP_EPS && t < 1 - OVERLAP_EPS) count++;
+    }
+  }
+  return count;
 }
 
 /** Prim's MST over (col,row) points; returns [id,id] edge pairs. */
@@ -528,6 +623,84 @@ function buildMixedScenario(kspaceWide) {
   return { name: "mixed", nodes, edges };
 }
 
+// CHEWY PATCH: regression fixture captured verbatim from the LIVE production
+// map "yugen" (29 systems, 32 connections) on the day a user reported that a
+// wormhole link to Raihbaka was invisible. The snapshot contains BOTH defects
+// the rules above exist to catch, twice over:
+//   Ibani->Raihbaka   (wormhole) hidden inside Irmalin->Ibani   (gate), Raihbaka on the line
+//   Gebuladi->Gomati  (wormhole) hidden inside Eszur->Gebuladi  (gate), Gomati   on the line
+// A real map of realistic size, so its stability numbers mean the same thing
+// as every other scenario here (a 4-node fixture reads one moved node as
+// movedFrac 1.00 and is useless for the stability thresholds).
+function buildOcclusionScenario() {
+  const nodes = [
+    { id: "30002093", x: 360, y: 225, locked: false },
+    { id: "30002094", x: 900, y: 225, locked: false },
+    { id: "30002095", x: 720, y: 225, locked: false },
+    { id: "30002099", x: 1260, y: -375, locked: false },
+    { id: "30002100", x: 1260, y: -300, locked: false },
+    { id: "30002101", x: 900, y: -150, locked: false },
+    { id: "30002102", x: 1620, y: -150, locked: false },
+    { id: "30002515", x: 1620, y: 0, locked: false },
+    { id: "30002517", x: 540, y: -225, locked: false },
+    { id: "30002537", x: 1080, y: -75, locked: false },
+    { id: "30002539", x: 360, y: 150, locked: false },
+    { id: "30002540", x: 1260, y: 75, locked: false },
+    { id: "30002541", x: 1800, y: 150, locked: false },
+    { id: "30002542", x: 1620, y: -75, locked: false },
+    { id: "30002983", x: 540, y: 300, locked: false },
+    { id: "30003068", x: 2160, y: 450, locked: false },
+    { id: "30003571", x: 0, y: 150, locked: false },
+    { id: "30003930", x: -360, y: 525, locked: false },
+    { id: "30003932", x: -540, y: 600, locked: false },
+    { id: "30003933", x: -540, y: 675, locked: false },
+    { id: "30003935", x: -180, y: 675, locked: false },
+    { id: "30005212", x: 1260, y: 0, locked: false },
+    { id: "30045315", x: -360, y: 675, locked: false },
+    { id: "31000126", x: 720, y: -225, locked: false },
+    { id: "31001021", x: 180, y: 150, locked: false },
+    { id: "30000070", x: 540, y: 225, locked: false },
+    { id: "30002090", x: 720, y: 0, locked: false },
+    { id: "30002091", x: 180, y: 75, locked: false },
+    { id: "30002092", x: 1080, y: 75, locked: false },
+  ];
+  const edges = [
+    { source: "30002540", target: "30002541", type: 1 },
+    { source: "30002541", target: "30002542", type: 1 },
+    { source: "30002542", target: "30002537", type: 1 },
+    { source: "30002541", target: "30002537", type: 1 },
+    { source: "30002542", target: "30002515", type: 0 },
+    { source: "30002542", target: "30003068", type: 1 },
+    { source: "30002542", target: "30002539", type: 1 },
+    { source: "30002539", target: "30002537", type: 1 },
+    { source: "30002541", target: "30002539", type: 1 },
+    { source: "30002539", target: "30002095", type: 1 },
+    { source: "30002095", target: "30002093", type: 1 },
+    { source: "30002093", target: "30000070", type: 0 },
+    { source: "30002093", target: "30002983", type: 0 },
+    { source: "30002093", target: "30002091", type: 1 },
+    { source: "30002091", target: "30002090", type: 1 },
+    { source: "30002090", target: "30002092", type: 1 },
+    { source: "30002092", target: "30002094", type: 1 },
+    { source: "30002092", target: "30005212", type: 0 },
+    { source: "30002094", target: "30002095", type: 1 },
+    { source: "30002539", target: "31001021", type: 0 },
+    { source: "31001021", target: "30003571", type: 0 },
+    { source: "30002517", target: "30002099", type: 1 },
+    { source: "30002099", target: "30002100", type: 1 },
+    { source: "30002100", target: "30002101", type: 1 },
+    { source: "30002537", target: "30002517", type: 1 },
+    { source: "30002101", target: "30002102", type: 1 },
+    { source: "30002102", target: "30002100", type: 1 },
+    { source: "30002517", target: "31000126", type: 0 },
+    { source: "30003935", target: "30003933", type: 1 },
+    { source: "30003933", target: "30045315", type: 0 },
+    { source: "30003933", target: "30003932", type: 1 },
+    { source: "30003932", target: "30003930", type: 1 },
+  ];
+  return { name: "occlusion", nodes, edges };
+}
+
 // ---------------------------------------------------------------------------
 // Quality metrics
 // ---------------------------------------------------------------------------
@@ -618,6 +791,10 @@ function computeQuality(nodes, edges, finalPos, CELL_W, CELL_H) {
     offGrid,
     gateEdgeCells: edgeStats(gateLens),
     wormholeEdgeCells: edgeStats(whLens),
+    // CHEWY PATCH: lines can cross but must never fully hide a connection —
+    // see the geometry helpers above segmentsIntersect for the exact rules.
+    edgeOverlapPairs: edgeOverlapPairs(edges, finalPos, CELL_W, CELL_H),
+    nodeOcclusions: nodeOcclusions(ids, edges, finalPos, CELL_W, CELL_H),
   };
 }
 
@@ -822,6 +999,21 @@ async function runStability(
       const rtInv = rankInversionCount(baseIds, P1positions, rtP2);
       // CHEWY PATCH: how did the k NEWLY ADDED nodes themselves land?
       const rtNew = newNodeMetrics(rtEnlarged.added, rtP2, CELL_W, CELL_H);
+      // CHEWY PATCH: did inserting the k new nodes/edges make any edge hide
+      // another, or drop a node onto an edge it isn't an endpoint of?
+      const rtOverlapPairs = edgeOverlapPairs(
+        rtEnlarged.edges,
+        rtP2,
+        CELL_W,
+        CELL_H,
+      );
+      const rtOcclusions = nodeOcclusions(
+        rtEnlarged.nodes.map((n) => n.id),
+        rtEnlarged.edges,
+        rtP2,
+        CELL_W,
+        CELL_H,
+      );
       rtRepeats.push({
         ...rtShift,
         rankInversions: rtInv,
@@ -829,6 +1021,8 @@ async function runStability(
         newOffGrid: rtNew.offGrid,
         newUnplaced: rtNew.unplaced,
         newAnchorDists: rtNew.anchorDists,
+        edgeOverlapPairs: rtOverlapPairs,
+        nodeOcclusions: rtOcclusions,
       });
 
       // Cold (still meaningful, NOT the primary number): grow the RAW,
@@ -872,6 +1066,18 @@ async function runStability(
     const newAnchorCells = edgeStats(
       rtRepeats.flatMap((x) => x.newAnchorDists),
     );
+    // CHEWY PATCH: edgeOverlapPairs/nodeOcclusions are hard invariants too,
+    // same summed-not-averaged treatment as newOffGrid/newUnplaced above —
+    // a newly placed system must not hide, or be hidden behind, a
+    // connection in any of the 10 repeats.
+    const edgeOverlapPairsTotal = rtRepeats.reduce(
+      (s, x) => s + x.edgeOverlapPairs,
+      0,
+    );
+    const nodeOcclusionsTotal = rtRepeats.reduce(
+      (s, x) => s + x.nodeOcclusions,
+      0,
+    );
     roundTrip[k] = {
       movedFraction: {
         mean: avg(rtRepeats, "movedFraction"),
@@ -895,6 +1101,8 @@ async function runStability(
       newOffGrid,
       newUnplaced,
       newAnchorCells,
+      edgeOverlapPairs: edgeOverlapPairsTotal,
+      nodeOcclusions: nodeOcclusionsTotal,
     };
     cold[k] = {
       movedFraction: {
@@ -947,6 +1155,8 @@ function printQualityTable(scenarios) {
     "whMean",
     "whMax",
     "offGrid",
+    "edgeOverlap",
+    "occlusion",
     "determ.",
     "idempotent",
   ];
@@ -961,6 +1171,8 @@ function printQualityTable(scenarios) {
     fmt(s.quality.wormholeEdgeCells.mean),
     fmt(s.quality.wormholeEdgeCells.max),
     s.quality.offGrid,
+    s.quality.edgeOverlapPairs,
+    s.quality.nodeOcclusions,
     s.determinism.ok ? "yes" : "NO",
     s.idempotent.movedFraction === 0
       ? "0"
@@ -995,6 +1207,8 @@ function printRoundTripStabilityTable(scenarios) {
     "newUnplaced",
     "newAnchor(mean)",
     "newAnchor(max)",
+    "edgeOverlap",
+    "occlusion",
   ];
   const rows = [];
   for (const s of scenarios) {
@@ -1013,6 +1227,8 @@ function printRoundTripStabilityTable(scenarios) {
         st.newUnplaced,
         fmt(st.newAnchorCells.mean),
         fmt(st.newAnchorCells.max),
+        st.edgeOverlapPairs,
+        st.nodeOcclusions,
       ]);
     }
   }
@@ -1080,6 +1296,18 @@ function scenarioVerdict(s) {
   const worstAnchorMax = Math.max(
     ...K_VALUES.map((k) => s.stability.roundTrip[k].newAnchorCells.max),
   );
+  // CHEWY PATCH: edgeOverlapPairs/nodeOcclusions are summed across k, same
+  // hard-zero treatment as newOffGrid/newUnplaced — inserting new systems
+  // must never make one edge hide another, or drop a node onto an edge it
+  // isn't an endpoint of.
+  const totalEdgeOverlapPairs = K_VALUES.reduce(
+    (sum, k) => sum + s.stability.roundTrip[k].edgeOverlapPairs,
+    0,
+  );
+  const totalNodeOcclusions = K_VALUES.reduce(
+    (sum, k) => sum + s.stability.roundTrip[k].nodeOcclusions,
+    0,
+  );
   const movedOk = worstMoved <= ROUND_TRIP_THRESHOLDS.movedFraction;
   const shiftOk = worstShift <= ROUND_TRIP_THRESHOLDS.meanShiftCells;
   const invOk = worstInv <= ROUND_TRIP_THRESHOLDS.rankInversions;
@@ -1089,6 +1317,8 @@ function scenarioVerdict(s) {
   const anchorOk =
     worstAnchorMean <= ROUND_TRIP_THRESHOLDS.newAnchorCellsMean &&
     worstAnchorMax <= ROUND_TRIP_THRESHOLDS.newAnchorCellsMax;
+  const edgeOverlapOk = totalEdgeOverlapPairs === 0;
+  const nodeOcclusionOk = totalNodeOcclusions === 0;
   return {
     movedOk,
     shiftOk,
@@ -1097,6 +1327,8 @@ function scenarioVerdict(s) {
     newOffGridOk,
     newUnplacedOk,
     anchorOk,
+    edgeOverlapOk,
+    nodeOcclusionOk,
     worstMoved,
     worstShift,
     worstInv,
@@ -1104,6 +1336,8 @@ function scenarioVerdict(s) {
     totalNewUnplaced,
     worstAnchorMean,
     worstAnchorMax,
+    totalEdgeOverlapPairs,
+    totalNodeOcclusions,
     pass:
       movedOk &&
       shiftOk &&
@@ -1111,7 +1345,9 @@ function scenarioVerdict(s) {
       idempotentOk &&
       newOffGridOk &&
       newUnplacedOk &&
-      anchorOk,
+      anchorOk &&
+      edgeOverlapOk &&
+      nodeOcclusionOk,
   };
 }
 
@@ -1125,6 +1361,8 @@ function printVerdictTable(scenarios) {
     "newOffGrid==0",
     "newUnplaced==0",
     "newAnchor<=2.0/4",
+    "edgeOverlap==0",
+    "occlusion==0",
     "PASS",
   ];
   const rows = scenarios.map((s) => {
@@ -1138,6 +1376,8 @@ function printVerdictTable(scenarios) {
       `${v.newOffGridOk ? "yes" : "NO"} (${v.totalNewOffGrid})`,
       `${v.newUnplacedOk ? "yes" : "NO"} (${v.totalNewUnplaced})`,
       `${v.anchorOk ? "yes" : "NO"} (${fmt(v.worstAnchorMean)}/${fmt(v.worstAnchorMax)})`,
+      `${v.edgeOverlapOk ? "yes" : "NO"} (${v.totalEdgeOverlapPairs})`,
+      `${v.nodeOcclusionOk ? "yes" : "NO"} (${v.totalNodeOcclusions})`,
       v.pass ? "PASS" : "FAIL",
     ];
   });
@@ -1186,6 +1426,15 @@ const HARD_ZERO_METRICS = [
   "idempotent.movedFraction",
   "stability.roundTrip.newOffGrid",
   "stability.roundTrip.newUnplaced",
+  // CHEWY PATCH: lines can cross but must never fully hide a connection —
+  // an edge pair collinear-overlapping, or a node sitting on an edge it
+  // isn't an endpoint of, is exactly as much a hard failure as
+  // overlaps/offGrid above, at both the quality level and (per k) the
+  // round-trip post-insertion level.
+  "edgeOverlapPairs",
+  "nodeOcclusions",
+  "stability.roundTrip.edgeOverlapPairs",
+  "stability.roundTrip.nodeOcclusions",
 ];
 // Metrics where a HIGHER current value is the improvement (a regression is
 // a DECREASE beyond tolerance) — every other metric is "lower is better".
@@ -1206,6 +1455,8 @@ function flattenScenarioMetrics(s) {
     spanCols: s.quality.spanCols,
     spanRows: s.quality.spanRows,
     offGrid: s.quality.offGrid,
+    edgeOverlapPairs: s.quality.edgeOverlapPairs,
+    nodeOcclusions: s.quality.nodeOcclusions,
     "gateEdgeCells.mean": s.quality.gateEdgeCells.mean,
     "gateEdgeCells.max": s.quality.gateEdgeCells.max,
     "wormholeEdgeCells.mean": s.quality.wormholeEdgeCells.mean,
@@ -1233,6 +1484,10 @@ function flattenScenarioMetrics(s) {
       s.stability.roundTrip[k].newAnchorCells.mean;
     out[`stability.roundTrip.newAnchorCells.max@k${k}`] =
       s.stability.roundTrip[k].newAnchorCells.max;
+    out[`stability.roundTrip.edgeOverlapPairs@k${k}`] =
+      s.stability.roundTrip[k].edgeOverlapPairs;
+    out[`stability.roundTrip.nodeOcclusions@k${k}`] =
+      s.stability.roundTrip[k].nodeOcclusions;
     out[`stability.cold.movedFraction@k${k}`] =
       s.stability.cold[k].movedFraction.mean;
     out[`stability.cold.meanShiftCells@k${k}`] =
@@ -1343,6 +1598,7 @@ async function main() {
     chain: buildChainScenario(),
     "kspace-wide": kspaceWide,
     mixed: buildMixedScenario(kspaceWide),
+    occlusion: buildOcclusionScenario(),
   };
 
   const names = opts.scenario ? [opts.scenario] : Object.keys(allScenarios);
@@ -1418,6 +1674,11 @@ async function main() {
     if (s.quality.offGrid !== 0) hardFail = true;
     if (!s.determinism.ok) hardFail = true;
     if (s.idempotent.movedFraction !== 0) hardFail = true;
+    // CHEWY PATCH: lines can cross but must never fully hide a connection —
+    // an overlapping edge pair or an occluding node is a hard failure at
+    // the quality level too, same treatment as overlaps/offGrid.
+    if (s.quality.edgeOverlapPairs !== 0) hardFail = true;
+    if (s.quality.nodeOcclusions !== 0) hardFail = true;
     // CHEWY PATCH: a newly added node landing off-grid, or left exactly at
     // its raw drop point, is just as much a hard failure as an existing
     // node overlapping/off-grid — this is the exact defect class that used
@@ -1425,13 +1686,18 @@ async function main() {
     for (const k of K_VALUES) {
       if (s.stability.roundTrip[k].newOffGrid !== 0) hardFail = true;
       if (s.stability.roundTrip[k].newUnplaced !== 0) hardFail = true;
+      // CHEWY PATCH: same for the post-insertion layout — inserting k new
+      // systems must not make an edge hide another or drop a node onto one.
+      if (s.stability.roundTrip[k].edgeOverlapPairs !== 0) hardFail = true;
+      if (s.stability.roundTrip[k].nodeOcclusions !== 0) hardFail = true;
     }
   }
   if (hardFail) {
     console.error(
       "\nFAIL: a hard invariant was violated (overlaps/offGrid must be 0; output must be deterministic; " +
         "an unchanged already-beautified map must stay unchanged on repeat beautify; every newly added " +
-        "node must land on-grid and must actually be moved off its raw drop point).\n",
+        "node must land on-grid and must actually be moved off its raw drop point; no edge pair may " +
+        "collinear-overlap and no node may sit on an edge it isn't an endpoint of).\n",
     );
   }
 
