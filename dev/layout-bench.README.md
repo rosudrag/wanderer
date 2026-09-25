@@ -23,6 +23,7 @@ Flags:
 | `--scenario <name>` | run only one of `yugen`, `chain`, `kspace-wide`, `mixed`, `occlusion` |
 | `--json <path>` | write the full structured result (every metric, every k, every scenario) to `<path>` |
 | `--compare <baseline.json>` | diff the current run against a prior `--json` output; prints a delta table and **exits 1** if anything regressed beyond tolerance |
+| `--standoff <cells>` | run every scenario with `BeautifyOptions.chainStandoff` set (the `WANDERER_CHAIN_STANDOFF` feature). Default `0` is the shipped default, so a plain run still measures upstream geometry |
 
 Typical workflow when changing the engine:
 
@@ -131,6 +132,18 @@ exactly what the engine's own contract promises).
   Not a pass/fail gate; it is the repair pass's tie-breaker
   (`pack.ts` `candidateCompare`), so it is tracked to catch "cleared an
   occlusion by flinging a node across the map".
+- **chainClearanceCells** (`chainClear` column) — the closest any chain-only
+  system (one with no gate edge on the map) gets to a k-space system, in
+  cells (Chebyshev). `-` when the scenario has no chain-only systems. This is
+  what `--standoff` buys: measured on the live `yugen` map, clearance goes
+  from 1 cell (chain drawn inside the Dotlan lattice) to the configured
+  standoff, with the lattice's own column span and mean gate-edge length left
+  unchanged — chains are moved OUT past the lattice edge rather than given
+  room inside it. Reserving lanes inside the lattice was tried first and
+  rejected: it took yugen's mean gate edge from 3.3 to 7.3 cells and its
+  column span from 12 to 25, i.e. it destroyed the geometry the pocket exists
+  to protect. Cost of the shipped approach: taller map (yugen 8 -> 14 rows at
+  standoff 2) and longer chain connectors (`whMean` 1.1 -> 5.4 cells).
 - **determinism** — the scenario is laid out twice from identical input;
   `true` iff the two `JSON.stringify`d results are byte-identical. A `false`
   here is also a hard failure.

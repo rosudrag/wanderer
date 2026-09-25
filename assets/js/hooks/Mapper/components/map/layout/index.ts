@@ -141,6 +141,9 @@ export const beautifyLayout = async (
   const hubs = options.hubs ?? [];
   const explicitRootId = options.rootId ?? null;
   const requestedMode = options.mode ?? 'auto';
+  // CHEWY PATCH: clearance (in cells) between a wormhole chain and its k-space
+  // anchor; 0 = upstream behaviour. Fractional/negative input is clamped away.
+  const chainStandoff = Math.max(0, Math.floor(options.chainStandoff ?? 0));
 
   const nodeById = new Map(nodes.map(n => [n.id, n]));
   const nodeIds = new Set(nodeById.keys());
@@ -223,6 +226,7 @@ export const beautifyLayout = async (
       regionData,
       axis,
       classification!,
+      chainStandoff,
     );
 
     // Lightweight rootId pick — mirrors step 3's partition below, without
@@ -329,7 +333,24 @@ export const beautifyLayout = async (
     };
   }
 
-  // --- 2. K-space geographic set + topological fallback -------------------
+  // --- 2. Chain attachment points -----------------------------------------
+  //
+  // CHEWY PATCH: which k-space systems have a wormhole chain hanging off them.
+  // With `chainStandoff` on, those chains are pushed out of the lattice
+  // entirely (see step 4) instead of growing through it.
+  const chainAnchorIds = new Set<string>();
+  if (chainStandoff > 0) {
+    for (const edge of chainEdges) {
+      if (kspaceMemberIds.has(edge.source) && !kspaceMemberIds.has(edge.target)) {
+        chainAnchorIds.add(edge.source);
+      }
+      if (kspaceMemberIds.has(edge.target) && !kspaceMemberIds.has(edge.source)) {
+        chainAnchorIds.add(edge.target);
+      }
+    }
+  }
+
+  // --- 3. K-space geographic set + topological fallback -------------------
 
   const boxes: LayoutBox[] = [];
   /** k-space node id -> its proposed (pre-pack) global cell, used to seed wormhole-chain attachment anchors. */
@@ -443,7 +464,16 @@ export const beautifyLayout = async (
       reportedRootSize = explicitRootId && rootId === explicitRootId ? Infinity : component.length;
     }
 
-    const { localCells, depths } = layoutChainTree(effectiveNodes, compEdges, axis, rootId);
+    // CHEWY PATCH (chain pockets): a chain hanging off a k-space system grows
+    // along the CROSS axis when standoff is on, so it runs OUT of the lattice
+    // (down, for the default left-to-right layout) instead of along it.
+    const componentHasLatticeAnchor = chainStandoff > 0 && component.some(id => chainAnchorIds.has(id));
+    const chainAxis: BeautifyAxis = componentHasLatticeAnchor
+      ? axis === 'left_to_right'
+        ? 'top_to_bottom'
+        : 'left_to_right'
+      : axis;
+    const { localCells, depths } = layoutChainTree(effectiveNodes, compEdges, chainAxis, rootId);
 
     let anchorId = rootId;
     if (pinnedCandidates.length > 0) {
@@ -471,6 +501,50 @@ export const beautifyLayout = async (
     }
 
     if (cells.size === 0) continue; // every member was a k-space attachment point; nothing new to place
+
+    // CHEWY PATCH (chain standoff): a chain hanging off a k-space system used
+    // to start in the cell immediately next to it. On a Dotlan-geometry
+    // cluster — whose own gate gaps are compressed to a single cell
+    // (kspaceLayout.ts LOCAL_PACK_CELLS) — that means the chain grows straight
+    // through the lattice the user navigates by, and there is no free cell
+    // beside the anchor to move it into.
+    //
+    // So the chain is moved OUT of the lattice instead of inside it: it keeps
+    // its anchor's column (so it still reads as hanging off that system) and
+    // starts `chainStandoff` cells past the lattice's own edge on whichever
+    // side its anchor is closer to, growing further out from there. The
+    // lattice itself is not touched at all — no reserved lanes, no stretched
+    // gate edges (a first attempt reserved lanes INSIDE the lattice and blew
+    // yugen's mean gate edge from 3.3 to 7.3 cells, which is exactly the
+    // Dotlan readability this is supposed to protect).
+    if (chainStandoff > 0 && chainAnchorIds.has(anchorId)) {
+      const anchorCell = kspaceProposedCell.get(anchorId);
+      const latticeCells = [...kspaceProposedCell.values()];
+      if (anchorCell && latticeCells.length > 0) {
+        const alongRows = axis !== 'top_to_bottom';
+        const values = latticeCells.map(cell => (alongRows ? cell.row : cell.col));
+        const low = Math.min(...values);
+        const high = Math.max(...values);
+        const anchorValue = alongRows ? anchorCell.row : anchorCell.col;
+        // Nearest lattice edge, so the connector back to the anchor stays as
+        // short as the geometry allows; ties go to the high side for a stable,
+        // predictable "chains hang below the map" reading.
+        const useHighSide = high - anchorValue <= anchorValue - low;
+        const edgeValue = useHighSide ? high + chainStandoff + 1 : low - chainStandoff - 1;
+
+        const rootCell = cells.get(rootId) ?? [...cells.values()][0];
+        const shiftCol = alongRows ? anchorCell.col - rootCell.col : edgeValue - rootCell.col;
+        const shiftRow = alongRows ? edgeValue - rootCell.row : anchorCell.row - rootCell.row;
+        // The tree grows along the cross axis from its root; flip it so it
+        // grows AWAY from the lattice when hanging off the low side.
+        const flip = useHighSide ? 1 : -1;
+        for (const [id, cell] of cells) {
+          const col = alongRows ? cell.col + shiftCol : rootCell.col + shiftCol + (cell.col - rootCell.col) * flip;
+          const row = alongRows ? rootCell.row + shiftRow + (cell.row - rootCell.row) * flip : cell.row + shiftRow;
+          cells.set(id, { col, row });
+        }
+      }
+    }
 
     // CHEWY PATCH: if this chain is anchored to a k-space member, fold its
     // cells directly into that member's OWN box instead of pushing a

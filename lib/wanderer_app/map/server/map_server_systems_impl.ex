@@ -593,7 +593,19 @@ defmodule WandererApp.Map.Server.SystemsImpl do
       {:ok, location} ->
         rtree_name = "rtree_#{map_id}"
 
-        {:ok, position} = calc_new_system_position(map_id, old_location, rtree_name, map_opts)
+        # CHEWY PATCH: keep a scanned wormhole out of the k-space lattice it was
+        # scanned from (0 unless WANDERER_CHAIN_STANDOFF is set).
+        insert_opts =
+          Keyword.put(
+            map_opts,
+            :chain_standoff,
+            WandererApp.Map.ChainStandoff.cells(
+              old_location && old_location.solar_system_id,
+              location.solar_system_id
+            )
+          )
+
+        {:ok, position} = calc_new_system_position(map_id, old_location, rtree_name, insert_opts)
 
         case WandererApp.MapSystemRepo.get_by_map_and_solar_system_id(
                map_id,

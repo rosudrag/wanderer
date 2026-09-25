@@ -158,6 +158,18 @@ connection_traffic =
   |> get_var_from_path_or_env("WANDERER_CONNECTION_TRAFFIC", "false")
   |> String.to_existing_atom()
 
+# CHEWY PATCH: clearance (in grid cells) between a wormhole chain and the
+# k-space system it hangs off, for the beautifier AND tidy insert. 0 = upstream
+# behaviour. Non-numeric input falls back to 0 rather than crashing boot.
+chain_standoff_cells =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_CHAIN_STANDOFF", "0")
+  |> Integer.parse()
+  |> case do
+    {value, _rest} when value > 0 -> value
+    _ -> 0
+  end
+
 # CHEWY PATCH: DEV-ONLY authentication bypass token for GET /dev/login (see
 # WandererApp.Env.dev_auth_enabled?/0 and WandererAppWeb.DevAuthController).
 # No default, no boolean flag — unset/empty means the endpoint stays a 404.
@@ -227,6 +239,8 @@ config :wanderer_app,
   # CHEWY PATCH: map beautifier / tidy-insert feature flags.
   map_beautifier: map_beautifier,
   tidy_insert: tidy_insert,
+  # CHEWY PATCH: chain/k-space clearance, see WandererApp.Env.chain_standoff_cells/0.
+  chain_standoff_cells: chain_standoff_cells,
   # CHEWY PATCH: connection traffic counter, see WandererApp.Map.ConnectionTraffic.
   connection_traffic: connection_traffic,
   # CHEWY PATCH: DEV-ONLY authentication bypass token, see dev_auth_token above.

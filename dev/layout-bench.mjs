@@ -768,6 +768,34 @@ function edgeStats(values) {
   };
 }
 
+/** CHEWY PATCH: minimum Chebyshev cell distance between a chain-only system
+ *  (one with no gate edge on this map — the engine's own k-space/chain split)
+ *  and any gate-connected system. Infinity when either side is empty. */
+function chainClearanceCells(nodes, edges, finalPos, CELL_W, CELL_H) {
+  const latticeIds = new Set();
+  for (const e of edges) {
+    if (e.type !== 1) continue;
+    latticeIds.add(e.source);
+    latticeIds.add(e.target);
+  }
+  const cellOf = (id) => {
+    const p = finalPos.get(id);
+    return p ? { col: p.x / CELL_W, row: p.y / CELL_H } : null;
+  };
+  let min = Infinity;
+  for (const node of nodes) {
+    if (latticeIds.has(node.id)) continue;
+    const a = cellOf(node.id);
+    if (!a) continue;
+    for (const latticeId of latticeIds) {
+      const b = cellOf(latticeId);
+      if (!b) continue;
+      min = Math.min(min, Math.max(Math.abs(a.col - b.col), Math.abs(a.row - b.row)));
+    }
+  }
+  return min;
+}
+
 function computeQuality(nodes, edges, finalPos, CELL_W, CELL_H) {
   const ids = [...finalPos.keys()];
 
@@ -847,6 +875,12 @@ function computeQuality(nodes, edges, finalPos, CELL_W, CELL_H) {
       (sum, s) => sum + cellDist(s.p2.x - s.p1.x, s.p2.y - s.p1.y, CELL_W, CELL_H),
       0,
     ),
+    // CHEWY PATCH: how close the nearest wormhole-chain system gets to a
+    // k-space system it isn't attached to, in cells (Chebyshev). This is what
+    // BeautifyOptions.chainStandoff buys: the whole point of a pocket is that
+    // the chain does NOT sit on the Dotlan-geometry lattice the map is read by.
+    // Infinity when the scenario has no chain-only nodes or no gate edges.
+    chainClearanceCells: chainClearanceCells(nodes, edges, finalPos, CELL_W, CELL_H),
   };
 }
 
@@ -1210,6 +1244,7 @@ function printQualityTable(scenarios) {
     "edgeOverlap",
     "occlusion",
     "edgeLen",
+    "chainClear",
     "determ.",
     "idempotent",
   ];
@@ -1227,6 +1262,7 @@ function printQualityTable(scenarios) {
     s.quality.edgeOverlapPairs,
     s.quality.nodeOcclusions,
     fmt(s.quality.totalEdgeCells),
+    Number.isFinite(s.quality.chainClearanceCells) ? fmt(s.quality.chainClearanceCells) : "-",
     s.determinism.ok ? "yes" : "NO",
     s.idempotent.movedFraction === 0
       ? "0"
@@ -1512,6 +1548,9 @@ function flattenScenarioMetrics(s) {
     edgeOverlapPairs: s.quality.edgeOverlapPairs,
     nodeOcclusions: s.quality.nodeOcclusions,
     totalEdgeCells: s.quality.totalEdgeCells,
+    chainClearanceCells: Number.isFinite(s.quality.chainClearanceCells)
+      ? s.quality.chainClearanceCells
+      : null,
     "gateEdgeCells.mean": s.quality.gateEdgeCells.mean,
     "gateEdgeCells.max": s.quality.gateEdgeCells.max,
     "wormholeEdgeCells.mean": s.quality.wormholeEdgeCells.mean,
@@ -1628,11 +1667,15 @@ function runCompare(current, baselinePath) {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const opts = { scenario: null, json: null, compare: null };
+  const opts = { scenario: null, json: null, compare: null, standoff: 0 };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--scenario") opts.scenario = argv[++i];
     else if (argv[i] === "--json") opts.json = argv[++i];
     else if (argv[i] === "--compare") opts.compare = argv[++i];
+    // CHEWY PATCH: run every scenario with a chain/k-space standoff of N cells
+    // (BeautifyOptions.chainStandoff / WANDERER_CHAIN_STANDOFF). Default 0 is
+    // the shipped default, so a plain run still measures upstream geometry.
+    else if (argv[i] === "--standoff") opts.standoff = Number.parseInt(argv[++i], 10) || 0;
     else {
       process.stderr.write(`Unknown argument: ${argv[i]}\n`);
       process.exit(1);
@@ -1644,7 +1687,12 @@ function parseArgs(argv) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const { mod } = await loadEngine();
-  const { beautifyLayout, CELL_W, CELL_H } = mod;
+  const { CELL_W, CELL_H } = mod;
+  const beautifyLayout =
+    opts.standoff > 0
+      ? (nodes, edges, options = {}) =>
+          mod.beautifyLayout(nodes, edges, { ...options, chainStandoff: opts.standoff })
+      : mod.beautifyLayout;
 
   const regionSystems = loadRegionSystems();
   const kspaceWide = buildKspaceWideScenario(regionSystems);

@@ -567,6 +567,12 @@ const placeLatticeNode = (
  * (i.e. keep growing the branch the same way it's already growing);
  * defaults to the primary layout axis if the neighbour has no established
  * direction of its own (it's a lone anchor, e.g. a fresh attachment point).
+ *
+ * CHEWY PATCH: `standoff` adds that many extra cells when the neighbour is a
+ * k-space system — a chain must not start inside the Dotlan-geometry lattice
+ * the user navigates by (see BeautifyOptions.chainStandoff). It is deliberately
+ * NOT applied chain-to-chain: inside a chain, adjacent hops are the readable
+ * thing.
  */
 const placeAdjacentNode = (
   nodeId: string,
@@ -574,6 +580,8 @@ const placeAdjacentNode = (
   adjacency: ReadonlyMap<string, string[]>,
   axis: BeautifyAxis,
   ctx: PlacementCtx,
+  standoff: number,
+  kspaceMemberIds: ReadonlySet<string>,
 ): CellCoord => {
   const neighbourId = [...neighbourIds].sort()[0];
   const neighbourCell = ctx.cells.get(neighbourId)!;
@@ -593,7 +601,8 @@ const placeAdjacentNode = (
     dCol = axis === 'left_to_right' ? 1 : 0;
     dRow = axis === 'top_to_bottom' ? 1 : 0;
   }
-  const ideal: CellCoord = { col: neighbourCell.col + dCol, row: neighbourCell.row + dRow };
+  const reach = kspaceMemberIds.has(neighbourId) && !kspaceMemberIds.has(nodeId) ? 1 + standoff : 1;
+  const ideal: CellCoord = { col: neighbourCell.col + dCol * reach, row: neighbourCell.row + dRow * reach };
   return pickPlacementCell(nodeId, ideal, ctx);
 };
 
@@ -616,6 +625,8 @@ export const placeIncrementalNodes = (
   regionData: RegionLayoutData | null,
   axis: BeautifyAxis,
   classification: NodeClassification,
+  /** CHEWY PATCH: extra cells between a chain node and a k-space neighbour — see BeautifyOptions.chainStandoff. */
+  chainStandoff = 0,
 ): IncrementalLayoutResult => {
   const nodeById = new Map(nodes.map(n => [n.id, n]));
   const chainAdj = buildAdjacency(chainEdges);
@@ -677,9 +688,9 @@ export const placeIncrementalNodes = (
       : null;
     if (!target) {
       if (viaChain.length > 0) {
-        target = placeAdjacentNode(id, viaChain, chainAdj, axis, ctx);
+        target = placeAdjacentNode(id, viaChain, chainAdj, axis, ctx, chainStandoff, kspaceMemberIds);
       } else if (viaGate.length > 0) {
-        target = placeAdjacentNode(id, viaGate, gateAdj, axis, ctx);
+        target = placeAdjacentNode(id, viaGate, gateAdj, axis, ctx, chainStandoff, kspaceMemberIds);
       }
     }
     if (!target) {

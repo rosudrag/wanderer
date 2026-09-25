@@ -57,6 +57,16 @@ export interface BeautifyOptions {
    *   stable without ever needing an explicit flag from the caller.
    */
   mode?: 'auto' | 'incremental' | 'full';
+  /**
+   * CHEWY PATCH: extra cells of clearance between a wormhole chain and the
+   * k-space system it hangs off (`WANDERER_CHAIN_STANDOFF`). 0 (default) is
+   * upstream behaviour: the chain root sits in the cell immediately next to
+   * its anchor, which on a Dotlan-geometry k-space cluster means the chain
+   * grows straight through the lattice it should be readable against.
+   * A value of n pushes the whole chain n further cells away from its
+   * anchor, opening a pocket of empty grid between the two.
+   */
+  chainStandoff?: number;
 }
 
 /**

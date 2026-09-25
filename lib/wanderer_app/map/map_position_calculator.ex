@@ -72,11 +72,15 @@ defmodule WandererApp.Map.PositionCalculator do
   @doc false
   def tidy_insert_candidates(start_x, start_y, opts) do
     {{px, py}, {sx, sy}} = tidy_insert_axes(opts[:layout])
+    # CHEWY PATCH: extra pitches for a wormhole scanned out of a k-space system,
+    # so it doesn't land inside the Dotlan-geometry lattice (0 = upstream).
+    # See WandererApp.Map.ChainStandoff.
+    standoff = opts[:chain_standoff] || 0
 
     for primary <- @tidy_primary_offsets, secondary <- @tidy_fan do
       {
-        start_x + px * primary + sx * secondary,
-        start_y + py * primary + sy * secondary
+        start_x + px * (primary + standoff) + sx * secondary,
+        start_y + py * (primary + standoff) + sy * secondary
       }
     end
   end

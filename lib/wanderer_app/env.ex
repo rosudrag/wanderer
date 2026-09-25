@@ -21,6 +21,10 @@ defmodule WandererApp.Env do
   # CHEWY PATCH: map beautifier / tidy-insert layout feature flags, default off.
   def map_beautifier?(), do: get_key(:map_beautifier, false)
   def tidy_insert?(), do: get_key(:tidy_insert, false)
+  # CHEWY PATCH: cells of clearance between a wormhole chain and the k-space
+  # system it hangs off, for both the beautifier and tidy insert. 0 (default)
+  # is upstream behaviour: a scanned hole lands in the cell next to its origin.
+  def chain_standoff_cells(), do: get_key(:chain_standoff_cells, 0)
   # CHEWY PATCH: keep map_chain_v1.count_of_passage current and broadcast it,
   # so the UI can weight a connection by how much it is actually used.
   # See WandererApp.Map.ConnectionTraffic.

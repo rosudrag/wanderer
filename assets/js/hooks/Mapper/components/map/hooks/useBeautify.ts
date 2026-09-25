@@ -125,6 +125,9 @@ export const useBeautify = () => {
           hubs,
           kspaceMode,
           mode,
+          // CHEWY PATCH: server-configured chain/k-space clearance
+          // (WANDERER_CHAIN_STANDOFF); absent or unparseable means 0 = upstream.
+          chainStandoff: Number.parseInt(options.chain_standoff_cells ?? '0', 10) || 0,
         });
 
         // CHEWY PATCH: a no-op used to return silently, so the button looked
