@@ -27,7 +27,9 @@ defmodule Mix.Tasks.Wanderer.Dev.Seed do
   @impl Mix.Task
   def run(args) do
     {opts, _} =
-      OptionParser.parse!(args, strict: [map_name: :string, slug: :string])
+      OptionParser.parse!(args,
+        strict: [map_name: :string, slug: :string, reset_positions: :boolean]
+      )
 
     Mix.Task.run("app.start")
 

@@ -106,6 +106,10 @@ defmodule WandererApp.Dev.Seed do
 
     * `:map_name` - display name for the map (default `"Agent Dev Map"`)
     * `:slug` - map slug / URL segment (default `"agent-dev-map"`)
+    * `:reset_positions` - when true, rewrite every seeded system back to its
+      original deliberately-messy coordinates. Upserting a system does not
+      touch its position, so without this a second run leaves an already
+      beautified map beautified, and there is nothing left to exercise.
 
   Safe to call repeatedly: reuses the existing user, character, map,
   systems, and connections instead of duplicating them.
@@ -132,6 +136,15 @@ defmodule WandererApp.Dev.Seed do
 
     :ok = seed_systems(map, sde_loaded?)
     :ok = seed_connections(map)
+
+    if Keyword.get(opts, :reset_positions, false) do
+      :ok = reset_positions(map)
+    end
+
+    # The map LiveView only renders systems that the map server holds in memory,
+    # and the server loads them once at start. Without this a freshly seeded map
+    # opens empty until something else happens to start it.
+    :ok = start_map_server(map)
 
     Logger.warning("[WandererApp.Dev.Seed] dev map ready: /#{map.slug}")
 
@@ -238,6 +251,33 @@ defmodule WandererApp.Dev.Seed do
         )
     end)
 
+    :ok
+  end
+
+  # Positions are the one thing `upsert` leaves alone, which is what makes
+  # re-running the seeder safe. `reset_positions: true` is the deliberate
+  # opt-in that puts an already beautified map back into its messy shape.
+  defp reset_positions(map) do
+    Enum.each(@systems, fn {solar_system_id, position_x, position_y} ->
+      case MapSystem.by_map_id_and_solar_system_id(map.id, solar_system_id, authorize?: false) do
+        {:ok, system} ->
+          {:ok, _system} =
+            MapSystem.update_position(
+              system,
+              %{position_x: position_x, position_y: position_y},
+              authorize?: false
+            )
+
+        _not_found ->
+          :ok
+      end
+    end)
+
+    :ok
+  end
+
+  defp start_map_server(map) do
+    WandererApp.Map.Manager.start_map(map.id)
     :ok
   end
 

@@ -62,7 +62,16 @@ async function followAndCollectCookies(url, maxHops = 5) {
   let current = url;
 
   for (let hop = 0; hop <= maxHops; hop += 1) {
-    const response = await fetch(current, { redirect: "manual" });
+    // The jar MUST be replayed on every hop. Without it Phoenix sees an
+    // anonymous request on the redirect target and issues a fresh session
+    // cookie, which overwrites the authenticated one /dev/login just set —
+    // the request then succeeds with a logged-out session and the map page
+    // comes back without its container.
+    const cookieHeader = [...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
+    const response = await fetch(current, {
+      redirect: "manual",
+      headers: cookieHeader ? { Cookie: cookieHeader } : {},
+    });
 
     const setCookies =
       typeof response.headers.getSetCookie === "function"
