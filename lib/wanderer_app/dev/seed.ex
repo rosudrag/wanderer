@@ -259,37 +259,42 @@ defmodule WandererApp.Dev.Seed do
   end
 
   # Connections have no identity to upsert against, so duplicate suppression is
-  # a manual existence check. A stored row is an unordered pair of endpoints
-  # (nothing about `solar_system_source`/`solar_system_target` makes the edge
-  # directional), so a seed pair must be suppressed by a stored row in EITHER
-  # orientation: `source = A, target = B` must also suppress `A, B` reversed
-  # to `B, A`.
+  # a manual existence check. Two traps, both found by running this against a
+  # live instance:
+  #
+  #   * `MapConnection`'s PRIMARY read is prepared with
+  #     `FilterConnectionsByActorMap`, so an actor-less read returns nothing
+  #     even with `authorize?: false` — the guard saw 0 and re-inserted every
+  #     connection on the second run (34 rows instead of 17). The purpose-built
+  #     `:read_by_locations` action filters on its own arguments instead.
+  #   * A stored row is an unordered pair of endpoints, so a seed pair must be
+  #     suppressed by a stored row in EITHER orientation.
   defp ensure_connection(map, source, target, type) do
-    case Ash.count(
-           Ash.Query.filter(
-             MapConnection,
-             map_id == ^map.id and
-               ((solar_system_source == ^source and solar_system_target == ^target) or
-                  (solar_system_source == ^target and solar_system_target == ^source))
-           ),
-           authorize?: false
-         ) do
-      {:ok, 0} ->
-        {:ok, _connection} =
-          MapConnection.create(
-            %{
-              map_id: map.id,
-              solar_system_source: source,
-              solar_system_target: target,
-              type: type
-            },
-            authorize?: false
-          )
+    if connection_exists?(map, source, target) or connection_exists?(map, target, source) do
+      :ok
+    else
+      {:ok, _connection} =
+        MapConnection.create(
+          %{
+            map_id: map.id,
+            solar_system_source: source,
+            solar_system_target: target,
+            type: type
+          },
+          authorize?: false
+        )
 
-        :ok
+      :ok
+    end
+  end
 
-      {:ok, _existing} ->
-        :ok
+  defp connection_exists?(map, source, target) do
+    args = %{map_id: map.id, solar_system_source: source, solar_system_target: target}
+
+    case MapConnection.by_locations(args, authorize?: false) do
+      {:ok, []} -> false
+      {:ok, _found} -> true
+      {:error, _reason} -> false
     end
   end
 end
