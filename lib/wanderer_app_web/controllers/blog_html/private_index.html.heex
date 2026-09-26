@@ -27,6 +27,12 @@
             </div>
           </div>
         </div>
+        <p
+          :if={not @invite_token_valid}
+          class="ccp-font my-2 text-sm text-stone-400 text-center [text-shadow:0_0px_8px_rgba(0,0,0,0.8)]"
+        >
+          Access by invitation. Ask an administrator for an invite link, then sign in with EVE Online SSO.
+        </p>
       </div>
     </div>
   </div>
