@@ -9,9 +9,19 @@
     </.live_title>
 
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <%!-- CHEWY PATCH: upstream declares no <link rel="icon">, so browsers only
+          ever picked up /favicon.ico. Declare the SVG and PNG marks too. --%>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png" />
+    <link rel="shortcut icon" href="/favicon.ico" />
     <link rel="manifest" href="/site.webmanifest" />
 
     <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
+    <%!-- CHEWY PATCH: private instances serve their own starfield backdrop
+          instead of upstream's hosted EVE screenshot. Unset = CSS default. --%>
+    <style :if={WandererApp.Branding.background_image()}>
+      :root { --app-bg-image: url('<%= WandererApp.Branding.background_image() %>'); }
+    </style>
 
     <link
       href="https://web.ccpgamescdn.com/aws/webfonts/shentox/webfonts-2.0/Shentox-SemiBold.woff2"

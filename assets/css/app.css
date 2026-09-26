@@ -74,9 +74,13 @@ body > div:first-of-type {
 }
 
 .maps_bg {
-  /* OLD image */
-  /* background-image: url('../images/maps_bg.webp'); */
-  background-image: url('https://wanderer-industries.github.io/wanderer-assets/images/eve-screen-catalyst-expansion-bg.jpg');
+  /* CHEWY PATCH: --app-bg-image is set by the root layout when the instance
+     runs under private ChewyTech branding (see WandererApp.Branding); unset,
+     this falls back to upstream's hosted EVE screenshot byte-for-byte. */
+  background-image: var(
+    --app-bg-image,
+    url('https://wanderer-industries.github.io/wanderer-assets/images/eve-screen-catalyst-expansion-bg.jpg')
+  );
   background-size: cover;
   background-position: center;
   width: 100%;

@@ -37,6 +37,13 @@ defmodule WandererApp.Branding do
   def analytics_enabled?(), do: not private?()
 
   @doc """
+  Backdrop for the landing/blog chrome. A private instance serves its own
+  generated starfield from `priv/static` instead of upstream's hosted EVE
+  screenshot; `nil` leaves the CSS default (the upstream URL) in place.
+  """
+  def background_image(), do: if(private?(), do: "/images/ct-space-bg.webp", else: nil)
+
+  @doc """
   Whether upstream's community/funding links (YouTube, Patreon, Discord,
   the `/sponsors` nav entry) should be advertised. A private instance has
   no ChewyTech equivalents for these — they are just hidden, not replaced.
