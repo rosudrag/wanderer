@@ -74,6 +74,10 @@ services:
       # Fork-specific features, on here so an agent can actually exercise them.
       WANDERER_MAP_BEAUTIFIER: "true"
       WANDERER_TIDY_INSERT: "true"
+      # Standoff in cells, and angle discipline — both default-off in
+      # production config, both on here so they can actually be looked at.
+      WANDERER_CHAIN_STANDOFF: "${WANDERER_CHAIN_STANDOFF:-2}"
+      WANDERER_ANGLE_SNAP: "${WANDERER_ANGLE_SNAP:-true}"
 
 volumes:
   wanderer-agent-db-data: {}
