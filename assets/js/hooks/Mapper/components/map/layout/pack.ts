@@ -9,7 +9,7 @@
 // regions, rounding) are considered. The safety net makes "no two nodes
 // ever share a cell" a hard invariant regardless of upstream logic.
 
-import { segmentHitsNodeBox } from './geometry';
+import { countOffAngleEdges, segmentHitsNodeBox } from './geometry';
 import type { CellCoord, LayoutBox, LayoutQuality } from './types';
 
 interface Rect {
@@ -381,6 +381,79 @@ const countNodeOcclusions = (edges: CrossingEdge[], cells: Map<string, CellCoord
   return total;
 };
 
+/**
+ * CHEWY PATCH: the part of `violationScore` that a single node's position can
+ * change — every crossing/overlap pair with at least one edge incident to
+ * `nodeId`, plus every occlusion where `nodeId`'s box covers a line or one of
+ * its own lines runs under someone else's box.
+ *
+ * Moving one node leaves every other term of the global score identical, so
+ * `local(after) - local(before)` IS the exact global delta — which is what
+ * makes octilinear.ts's sweep both cheap (O(deg*E + deg*N) per trial instead
+ * of O(E^2 + E*N)) and monotone: it only accepts strictly-improving moves, so
+ * the global score falls every accept and the pass cannot cycle.
+ */
+export const localViolationScore = (
+  edges: CrossingEdge[],
+  cells: Map<string, CellCoord>,
+  nodeId: string,
+): number => {
+  const incidentIndices: number[] = [];
+  for (let i = 0; i < edges.length; i++) {
+    const edge = edges[i];
+    if (edge.source === edge.target) continue;
+    if (edge.source === nodeId || edge.target === nodeId) incidentIndices.push(i);
+  }
+
+  let crossings = 0;
+  let overlapPairs = 0;
+  for (const i of incidentIndices) {
+    const a = edges[i];
+    const pa = cells.get(a.source);
+    const pb = cells.get(a.target);
+    if (!pa || !pb) continue;
+    for (let j = 0; j < edges.length; j++) {
+      if (j === i) continue;
+      const b = edges[j];
+      if (b.source === b.target) continue;
+      // Pairs where BOTH edges touch nodeId are visited twice; keep the first.
+      if ((b.source === nodeId || b.target === nodeId) && j < i) continue;
+      const pc = cells.get(b.source);
+      const pd = cells.get(b.target);
+      if (!pc || !pd) continue;
+      if (edgesOverlap(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) overlapPairs++;
+      if (a.source === b.source || a.source === b.target || a.target === b.source || a.target === b.target) continue;
+      if (segmentsIntersect(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) crossings++;
+    }
+  }
+
+  let occlusions = 0;
+  const self = cells.get(nodeId);
+  for (const i of incidentIndices) {
+    const edge = edges[i];
+    const pa = cells.get(edge.source);
+    const pb = cells.get(edge.target);
+    if (!pa || !pb) continue;
+    for (const [otherId, p] of cells) {
+      if (otherId === edge.source || otherId === edge.target) continue;
+      if (nodeOccludesEdge(p.col, p.row, pa.col, pa.row, pb.col, pb.row)) occlusions++;
+    }
+  }
+  if (self) {
+    for (let i = 0; i < edges.length; i++) {
+      const edge = edges[i];
+      if (edge.source === edge.target) continue;
+      if (edge.source === nodeId || edge.target === nodeId) continue;
+      const pa = cells.get(edge.source);
+      const pb = cells.get(edge.target);
+      if (!pa || !pb) continue;
+      if (nodeOccludesEdge(self.col, self.row, pa.col, pa.row, pb.col, pb.row)) occlusions++;
+    }
+  }
+
+  return crossings * CROSSING_WEIGHT + overlapPairs * OVERLAP_WEIGHT + occlusions * OCCLUSION_WEIGHT;
+};
+
 const MAX_CROSSING_ITERATIONS = 20000;
 
 // CHEWY PATCH: a node's displacement is measured from its OWN post-pack
@@ -592,6 +665,7 @@ export const measureLayout = (edges: CrossingEdge[], cells: Map<string, CellCoor
   overlaps: countEdgeOverlapPairs(edges, cells),
   occlusions: countNodeOcclusions(edges, cells),
   edgeLength: totalEdgeLength(edges, cells),
+  offAngle: countOffAngleEdges(edges, cells),
 });
 
 /**

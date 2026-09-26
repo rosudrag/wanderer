@@ -796,6 +796,35 @@ function chainClearanceCells(nodes, edges, finalPos, CELL_W, CELL_H) {
   return min;
 }
 
+/** CHEWY PATCH: connections drawn along a cell step outside the engine's
+ *  ANGLE_DIRECTIONS (geometry.ts) — independently reimplemented here, like
+ *  every other metric, so the bench can disagree with the engine. */
+function offAngleEdges(edges, finalPos, CELL_W, CELL_H) {
+  const directions = [
+    [1, 0],
+    [0, 1],
+    [1, 1],
+    [1, 2],
+  ];
+  const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
+  let total = 0;
+  for (const e of edges) {
+    if (e.source === e.target) continue;
+    const p1 = finalPos.get(e.source);
+    const p2 = finalPos.get(e.target);
+    if (!p1 || !p2) continue;
+    const dCol = Math.abs(Math.round((p2.x - p1.x) / CELL_W));
+    const dRow = Math.abs(Math.round((p2.y - p1.y) / CELL_H));
+    if (dCol === 0 && dRow === 0) continue;
+    const divisor = gcd(Math.max(dCol, dRow), Math.min(dCol, dRow)) || 1;
+    const col = dCol / divisor;
+    const row = dRow / divisor;
+    const onAngle = directions.some(([dirCol, dirRow]) => col === dirCol && row === dirRow);
+    if (!onAngle) total++;
+  }
+  return total;
+}
+
 function computeQuality(nodes, edges, finalPos, CELL_W, CELL_H) {
   const ids = [...finalPos.keys()];
 
@@ -881,6 +910,9 @@ function computeQuality(nodes, edges, finalPos, CELL_W, CELL_H) {
     // the chain does NOT sit on the Dotlan-geometry lattice the map is read by.
     // Infinity when the scenario has no chain-only nodes or no gate edges.
     chainClearanceCells: chainClearanceCells(nodes, edges, finalPos, CELL_W, CELL_H),
+    // CHEWY PATCH: how many connections run at an angle the eye cannot group
+    // with any other — what BeautifyOptions.angleSnap minimises.
+    offAngleEdges: offAngleEdges(edges, finalPos, CELL_W, CELL_H),
   };
 }
 
@@ -1245,6 +1277,7 @@ function printQualityTable(scenarios) {
     "occlusion",
     "edgeLen",
     "chainClear",
+    "offAngle",
     "determ.",
     "idempotent",
   ];
@@ -1263,6 +1296,7 @@ function printQualityTable(scenarios) {
     s.quality.nodeOcclusions,
     fmt(s.quality.totalEdgeCells),
     Number.isFinite(s.quality.chainClearanceCells) ? fmt(s.quality.chainClearanceCells) : "-",
+    s.quality.offAngleEdges,
     s.determinism.ok ? "yes" : "NO",
     s.idempotent.movedFraction === 0
       ? "0"
@@ -1551,6 +1585,7 @@ function flattenScenarioMetrics(s) {
     chainClearanceCells: Number.isFinite(s.quality.chainClearanceCells)
       ? s.quality.chainClearanceCells
       : null,
+    offAngleEdges: s.quality.offAngleEdges,
     "gateEdgeCells.mean": s.quality.gateEdgeCells.mean,
     "gateEdgeCells.max": s.quality.gateEdgeCells.max,
     "wormholeEdgeCells.mean": s.quality.wormholeEdgeCells.mean,
@@ -1667,7 +1702,7 @@ function runCompare(current, baselinePath) {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const opts = { scenario: null, json: null, compare: null, standoff: 0 };
+  const opts = { scenario: null, json: null, compare: null, standoff: 0, angles: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--scenario") opts.scenario = argv[++i];
     else if (argv[i] === "--json") opts.json = argv[++i];
@@ -1676,6 +1711,10 @@ function parseArgs(argv) {
     // (BeautifyOptions.chainStandoff / WANDERER_CHAIN_STANDOFF). Default 0 is
     // the shipped default, so a plain run still measures upstream geometry.
     else if (argv[i] === "--standoff") opts.standoff = Number.parseInt(argv[++i], 10) || 0;
+    // CHEWY PATCH: run every scenario with angle discipline on
+    // (BeautifyOptions.angleSnap / WANDERER_ANGLE_SNAP). Default off = shipped
+    // default, so a plain run still measures upstream geometry.
+    else if (argv[i] === "--angles") opts.angles = true;
     else {
       process.stderr.write(`Unknown argument: ${argv[i]}\n`);
       process.exit(1);
@@ -1688,10 +1727,13 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const { mod } = await loadEngine();
   const { CELL_W, CELL_H } = mod;
+  const optionOverrides = {
+    ...(opts.standoff > 0 ? { chainStandoff: opts.standoff } : {}),
+    ...(opts.angles ? { angleSnap: true } : {}),
+  };
   const beautifyLayout =
-    opts.standoff > 0
-      ? (nodes, edges, options = {}) =>
-          mod.beautifyLayout(nodes, edges, { ...options, chainStandoff: opts.standoff })
+    Object.keys(optionOverrides).length > 0
+      ? (nodes, edges, options = {}) => mod.beautifyLayout(nodes, edges, { ...options, ...optionOverrides })
       : mod.beautifyLayout;
 
   const regionSystems = loadRegionSystems();

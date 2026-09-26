@@ -23,8 +23,10 @@
 
 import { pickChainRoot, layoutChainTree } from './chainLayout';
 import { layoutGeographicSet, layoutTopologicalGroup } from './kspaceLayout';
-import { packBoxes, reduceCrossings, measureLayout, qualityScore } from './pack';
+import { packBoxes, reduceCrossings, measureLayout, qualityScore, localViolationScore } from './pack';
 import { loadRegionLayouts } from './regionData';
+// CHEWY PATCH: angle discipline (WANDERER_ANGLE_SNAP) — see octilinear.ts.
+import { snapAngles } from './octilinear';
 // CHEWY PATCH: mode: 'auto' | 'incremental' | 'full' support (see the
 // mode-resolution block in beautifyLayout below and anchor.ts's header).
 import { classifyNodes, placeIncrementalNodes, INCREMENTAL_VALID_FRACTION_THRESHOLD } from './anchor';
@@ -120,12 +122,13 @@ const defectScore = (quality: LayoutQuality): number =>
 // beautifyLayout
 // ---------------------------------------------------------------------------
 
-export const beautifyLayout = async (
+/** One pass of the pipeline described in the file header. Public entry point is `beautifyLayout` below, which runs this to convergence. */
+const beautifyOnce = async (
   nodes: LayoutNodeInput[],
   edges: LayoutEdgeInput[],
   options: BeautifyOptions = {},
 ): Promise<LayoutResult> => {
-  const emptyQuality: LayoutQuality = { crossings: 0, overlaps: 0, occlusions: 0, edgeLength: 0 };
+  const emptyQuality: LayoutQuality = { crossings: 0, overlaps: 0, occlusions: 0, edgeLength: 0, offAngle: 0 };
   if (nodes.length === 0) {
     return {
       positions: {},
@@ -144,6 +147,9 @@ export const beautifyLayout = async (
   // CHEWY PATCH: clearance (in cells) between a wormhole chain and its k-space
   // anchor; 0 = upstream behaviour. Fractional/negative input is clamped away.
   const chainStandoff = Math.max(0, Math.floor(options.chainStandoff ?? 0));
+  // CHEWY PATCH: quantize connection directions as a final polish pass; off
+  // (upstream) unless the server sets WANDERER_ANGLE_SNAP. See octilinear.ts.
+  const angleSnap = options.angleSnap === true;
 
   const nodeById = new Map(nodes.map(n => [n.id, n]));
   const nodeIds = new Set(nodeById.keys());
@@ -209,6 +215,132 @@ export const beautifyLayout = async (
           return true;
         }
       : undefined;
+
+  /**
+   * CHEWY PATCH: the standoff fence the ANGLE path uses, and only it —
+   * `isCellAllowed` above stays exactly as it was for every layout produced
+   * without `angleSnap`, because the bench's round-trip stability numbers are
+   * calibrated against it (making it live+symmetric for everyone took yugen
+   * from movedFrac 0.04 to 0.16 and rank inversions from 1.5 to 4.4).
+   *
+   * Two differences, both forced by the angle pass:
+   *  - measured against the cells being improved, not `inputCells`: in full
+   *    mode the lattice has just been rebuilt somewhere else entirely, so the
+   *    user's old member positions fence off the wrong region of the grid;
+   *  - symmetric: fencing only the chain side let a k-space system be nudged
+   *    up against a chain that had just been moved clear — the same picture
+   *    with the blame reversed, and measured on the `occlusion` scenario the
+   *    clearance closed back to 1 cell that way.
+   */
+  const angleFenceFor = (
+    cells: Map<string, CellCoord>,
+  ): ((id: string, cell: CellCoord) => boolean) | undefined => {
+    if (chainStandoff <= 0) return undefined;
+    return (id: string, cell: CellCoord): boolean => {
+      const selfIsLattice = kspaceMemberIds.has(id);
+      for (const [otherId, other] of cells) {
+        if (otherId === id) continue;
+        if (kspaceMemberIds.has(otherId) === selfIsLattice) continue;
+        if (Math.max(Math.abs(cell.col - other.col), Math.abs(cell.row - other.row)) < chainStandoff) {
+          return false;
+        }
+      }
+      return true;
+    };
+  };
+
+  /**
+   * CHEWY PATCH: evict chain systems that are already inside the standoff
+   * zone. `fenceFor` only vetoes MOVES, so a system the placement step put
+   * too close to the lattice stays there — the improvement passes have no
+   * reason to touch it. Measured on the bench's `occlusion` scenario: the
+   * placement left one chain system 1 cell off the lattice, the incremental
+   * candidate comparison scored that as crowded, and the NEXT beautify moved
+   * it out. Two presses to settle, i.e. not idempotent.
+   *
+   * Nearest legal free cell wins, ties by column then row, and only if the
+   * move does not make that system's own crossings/hidden connections worse.
+   */
+  const evictCrowded = (cells: Map<string, CellCoord>): Map<string, CellCoord> => {
+    const fence = angleFenceFor(cells);
+    if (!fence) return cells;
+    const result = new Map(cells);
+    const occupied = new Set([...result.values()].map(c => `${c.col},${c.row}`));
+    const radius = chainStandoff + 2;
+
+    for (const id of [...movableIds].sort()) {
+      const from = result.get(id);
+      if (!from || fence(id, from)) continue;
+      const before = localViolationScore(cleanEdges, result, id);
+      let best: CellCoord | null = null;
+      let bestDistance = Infinity;
+      for (let dCol = -radius; dCol <= radius; dCol++) {
+        for (let dRow = -radius; dRow <= radius; dRow++) {
+          const cell = { col: from.col + dCol, row: from.row + dRow };
+          const distance = Math.hypot(dCol, dRow);
+          if (distance === 0 || distance > radius || distance > bestDistance) continue;
+          if (occupied.has(`${cell.col},${cell.row}`)) continue;
+          if (!fence(id, cell)) continue;
+          result.set(id, cell);
+          const after = localViolationScore(cleanEdges, result, id);
+          result.set(id, from);
+          if (after > before) continue;
+          if (distance < bestDistance) {
+            best = cell;
+            bestDistance = distance;
+          }
+        }
+      }
+      if (!best) continue;
+      occupied.delete(`${from.col},${from.row}`);
+      occupied.add(`${best.col},${best.row}`);
+      result.set(id, best);
+    }
+    return result;
+  };
+
+  /**
+   * CHEWY PATCH: repair and angle discipline, run to a joint fixed point.
+   *
+   * One pass each is not enough and the order cannot be chosen: repair moves
+   * nodes to clear crossings (which skews angles), the angle pass moves them
+   * onto clean directions (which opens crossing fixes repair never got to
+   * see). Measured on the bench's `occlusion` scenario with angles on and a
+   * single repair-then-snap: press one left 5 crossings, press two found 1,
+   * press three settled — i.e. the user had to press beautify three times.
+   * Alternating here converges before returning, so one press is one press.
+   *
+   * It terminates: repair strictly lowers the violation score and never sees
+   * angles at all, while the angle pass strictly lowers
+   * violations*100 + offAngle and can never raise violations. So the compound
+   * potential (violations, then off-angle edges) falls on every accepted move
+   * of either pass. The round cap is a safety net, not the exit condition.
+   */
+  const MAX_SETTLE_ROUNDS = 6;
+
+  const settle = (cells: Map<string, CellCoord>): Map<string, CellCoord> => {
+    if (!angleSnap) return reduceCrossings(cells, cleanEdges, movableIds, isCellAllowed);
+    const evicted = evictCrowded(cells);
+    let current = reduceCrossings(evicted, cleanEdges, movableIds, angleFenceFor(evicted));
+    for (let round = 0; round < MAX_SETTLE_ROUNDS; round++) {
+      const snapped = snapAngles(current, cleanEdges, {
+        movableIds,
+        isCellAllowed: angleFenceFor(current),
+      });
+      const next = reduceCrossings(snapped, cleanEdges, movableIds, angleFenceFor(snapped));
+      let changed = false;
+      for (const [id, cell] of next) {
+        const before = current.get(id);
+        if (!before || before.col !== cell.col || before.row !== cell.row) {
+          changed = true;
+          break;
+        }
+      }
+      current = next;
+      if (!changed) break;
+    }
+    return current;
+  };
 
   // CHEWY PATCH: mode resolution. regionData is needed both by the full
   // pipeline's geographic k-space layout (kspaceMode === 'geographic') and
@@ -354,20 +486,30 @@ export const beautifyLayout = async (
       return count;
     };
 
+    // CHEWY PATCH: angle discipline is applied to the WINNER, never to the
+    // candidates. Scoring snapped candidates instead changed which one wins,
+    // and the chosen one then differed from press to press: the bench's
+    // `occlusion` scenario stopped being idempotent and yugen's round-trip
+    // churn tripled (movedFrac 0.08 -> 0.27). Which layout is best is a
+    // question about crossings, hidden connections and crowding; angles are
+    // polish applied afterwards.
     const candidates = [candidateFor(mustMoveIds), candidateFor(null)].map(cells => {
       const quality = measureLayout(cleanEdges, cells);
-      return { cells, quality, emitted: emit(cells), score: defectScore(quality) + crowdedCount(cells) };
+      return { cells, quality, score: defectScore(quality) + crowdedCount(cells), movedCount: emit(cells).movedCount };
     });
     const best = candidates.reduce((a, b) =>
-      b.score < a.score || (b.score === a.score && b.emitted.movedCount < a.emitted.movedCount) ? b : a,
+      b.score < a.score || (b.score === a.score && b.movedCount < a.movedCount) ? b : a,
     );
+    const finalCells = settle(best.cells);
+    const finalQuality = measureLayout(cleanEdges, finalCells);
+    const emitted = emit(finalCells);
 
     return {
-      positions: best.emitted.positions,
+      positions: emitted.positions,
       rootId: reportedRootId,
-      movedCount: best.emitted.movedCount,
+      movedCount: emitted.movedCount,
       mode: 'incremental',
-      quality: { before: inputQuality, after: best.quality },
+      quality: { before: inputQuality, after: finalQuality },
     };
   }
 
@@ -615,8 +757,8 @@ export const beautifyLayout = async (
   // are endpoints of the same crossing, evaluated canonically (not
   // first-come) each sweep and displacement-capped. Only nodes that aren't
   // locked are eligible, so locked nodes never move.
-  const globalCells = reduceCrossings(packedCells, cleanEdges, movableIds, isCellAllowed);
-  const fullQuality = measureLayout(cleanEdges, globalCells);
+  const packedRepaired = reduceCrossings(packedCells, cleanEdges, movableIds, isCellAllowed);
+  const packedQuality = measureLayout(cleanEdges, packedRepaired);
 
   // --- 5. Auto-mode regression guard --------------------------------------
   //
@@ -635,19 +777,25 @@ export const beautifyLayout = async (
   // off-grid imports, stacked nodes — keeping it is never the better answer,
   // and a 2-cell-capped repair cannot fix it either.
   if (requestedMode === 'auto' && inputWellFormed) {
+    // Both alternatives are scored BEFORE angle discipline, for the reason
+    // the incremental path documents: which layout is best must not depend on
+    // a polish step, or the answer changes from press to press.
     const repaired = reduceCrossings(inputCells, cleanEdges, movableIds, isCellAllowed);
-    const repairedQuality = measureLayout(cleanEdges, repaired);
-    if (qualityScore(repairedQuality) < qualityScore(fullQuality)) {
-      const repairedEmit = emit(repaired);
+    if (qualityScore(measureLayout(cleanEdges, repaired)) < qualityScore(packedQuality)) {
+      const settled = settle(repaired);
+      const repairedEmit = emit(settled);
       return {
         positions: repairedEmit.positions,
         rootId: reportedRootId,
         movedCount: repairedEmit.movedCount,
         mode: 'incremental',
-        quality: { before: inputQuality, after: repairedQuality },
+        quality: { before: inputQuality, after: measureLayout(cleanEdges, settled) },
       };
     }
   }
+
+  const globalCells = settle(packedRepaired);
+  const fullQuality = measureLayout(cleanEdges, globalCells);
 
   // --- 6. Emit only genuinely-changed, unlocked nodes ----------------------
 
@@ -659,5 +807,84 @@ export const beautifyLayout = async (
     movedCount,
     mode: 'full',
     quality: { before: inputQuality, after: fullQuality },
+  };
+};
+
+/**
+ * CHEWY PATCH: how many extra passes one button press is allowed to run.
+ * Real maps need at most two (the second returns "nothing moved"); the cap
+ * only bounds a pathological input.
+ */
+const MAX_CONVERGENCE_PASSES = 4;
+
+/**
+ * Beautify to convergence: run the pipeline until a pass reports nothing left
+ * to move, and emit the combined result as one edit.
+ *
+ * A single pass is not a fixed point of itself, and never was — placement
+ * feeds repair feeds angle discipline, and each one changes what the next can
+ * see. Before this, pressing the button twice in a row kept moving systems:
+ * the bench's `occlusion` scenario settled on press two or three, which reads
+ * to a user as "the button didn't finish" and to the bench as a failed
+ * idempotence check. Converging here costs one or two extra passes of pure
+ * computation (no re-render, no server round trip) and makes one press mean
+ * one press.
+ *
+ * Only `angleSnap` layouts converge. Without it the pipeline is already a
+ * fixed point on every bench scenario, and re-running it is not free of
+ * consequence: it re-enters placement, which is what the round-trip
+ * stability numbers measure.
+ *
+ * The reported `mode`, `rootId` and `quality.before` are the FIRST pass's —
+ * they describe what the user's map was and which algorithm decided its
+ * shape. `positions`/`movedCount` are cumulative against the input, and
+ * `quality.after` is the layout actually emitted.
+ */
+export const beautifyLayout = async (
+  nodes: LayoutNodeInput[],
+  edges: LayoutEdgeInput[],
+  options: BeautifyOptions = {},
+): Promise<LayoutResult> => {
+  const first = await beautifyOnce(nodes, edges, options);
+  if (options.angleSnap !== true || first.movedCount === 0) return first;
+
+  const merged: Record<string, { x: number; y: number }> = { ...first.positions };
+  let current = nodes.map(node => (merged[node.id] ? { ...node, ...merged[node.id] } : node));
+  let last = first;
+
+  // A follow-up pass is allowed to CORRECT the last one, not to re-solve the
+  // map. Anything bigger than a handful of systems is a second opinion about
+  // the whole layout, and taking it re-enters placement: on the bench's
+  // round-trip test (add k systems, beautify again) an unlimited follow-up
+  // moved a quarter of yugen and reordered 5.2 system pairs, against 0.10 and
+  // 1.2 for the same map with the follow-up capped. Real leftovers — a chain
+  // system the placement left one cell inside the standoff zone — are one or
+  // two systems.
+  const correctionLimit = Math.max(2, Math.ceil(nodes.length * 0.05));
+
+  for (let pass = 0; pass < MAX_CONVERGENCE_PASSES; pass++) {
+    const next = await beautifyOnce(current, edges, options);
+    if (next.movedCount === 0 || next.movedCount > correctionLimit) break;
+    for (const [id, position] of Object.entries(next.positions)) merged[id] = position;
+    current = current.map(node => (next.positions[node.id] ? { ...node, ...next.positions[node.id] } : node));
+    last = next;
+  }
+
+  // A system can be moved by one pass and moved back by another; only report
+  // the systems whose final cell differs from the one they came in with.
+  const positions: Record<string, { x: number; y: number }> = {};
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  for (const [id, position] of Object.entries(merged)) {
+    const original = byId.get(id);
+    if (!original || (original.x === position.x && original.y === position.y)) continue;
+    positions[id] = position;
+  }
+
+  return {
+    positions,
+    rootId: first.rootId,
+    movedCount: Object.keys(positions).length,
+    mode: first.mode,
+    quality: { before: first.quality.before, after: last.quality.after },
   };
 };

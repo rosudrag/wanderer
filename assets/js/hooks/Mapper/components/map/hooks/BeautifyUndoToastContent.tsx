@@ -8,6 +8,8 @@ export interface BeautifyUndoToastContentProps {
   /** CHEWY PATCH: what the pass actually fixed — see LayoutResult.quality. */
   fixedHidden: number;
   crossingsDelta: number;
+  /** CHEWY PATCH: connections that went from an arbitrary angle to a clean one (WANDERER_ANGLE_SNAP). */
+  squaredUp: number;
   onUndo(): void;
 }
 
@@ -16,6 +18,7 @@ export const BeautifyUndoToastContent = ({
   mode,
   fixedHidden,
   crossingsDelta,
+  squaredUp,
   onUndo,
 }: BeautifyUndoToastContentProps) => {
   // CHEWY PATCH: incremental placements read as "placed" (new/misplaced nodes only),
@@ -30,6 +33,7 @@ export const BeautifyUndoToastContent = ({
     fixedHidden > 0 ? `${fixedHidden} hidden link${fixedHidden === 1 ? '' : 's'} fixed` : null,
     crossingsDelta < 0 ? `${-crossingsDelta} fewer crossings` : null,
     crossingsDelta > 0 ? `${crossingsDelta} more crossings` : null,
+    squaredUp > 0 ? `${squaredUp} link${squaredUp === 1 ? '' : 's'} squared up` : null,
   ]
     .filter(Boolean)
     .join(', ');

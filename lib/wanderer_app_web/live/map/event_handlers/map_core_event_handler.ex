@@ -765,6 +765,9 @@ defmodule WandererAppWeb.MapCoreEventHandler do
     options =
       Map.put(options, "chain_standoff_cells", to_string(WandererApp.Env.chain_standoff_cells()))
 
+    # CHEWY PATCH: angle discipline for the beautifier, client-side.
+    options = Map.put(options, "angle_snap", to_string(WandererApp.Env.angle_snap?()))
+
     map_characters =
       map_id
       |> WandererApp.Map.list_characters()

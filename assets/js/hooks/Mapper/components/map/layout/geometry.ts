@@ -75,3 +75,71 @@ export const segmentHitsNodeBox = (a: CellCoord, b: CellCoord, node: CellCoord):
 
   return t1 > t0;
 };
+
+// ---------------------------------------------------------------------------
+// CHEWY PATCH: angle vocabulary. Lives here, next to the occlusion rule, for
+// the same reason: it is a statement about how a connection is DRAWN, and
+// every path that judges or optimises a layout has to agree on it —
+// octilinear.ts (the pass that enforces it), pack.ts (measureLayout, so the
+// UI and the bench can report it) and dev/layout-bench.mjs.
+// ---------------------------------------------------------------------------
+
+/**
+ * Primitive cell-space steps a connection is allowed to run along, as
+ * (dCol, dRow) with no common factor; both signs and the transpose of each
+ * entry are implied.
+ *
+ * These are CELL steps, not screen angles, because the grid is not square
+ * (180x75 px): a (1,1) step is drawn at atan(75/180) = 22.6 degrees, not 45.
+ * What the eye groups by is repetition — a handful of directions used over
+ * and over — so quantizing the step set is what buys readability. Chasing
+ * literal 30/45/60 degree screen angles instead would require steps like
+ * (2,5) or (1,4): five cells of horizontal run to raise a node by two, on a
+ * map whose typical connection spans one or two cells. Almost no edge could
+ * reach one, so almost nothing would snap.
+ *
+ * The set is EXPLICIT — (2,1) is deliberately not in it. Its screen angle is
+ * 11.8 deg, close enough to horizontal that the eye reads it as a wonky
+ * horizontal rather than as its own direction, which is exactly the "mash of
+ * angles" look this pass exists to remove.
+ *
+ *   (1,0)  ->     0 deg   horizontal
+ *   (0,1)  ->    90 deg   vertical
+ *   (1,1)  -> +-22.6 deg  shallow diagonal
+ *   (1,2)  -> +-39.8 deg  steep diagonal — this is "the 45" on this grid
+ */
+export const ANGLE_DIRECTIONS: ReadonlyArray<readonly [number, number]> = [
+  [1, 0],
+  [0, 1],
+  [1, 1],
+  [1, 2],
+];
+
+const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+
+/** True when the straight line from `a` to `b` runs along one of ANGLE_DIRECTIONS (at any length). */
+export const isOnAngle = (a: CellCoord, b: CellCoord): boolean => {
+  const dCol = Math.abs(b.col - a.col);
+  const dRow = Math.abs(b.row - a.row);
+  if (dCol === 0 && dRow === 0) return true;
+  const divisor = gcd(Math.max(dCol, dRow), Math.min(dCol, dRow)) || 1;
+  const col = dCol / divisor;
+  const row = dRow / divisor;
+  return ANGLE_DIRECTIONS.some(([dirCol, dirRow]) => col === dirCol && row === dirRow);
+};
+
+/** How many of `edges` are drawn at an angle outside ANGLE_DIRECTIONS. */
+export const countOffAngleEdges = (
+  edges: ReadonlyArray<{ source: string; target: string }>,
+  cells: Map<string, CellCoord>,
+): number => {
+  let total = 0;
+  for (const edge of edges) {
+    if (edge.source === edge.target) continue;
+    const a = cells.get(edge.source);
+    const b = cells.get(edge.target);
+    if (!a || !b) continue;
+    if (!isOnAngle(a, b)) total++;
+  }
+  return total;
+};

@@ -24,6 +24,7 @@ Flags:
 | `--json <path>` | write the full structured result (every metric, every k, every scenario) to `<path>` |
 | `--compare <baseline.json>` | diff the current run against a prior `--json` output; prints a delta table and **exits 1** if anything regressed beyond tolerance |
 | `--standoff <cells>` | run every scenario with `BeautifyOptions.chainStandoff` set (the `WANDERER_CHAIN_STANDOFF` feature). Default `0` is the shipped default, so a plain run still measures upstream geometry |
+| `--angles` | run every scenario with `BeautifyOptions.angleSnap` on (the `WANDERER_ANGLE_SNAP` feature): connections are quantized onto the four cell directions in `geometry.ts`'s `ANGLE_DIRECTIONS`. Off by default, like the flag |
 
 Typical workflow when changing the engine:
 
@@ -149,6 +150,18 @@ exactly what the engine's own contract promises).
   out map) treats "chain system within `standoff` of the lattice" as an
   invalid placement, re-places it in the band, and forbids the repair pass
   from pulling it back.
+- **offAngleEdges** (`offAngle` column) — connections drawn along a cell step
+  outside `geometry.ts`'s `ANGLE_DIRECTIONS` (`(1,0)`, `(0,1)`, `(1,1)`,
+  `(1,2)` and their signed variants — 0°, 90°, ±22.6°, ±39.8° on the 180x75
+  grid). Measured always, acted on only under `--angles`, and NOT a pass/fail
+  gate: a tidier angle must never outrank a crossing or a hidden link.
+  What `--angles` buys, measured at `--standoff 2`: yugen 7 -> 3,
+  kspace-wide 9 -> 2, mixed 11 -> 3, occlusion 14 -> 4, with crossings equal
+  or better and every stability gate still green. The pass is bounded (3
+  cells from where the layout put a system), refuses any move that would flip
+  a system's left/right or above/below relationship with another system, and
+  is applied to the chosen layout only — never to the candidates, or which
+  candidate wins starts depending on it and idempotence goes with it.
 - **determinism** — the scenario is laid out twice from identical input;
   `true` iff the two `JSON.stringify`d results are byte-identical. A `false`
   here is also a hard failure.

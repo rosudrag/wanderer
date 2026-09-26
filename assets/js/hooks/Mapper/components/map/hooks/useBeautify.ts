@@ -128,6 +128,8 @@ export const useBeautify = () => {
           // CHEWY PATCH: server-configured chain/k-space clearance
           // (WANDERER_CHAIN_STANDOFF); absent or unparseable means 0 = upstream.
           chainStandoff: Number.parseInt(options.chain_standoff_cells ?? '0', 10) || 0,
+          // CHEWY PATCH: server-configured angle discipline (WANDERER_ANGLE_SNAP).
+          angleSnap: options.angle_snap === 'true',
         });
 
         // CHEWY PATCH: a no-op used to return silently, so the button looked
@@ -177,6 +179,7 @@ export const useBeautify = () => {
             mode: result.mode,
             fixedHidden: before.occlusions + before.overlaps - (after.occlusions + after.overlaps),
             crossingsDelta: after.crossings - before.crossings,
+            squaredUp: before.offAngle - after.offAngle,
             onUndo: () => undo(),
           }),
         });

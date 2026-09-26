@@ -16,4 +16,7 @@ export type MapOptions = {
   // CHEWY PATCH: cells of clearance between a wormhole chain and the k-space
   // system it hangs off (WANDERER_CHAIN_STANDOFF); "0" = upstream behaviour.
   chain_standoff_cells?: string;
+  // CHEWY PATCH: quantize connection directions when beautifying
+  // (WANDERER_ANGLE_SNAP); absent or "false" = upstream behaviour.
+  angle_snap?: StringBoolean;
 };

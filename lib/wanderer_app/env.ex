@@ -25,6 +25,10 @@ defmodule WandererApp.Env do
   # system it hangs off, for both the beautifier and tidy insert. 0 (default)
   # is upstream behaviour: a scanned hole lands in the cell next to its origin.
   def chain_standoff_cells(), do: get_key(:chain_standoff_cells, 0)
+  # CHEWY PATCH: quantize the direction every connection is drawn at when the
+  # beautifier runs (see assets/.../map/layout/octilinear.ts). Default false is
+  # upstream behaviour: connections keep whatever angle the geometry produced.
+  def angle_snap?(), do: get_key(:angle_snap, false)
   # CHEWY PATCH: keep map_chain_v1.count_of_passage current and broadcast it,
   # so the UI can weight a connection by how much it is actually used.
   # See WandererApp.Map.ConnectionTraffic.

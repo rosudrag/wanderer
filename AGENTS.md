@@ -39,6 +39,7 @@ This file is OURS — upstream has no `AGENTS.md`, so it never conflicts on a me
 | Agent dev access: log in and seed a map with no EVE account | `WANDERER_DEV_AUTH_TOKEN` (unset = endpoint is a plain 404; **never set in production**) | `lib/wanderer_app_web/controllers/dev_auth_controller.ex`, `lib/wanderer_app/dev/seed.ex`, `dev/` (compose stack, README, smoke script) |
 | Connection traffic: recorded jumps kept on the connection and drawn as a weighted line | `WANDERER_CONNECTION_TRAFFIC` | `lib/wanderer_app/map/connection_traffic.ex` (+ hooks in `map_server_connections_impl.ex`, `map_ui_connection/1`, `DotlanEdge.tsx`) |
 | Wormhole chains hang off the k-space lattice instead of growing through it (N cells of clearance) | `WANDERER_CHAIN_STANDOFF` (cells, `0` = upstream) | `lib/wanderer_app/map/chain_standoff.ex` + `layout/index.ts` chain placement, `map_position_calculator.ex` tidy-insert offsets |
+| Angle discipline: every connection drawn along one of four cell directions (0°, 90°, ±22.6°, ±39.8° on the 180x75 grid) | `WANDERER_ANGLE_SNAP` (`false` = upstream) | `assets/js/hooks/Mapper/components/map/layout/octilinear.ts` + `geometry.ts` `ANGLE_DIRECTIONS`, `settle()` in `layout/index.ts` |
 
 ## Testing the map without an EVE account
 

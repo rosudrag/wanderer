@@ -67,6 +67,16 @@ export interface BeautifyOptions {
    * anchor, opening a pocket of empty grid between the two.
    */
   chainStandoff?: number;
+  /**
+   * CHEWY PATCH: quantize connection directions (`WANDERER_ANGLE_SNAP`).
+   * false (default) is upstream behaviour: a connection is drawn at whatever
+   * angle the two systems' cells happen to produce, so a map ends up with as
+   * many distinct line directions as it has links and reads as noise. true
+   * runs octilinear.ts's final pass, which nudges systems (never further than
+   * 3 cells, never into a crossing or a hidden link) until their connections
+   * run along geometry.ts's ANGLE_DIRECTIONS.
+   */
+  angleSnap?: boolean;
 }
 
 /**
@@ -81,6 +91,14 @@ export interface LayoutQuality {
   occlusions: number;
   /** Total drawn edge length, in cells. */
   edgeLength: number;
+  /**
+   * CHEWY PATCH: connections drawn at an angle outside geometry.ts's
+   * ANGLE_DIRECTIONS. Reported always; only acted on when
+   * `BeautifyOptions.angleSnap` is set. Deliberately NOT part of
+   * `qualityScore` — a tidier angle must never outrank a crossing or a
+   * hidden connection.
+   */
+  offAngle: number;
 }
 
 export interface LayoutResult {
