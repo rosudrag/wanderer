@@ -17,9 +17,12 @@ defmodule WandererAppWeb do
   those modules here.
   """
 
+  # CHEWY PATCH: favicon.svg / favicon.png / favicon-96x96.png were never in
+  # upstream's allowlist, so Plug.Static skipped them and the router's
+  # `live "/:slug"` swallowed the request. The ChewyTech mark needs them served.
   def static_paths,
     do:
-      ~w(assets fonts images icons favicon.ico site.webmanifest apple-touch-icon.png web-app-manifest-192x192.png web-app-manifest-512x512.png web-app-manifest.webp web-app-manifest-wide.webp robots.txt woff woff2 lottie)
+      ~w(assets fonts images icons favicon.ico favicon.svg favicon.png favicon-96x96.png site.webmanifest apple-touch-icon.png web-app-manifest-192x192.png web-app-manifest-512x512.png web-app-manifest.webp web-app-manifest-wide.webp robots.txt woff woff2 lottie)
 
   def router do
     quote do
