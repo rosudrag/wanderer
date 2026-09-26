@@ -1,6 +1,7 @@
 {
-  "name": "Wanderer",
-  "short_name": "Wanderer",
+  "name": "ChewyTech",
+  "short_name": "ChewyTech",
+  "description": "EVE Online assistant",
   "icons": [
     {
       "src": "/web-app-manifest-192x192.png",

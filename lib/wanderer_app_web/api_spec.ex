@@ -9,9 +9,10 @@ defmodule WandererAppWeb.ApiSpec do
   def spec do
     %OpenApi{
       info: %Info{
-        title: "WandererApp API",
+        # CHEWY PATCH: private ChewyTech branding, see WandererApp.Branding.
+        title: "#{WandererApp.Branding.name()} API",
         version: "1.0.0",
-        description: "API documentation for WandererApp"
+        description: "API documentation for #{WandererApp.Branding.name()}"
       },
       servers: [
         Server.from_endpoint(Endpoint)

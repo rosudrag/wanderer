@@ -40,6 +40,7 @@ This file is OURS — upstream has no `AGENTS.md`, so it never conflicts on a me
 | Connection traffic: recorded jumps kept on the connection and drawn as a weighted line | `WANDERER_CONNECTION_TRAFFIC` | `lib/wanderer_app/map/connection_traffic.ex` (+ hooks in `map_server_connections_impl.ex`, `map_ui_connection/1`, `DotlanEdge.tsx`) |
 | Wormhole chains hang off the k-space lattice instead of growing through it (N cells of clearance) | `WANDERER_CHAIN_STANDOFF` (cells, `0` = upstream) | `lib/wanderer_app/map/chain_standoff.ex` + `layout/index.ts` chain placement, `map_position_calculator.ex` tidy-insert offsets |
 | Angle discipline: every connection drawn along one of four cell directions (0°, 90°, ±22.6°, ±39.8° on the 180x75 grid) | `WANDERER_ANGLE_SNAP` (`false` = upstream) | `assets/js/hooks/Mapper/components/map/layout/octilinear.ts` + `geometry.ts` `ANGLE_DIRECTIONS`, `settle()` in `layout/index.ts` |
+| Private ChewyTech branding (SSO-only landing, no public newsboard, no upstream analytics) | `WANDERER_PRIVATE_BRANDING` | `lib/wanderer_app/branding.ex` (+ `lib/wanderer_app_web/controllers/blog_controller.ex`, `lib/wanderer_app_web/components/layouts/blog.html.heex`, `lib/wanderer_app_web/components/layouts/root.html.heex`) |
 
 ## Testing the map without an EVE account
 

@@ -1,95 +1,64 @@
-# Wanderer
+# ChewyTech — EVE Online Assistant
 
-[Wanderer](https://wanderer.ltd/) is an #1 EVE Online mapper tool, light and fast alternative to Pathfinder. You can self-host Wanderer Community Edition or have us manage Wanderer for you in the cloud. Made and hosted in the EU 🇪🇺
+This is a private fork of [`wanderer-industries/wanderer`](https://github.com/wanderer-industries/wanderer), a distributed EVE Online mapper tool. It runs as a private instance requiring EVE Online SSO authentication.
 
-![Wanderer](https://wanderer.ltd/images/news/09-10-map-features-guide/cover.png)
+## Getting Started
 
-## Why Wanderer?
+**This is not a public service.** The deployed instance is private. Self-hosting requires Elixir/OTP, Node.js, PostgreSQL, and EVE SSO application credentials.
 
-Here's what makes Wanderer a great Pathfinder alternative:
+### Prerequisites
 
-- **Clutter Free**: Wanderer provides simple interface and it cuts through the noise. No training necessary.
-- **Lightweight, fast and secure**: Wanderer is lightweight and fast. It uses a self-hosted database and a self-hosted server.
-- **See all your characaters on a single page**: Wanderer provides a simple interface to see all your characters on a single page.
-- **SPA support**: Wanderer is built with modern web frameworks in core.
-- **Active development**: Wanderer is actively developed and improved with new features and updates every week based on user feedback.
-
-Interested to learn more? [Check more on our website](https://wanderer.ltd/news).
-
-### Can Wanderer be self-hosted?
-
-Wanderer is open source project and we have a free as in beer and self-hosted solution called [Wanderer Community Edition (CE)](https://wanderer.ltd/news/community-edition). Here are the differences between Wanderer and Wanderer CE:
-
-|                               | Wanderer Cloud                                                                                                                                                                                                                                                                                                                              | Wanderer Community Edition                                                                                                                                                                                                                           |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Infrastructure management** | Easy and convenient. It takes 2 minutes to register your character and create a map. We manage everything so you don’t have to worry about anything and can focus on gameplay.                                                                                                                                                              | You do it all yourself. You need to get a server and you need to manage your infrastructure. You are responsible for installation, maintenance, upgrades, server capacity, uptime, backup, security, stability, consistency, loading time and so on. |
-| **Release schedule**          | Continuously developed and improved with new features and updates multiple times per week.                                                                                                                                                                                                                                                  | Latest features and improvements won't be immediately available.                                                                                                                                                                                     |
-| **Server location**           | All visitor data is exclusively processed on EU-owned cloud infrastructure. We keep your site data on a secure, encrypted and green energy powered server in Germany. This ensures that your site data is protected by the strict European Union data privacy laws and ensures compliance with GDPR. Your website data never leaves the EU. | You have full control and can host your instance on any server in any country that you wish. Host it on a server in your basement or host it with any cloud provider wherever you want, even those that are not GDPR compliant.                      |
-
-Interested in self-hosting Wanderer CE on your server? Take a look at our [Wanderer CE installation instructions](https://github.com/wanderer-industries/community-edition/).
-
-Wanderer CE is a community supported project and there are no guarantees that you will get support from the creators of Wanderer to troubleshoot your self-hosting issues. There is a [community supported forum](https://github.com/orgs/wanderer-industries/discussions/4) where you can ask for help.
-
-Our only source of funding is your donations.
-
-## Technology
-
-Wanderer is a standard Elixir/Phoenix application backed by a PostgreSQL database for general data. On the frontend we use [TailwindCSS](https://tailwindcss.com/) for styling and React to make the map interactive.
-
-## Development
+Check `.tool-versions` for pinned Elixir, OTP, and Node.js versions. PostgreSQL 16 is required ([.devcontainer/docker-compose.yml](https://raw.githubusercontent.com/wanderer-industries/wanderer/main/.devcontainer/docker-compose.yml#L23)).
 
 ### Setup
 
-- Copy `.env.example` to `.env` and fill in the values
+```bash
+cp .env.example .env
+# Edit .env with your EVE SSO keys and database config
+mix setup
+```
 
-- Run `mix setup` to install and setup dependencies
-- (optional step) run `make yarn` to install client dependencies
+The `setup` alias ([mix.exs:151](mix.exs#L151)) runs `deps.get`, `ecto.setup` (which loads [priv/repo/seeds.exs](priv/repo/seeds.exs)), and builds frontend assets.
 
-### Run
+### Run Locally
 
-- Start server with `make server` or `make s`
+```bash
+make start
+```
 
-Now you can visit [`localhost:8000`](http://localhost:8000) from your browser.
+or equivalently:
 
-#### Using .devcontainer
+```bash
+source .env && MIX_ENV=dev iex -S mix phx.server
+```
 
-- Copy `.env.example` to `.env` and fill in the values
-- Open the repository in the dev container ("Reopen in Container")
+([Makefile:22](Makefile#L22))
 
-The image ships Erlang/Elixir pinned to `.tool-versions`, Node.js 18, yarn and
-the usual CLI tooling, and runs as the non-root `developer` user. On first
-create, `.devcontainer/setup.sh` fetches and compiles deps, creates and migrates
-the database, seeds the EVE SDE reference data if it is missing, and installs
-and builds the client assets — so there is nothing to install by hand.
+Server listens on `http://localhost:4444` ([config/dev.exs:22](config/dev.exs#L22)).
 
-- If your host user id is not `1000`, export `USER_UID`/`USER_GID` before
-  building so files written through the bind mount stay host-owned. See
-  `.devcontainer/docker-compose.override.yml.example` for this and other
-  host-specific settings.
+### Development Without EVE Account
 
-- See how to run server in #Run section
+See [dev/README.md](dev/README.md) for a Docker-based smoke environment that runs without EVE SSO. This lets you test the map UI with a throwaway authenticated session.
 
-#### Using nix flakes
+## Database
 
-- Run `nix develop`
-- Run local postgres server: `pg-setup` & `pg-start`
-- See how to start server in #setup section
+- **Reset:** `mix ecto.reset` ([mix.exs:153](mix.exs#L153))
+- **Migrate:** `MIX_ENV=dev mix ash.migrate` ([Makefile:27](Makefile#L27))
 
-### Migrations
+## Technology
 
-#### Reset database
+- **Backend:** Elixir/Phoenix, PostgreSQL
+- **Frontend:** React + TypeScript, TailwindCSS, ReactFlow
+- **Map:** Systems, connections, signatures, beautifier layout engine
 
-`mix ecto.reset`
+## Deployment & Fork Rules
 
-#### Run seed data
+See [AGENTS.md](AGENTS.md) for fork operations, CI/CD, and deployment guidelines.
 
-- `mix run priv/repo/seeds.exs`
+## Private Branding
 
-#### Generate new migration
-
-- `mix ash.codegen <name_of_migration>`
-- `mix ash.migrate`
-
-#### Generate cloak key
-
-- `iex> 32 |> :crypto.strong_rand_bytes() |> Base.encode64()`
+When `WANDERER_PRIVATE_BRANDING=true` ([lib/wanderer_app/branding.ex](lib/wanderer_app/branding.ex)):
+- Product name and title suffix change to ChewyTech / "EVE Online Assistant"
+- Public newsboard (`/news`, `/news/:slug`) and contacts page (`/contacts`) return 404
+- Google Analytics is disabled
+- `/license` and `/changelog` remain accessible

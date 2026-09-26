@@ -140,6 +140,14 @@ wallet_tracking_enabled =
   |> get_var_from_path_or_env("WANDERER_WALLET_TRACKING_ENABLED", "false")
   |> String.to_existing_atom()
 
+# CHEWY PATCH: private ChewyTech branding (SSO-only landing, no public news
+# board, ChewyTech chrome). Default off = upstream behaviour. See
+# WandererApp.Branding and WandererApp.Env.private_branding?/0.
+private_branding =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_PRIVATE_BRANDING", "false")
+  |> String.to_existing_atom()
+
 # CHEWY PATCH: map beautifier / tidy-insert feature flags, default off (upstream behaviour).
 map_beautifier =
   config_dir
@@ -255,6 +263,8 @@ config :wanderer_app,
   connection_traffic: connection_traffic,
   # CHEWY PATCH: DEV-ONLY authentication bypass token, see dev_auth_token above.
   dev_auth_token: dev_auth_token,
+  # CHEWY PATCH: private ChewyTech branding, see WandererApp.Branding.
+  private_branding: private_branding,
   restrict_maps_creation: restrict_maps_creation,
   restrict_acls_creation: restrict_acls_creation,
   subscription_settings: %{

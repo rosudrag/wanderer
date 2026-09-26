@@ -1,0 +1,33 @@
+<!-- CHEWY PATCH: private-instance landing page. Same visual language as
+     index.html.heex (dark, ccp-font, animated-ring EVE SSO button), but no
+     posts grid and no news links — SSO login is the only call to action. -->
+<section class="prose prose-lg max-w-full w-full leading-normal tracking-normal text-indigo-400 bg-cover bg-fixed flex items-center justify-center">
+  <canvas id="bg-canvas"></canvas>
+  <div class="h-full w-full flex flex-col items-center justify-center">
+    <div class="artboard artboard-horizontal phone-3 pt-10 !h-40">
+      <div class="container pt-5 mx-auto flex flex-wrap flex-col justify-center items-center gap-4">
+        <div class="flex flex-col justify-center items-center overflow-y-hidden">
+          <h1 class="ccp-font my-2 text-3xl text-white font-bold leading-tight text-center [text-shadow:0_0px_8px_rgba(0,0,0,0.8)]">
+            ChewyTech
+          </h1>
+          <h2 class="ccp-font my-2 text-lg text-white font-normal leading-tight text-center [text-shadow:0_0px_8px_rgba(0,0,0,0.8)]">
+            EVE Online Assistant
+          </h2>
+        </div>
+        <div :if={@invite_token_valid} class="overflow-hidden">
+          <div class="!z-100 relative group alert items-center fade-in-scale text-white w-[224px] h-[44px] rounded p-px overflow-hidden">
+            <div class="group animate-rotate absolute inset-0 h-full w-full rounded-full bg-[conic-gradient(#0ea5e9_20deg,transparent_120deg)] group-hover:bg-[#0ea5e9]" />
+            <div class="!bg-black  rounded w-[220px] h-[40px] flex items-center justify-center relative z-20">
+              <.link navigate={~p"/auth/eve?invite=#{@invite_token}"} class="opacity-100">
+                <img
+                  src="https://web.ccpgamescdn.com/eveonlineassets/developers/eve-sso-login-black-large.png"
+                  class="w-[220px] h-[40px]"
+                />
+              </.link>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

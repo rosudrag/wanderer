@@ -27,9 +27,9 @@
         >
           <li><a href="/">Home</a></li>
           <li><a href="/changelog">Changelog</a></li>
-          <li><a href="/news">News</a></li>
+          <li :if={WandererApp.Branding.news_enabled?()}><a href="/news">News</a></li>
           <li><a href="/license">License</a></li>
-          <li><a href="/contacts">Contact Us</a></li>
+          <li :if={WandererApp.Branding.news_enabled?()}><a href="/contacts">Contact Us</a></li>
         </ul>
       </div>
     </div>
@@ -38,7 +38,7 @@
         href="/"
         class="!opacity-0 text-[24px] text-white [text-shadow:0_0px_8px_rgba(0,0,0,0.8)]"
       >
-        Wanderer
+        {WandererApp.Branding.name()}
       </a>
     </div>
     <div class="navbar-end"></div>
@@ -49,13 +49,18 @@
   <!--Footer-->
   <footer class="!z-10 w-full pt-8 pb-4 text-sm text-center fade-in flex justify-center items-center">
     <div class="flex flex-col justify-center items-center">
-      <a target="_blank" rel="noopener noreferrer" href="https://www.eveonline.com/partners">
+      <a
+        :if={not WandererApp.Branding.private?()}
+        target="_blank"
+        rel="noopener noreferrer"
+        href="https://www.eveonline.com/partners"
+      >
         <img src="/images/eo_pp.png" style="width: 300px;" alt="Eve Online Partnership Program" />
       </a>
       <div class="text-stone-400 no-underline hover:no-underline [text-shadow:0_0px_4px_rgba(0,0,0,0.8)]">
         All <a href="/license">EVE related materials</a>
         are property of <a href="https://www.ccpgames.com">CCP Games</a>
-        &copy; {Date.utc_today().year} Wanderer Industries.
+        &copy; {Date.utc_today().year} {WandererApp.Branding.copyright_holder()}.
       </div>
     </div>
   </footer>

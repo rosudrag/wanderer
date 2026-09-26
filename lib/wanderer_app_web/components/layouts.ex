@@ -98,11 +98,14 @@ defmodule WandererAppWeb.Layouts do
             </a>
           </div>
 
-          <div class="bg-gray-800/80 rounded-lg p-4 min-w-[280px] backdrop-blur-sm border border-gray-700">
+          <div
+            :if={WandererApp.Branding.community_links?()}
+            class="bg-gray-800/80 rounded-lg p-4 min-w-[280px] backdrop-blur-sm border border-gray-700"
+          >
             <div class="flex items-center gap-2 mb-3">
               <.icon name="hero-gift-solid" class="w-5 h-5 text-green-400" />
               <span class="text-white font-semibold text-sm [text-shadow:_0_1px_0_rgb(0_0_0_/_40%)]">
-                Support Wanderer
+                Support {WandererApp.Branding.name()}
               </span>
             </div>
             <div class="text-gray-300 text-xs mb-3 [text-shadow:_0_1px_0_rgb(0_0_0_/_40%)]">
@@ -132,6 +135,7 @@ defmodule WandererAppWeb.Layouts do
   def youtube_container(assigns) do
     ~H"""
     <.link
+      :if={WandererApp.Branding.community_links?()}
       href="https://www.youtube.com/@wanderer_ltd"
       class="flex flex-col p-4 items-center absolute bottom-52 left-0 gap-2 tooltip tooltip-right text-gray-400 hover:text-white"
     >
@@ -164,6 +168,7 @@ defmodule WandererAppWeb.Layouts do
   def donate_container(assigns) do
     ~H"""
     <.link
+      :if={WandererApp.Branding.community_links?()}
       href="https://www.patreon.com/WandererLtd"
       target="_blank"
       class="flex flex-col p-4 items-center absolute bottom-64 left-1 gap-2 tooltip tooltip-right text-gray-400 hover:text-white"
@@ -176,6 +181,7 @@ defmodule WandererAppWeb.Layouts do
   def feedback_container(assigns) do
     ~H"""
     <.link
+      :if={WandererApp.Branding.community_links?()}
       href="https://discord.gg/cafERvDD2k"
       class="flex flex-col p-4 items-center absolute bottom-40 left-1 gap-2 tooltip tooltip-right text-gray-400 hover:text-white"
     >
@@ -205,10 +211,12 @@ defmodule WandererAppWeb.Layouts do
             class="menu menu-sm dropdown-content bg-base-100 rounded-box z-[1] mt-3 w-52 p-2 shadow"
           >
             <li><a href="/changelog">Changelog</a></li>
-            <li><a href="/news">News</a></li>
-            <li :if={@map_subscriptions_enabled}><a href="/sponsors">Sponsors</a></li>
+            <li :if={WandererApp.Branding.news_enabled?()}><a href="/news">News</a></li>
+            <li :if={@map_subscriptions_enabled and WandererApp.Branding.community_links?()}>
+              <a href="/sponsors">Sponsors</a>
+            </li>
             <li><a href="/license">License</a></li>
-            <li><a href="/contacts">Contact Us</a></li>
+            <li :if={WandererApp.Branding.news_enabled?()}><a href="/contacts">Contact Us</a></li>
           </ul>
         </div>
         <div :if={@show_sidebar}>
@@ -238,7 +246,7 @@ defmodule WandererAppWeb.Layouts do
             tip="Characters Tracking"
           />
           <.nav_link
-            :if={@map_subscriptions_enabled}
+            :if={@map_subscriptions_enabled and WandererApp.Branding.community_links?()}
             href="/sponsors"
             active={@active_tab == :sponsors}
             icon="hero-heart-solid"

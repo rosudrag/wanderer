@@ -235,7 +235,14 @@ defmodule WandererAppWeb.Plugs.ApiVersioning do
 
   defp get_deprecation_info(version) do
     if version in @deprecated_versions do
-      "deprecated; upgrade-by=2025-12-31; link=https://docs.wanderer.com/api/migration"
+      # CHEWY PATCH: no upstream docs site on a private ChewyTech instance —
+      # keep the informational clauses, drop only the link. See
+      # WandererApp.Branding.
+      if WandererApp.Branding.private?() do
+        "deprecated; upgrade-by=2025-12-31"
+      else
+        "deprecated; upgrade-by=2025-12-31; link=https://docs.wanderer.com/api/migration"
+      end
     else
       "false"
     end
@@ -256,7 +263,15 @@ defmodule WandererAppWeb.Plugs.ApiVersioning do
   end
 
   defp build_deprecation_warning(version) do
-    "299 wanderer-api \"API version #{version} is deprecated. Please upgrade to version #{@default_version}. See https://docs.wanderer.com/api/migration for details.\""
+    # CHEWY PATCH: no upstream docs site on a private ChewyTech instance —
+    # drop the "See <url> for details." sentence, keep the RFC 7234
+    # `299 <agent> "<text>"` shape and the `wanderer-api` agent token as-is
+    # so the Warning header format stays unchanged. See WandererApp.Branding.
+    if WandererApp.Branding.private?() do
+      "299 wanderer-api \"API version #{version} is deprecated. Please upgrade to version #{@default_version}.\""
+    else
+      "299 wanderer-api \"API version #{version} is deprecated. Please upgrade to version #{@default_version}. See https://docs.wanderer.com/api/migration for details.\""
+    end
   end
 
   defp log_deprecation_usage(conn, version) do
@@ -336,14 +351,23 @@ defmodule WandererAppWeb.Plugs.ApiVersioning do
   end
 
   defp send_version_error(conn, status, message, details) do
-    error_response = %{
+    base_response = %{
       error: message,
       status: status,
       details: details,
       supported_versions: @supported_versions,
-      documentation: "https://docs.wanderer.com/api/versioning",
       timestamp: DateTime.utc_now()
     }
+
+    # CHEWY PATCH: no upstream docs site on a private ChewyTech instance —
+    # omit the `documentation` key entirely rather than invent one. See
+    # WandererApp.Branding.
+    error_response =
+      if WandererApp.Branding.private?() do
+        base_response
+      else
+        Map.put(base_response, :documentation, "https://docs.wanderer.com/api/versioning")
+      end
 
     conn
     |> put_status(status)
@@ -393,13 +417,25 @@ defmodule WandererAppWeb.Plugs.ApiVersioning do
   end
 
   def get_migration_path(from_version, to_version \\ @default_version) do
-    %{
+    base = %{
       from: from_version,
       to: to_version,
       breaking_changes: get_breaking_changes(from_version, to_version),
-      migration_guide: "https://docs.wanderer.com/api/migration/#{from_version}-to-#{to_version}",
       estimated_effort: estimate_migration_effort(from_version, to_version)
     }
+
+    # CHEWY PATCH: no upstream docs site on a private ChewyTech instance —
+    # omit the `migration_guide` key entirely rather than invent one. See
+    # WandererApp.Branding.
+    if WandererApp.Branding.private?() do
+      base
+    else
+      Map.put(
+        base,
+        :migration_guide,
+        "https://docs.wanderer.com/api/migration/#{from_version}-to-#{to_version}"
+      )
+    end
   end
 
   defp get_breaking_changes(from_version, to_version) do

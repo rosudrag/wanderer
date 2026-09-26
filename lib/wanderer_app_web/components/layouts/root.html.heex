@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <.live_title suffix=" · Wanderer">
+    <.live_title suffix={WandererApp.Branding.title_suffix()}>
       {assigns[:page_title] || "Welcome"}
     </.live_title>
 
@@ -36,20 +36,24 @@
 
     <script defer phx-track-static type="module" src={~p"/assets/app.js"} crossorigin="anonymous">
     </script>
-    <!-- Google tag (gtag.js) -->
-    <script
-      defer
-      src="https://www.googletagmanager.com/gtag/js?id=G-61PHLLS0LD"
-      crossorigin="anonymous"
-    >
-    </script>
-    <script defer>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
+    <%!-- CHEWY PATCH: upstream Google Analytics — never shipped on a
+         private ChewyTech instance. See WandererApp.Branding.analytics_enabled?/0. --%>
+    <%= if WandererApp.Branding.analytics_enabled?() do %>
+      <!-- Google tag (gtag.js) -->
+      <script
+        defer
+        src="https://www.googletagmanager.com/gtag/js?id=G-61PHLLS0LD"
+        crossorigin="anonymous"
+      >
+      </script>
+      <script defer>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
 
-      gtag('config', 'G-61PHLLS0LD');
-    </script>
+        gtag('config', 'G-61PHLLS0LD');
+      </script>
+    <% end %>
   </head>
   <body>
     {@inner_content}

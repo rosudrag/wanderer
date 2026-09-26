@@ -155,11 +155,15 @@ defmodule WandererAppWeb.ApiRouter do
       error: %{
         code: "VERSION_NOT_FOUND",
         message: "API version #{version} is not supported",
-        details: %{
-          requested_version: version,
-          available_versions: available_versions,
-          upgrade_guide: "https://docs.wanderer.com/api/migration"
-        }
+        details:
+          %{
+            requested_version: version,
+            available_versions: available_versions
+          }
+          # CHEWY PATCH: no upstream docs site on a private ChewyTech
+          # instance, so the migration link is omitted rather than invented.
+          # See WandererApp.Branding.
+          |> maybe_put_upgrade_guide()
       }
     }
 
@@ -168,6 +172,16 @@ defmodule WandererAppWeb.ApiRouter do
     |> put_resp_content_type("application/json")
     |> send_resp(404, Jason.encode!(error_response))
     |> halt()
+  end
+
+  # CHEWY PATCH: see WandererApp.Branding — no upstream docs site to link on
+  # a private ChewyTech instance.
+  defp maybe_put_upgrade_guide(details) do
+    if WandererApp.Branding.private?() do
+      details
+    else
+      Map.put(details, :upgrade_guide, "https://docs.wanderer.com/api/migration")
+    end
   end
 
   defp find_similar_routes(path_info, _version) do

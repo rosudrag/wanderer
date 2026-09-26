@@ -44,10 +44,11 @@ defmodule WandererAppWeb.ApiSpecV1 do
 
     %OpenApi{
       info: %Info{
-        title: "WandererApp API (Legacy & v1)",
+        # CHEWY PATCH: private ChewyTech branding, see WandererApp.Branding.
+        title: "#{WandererApp.Branding.name()} API (Legacy & v1)",
         version: "1.1.0",
         description: """
-        Complete API documentation for WandererApp including both legacy endpoints and v1 JSON:API endpoints.
+        Complete API documentation for #{WandererApp.Branding.name()} including both legacy endpoints and v1 JSON:API endpoints.
 
         ## Authentication
 

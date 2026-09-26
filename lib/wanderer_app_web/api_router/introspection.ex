@@ -78,15 +78,16 @@ defmodule WandererAppWeb.ApiRouter.Introspection do
 
     %{
       openapi: "3.0.0",
-      info: %{
-        title: "Wanderer API",
-        version: version,
-        description: "EVE Online mapping tool API",
-        contact: %{
-          name: "Wanderer Support",
-          url: "https://docs.wanderer.com"
+      # CHEWY PATCH: private ChewyTech branding — no upstream docs site to
+      # advertise, so `contact` is omitted entirely when private instead of
+      # inventing a ChewyTech one. See WandererApp.Branding.
+      info:
+        %{
+          title: "#{WandererApp.Branding.name()} API",
+          version: version,
+          description: "EVE Online mapping tool API"
         }
-      },
+        |> maybe_put_docs_contact(),
       servers: [
         %{
           url: "/api/v#{version}",
@@ -104,6 +105,19 @@ defmodule WandererAppWeb.ApiRouter.Introspection do
         }
       }
     }
+  end
+
+  # CHEWY PATCH: see WandererApp.Branding — the upstream docs site does not
+  # exist for a private ChewyTech instance, so no contact block is emitted.
+  defp maybe_put_docs_contact(info) do
+    if WandererApp.Branding.private?() do
+      info
+    else
+      Map.put(info, :contact, %{
+        name: "#{WandererApp.Branding.name()} Support",
+        url: "https://docs.wanderer.com"
+      })
+    end
   end
 
   @doc """

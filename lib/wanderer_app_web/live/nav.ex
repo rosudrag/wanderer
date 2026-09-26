@@ -17,7 +17,12 @@ defmodule WandererAppWeb.Nav do
     show_admin =
       socket.assigns.current_user_role == :admin
 
-    latest_post = WandererApp.Blog.recent_posts(1) |> List.first()
+    # CHEWY PATCH: no public news board on a private instance — don't fetch
+    # or advertise a post whose /news/:id link would 404. See WandererApp.Branding.
+    latest_post =
+      if WandererApp.Branding.news_enabled?() do
+        WandererApp.Blog.recent_posts(1) |> List.first()
+      end
 
     {:cont,
      socket

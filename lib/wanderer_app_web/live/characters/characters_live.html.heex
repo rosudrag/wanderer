@@ -29,8 +29,11 @@
   id="characters-list"
   class="w-full h-full col-span-2 lg:col-span-1 p-4 pl-20 pb-20 overflow-auto"
 >
-  <div class="flex items-center justify-between gap-4 px-4 py-2 mb-4 bg-stone-900/60 border border-stone-800 rounded">
-    <div class="flex items-center gap-3">
+  <div
+    :if={not WandererApp.Branding.private?()}
+    class="flex items-center justify-between gap-4 px-4 py-2 mb-4 bg-stone-900/60 border border-stone-800 rounded"
+  >
+    <div :if={WandererApp.Branding.community_links?()} class="flex items-center gap-3">
       <.icon name="hero-gift-solid" class="w-4 h-4 text-green-400 flex-shrink-0" />
       <span class="text-sm text-gray-300">
         Support development by using promocode
@@ -50,6 +53,7 @@
       </a>
     </div>
     <a
+      :if={WandererApp.Branding.news_enabled?()}
       href="https://wanderer.ltd/news"
       target="_blank"
       rel="noopener noreferrer"
