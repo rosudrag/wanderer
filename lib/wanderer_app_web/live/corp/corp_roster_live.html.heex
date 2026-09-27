@@ -20,9 +20,9 @@
       logs you in normally, but the roster stays unpopulated (visibly `:stalled`, not
       broken) until a character who does have it grants access.
     </p>
-    <.link href={~p"/auth/eve?director=true"} class="btn btn-sm">
+    <button type="button" phx-click="request_director_access" class="btn btn-sm">
       Grant director access
-    </.link>
+    </button>
   </div>
   <div :if={@is_corp_admin?} class="mb-8 border border-gray-700 rounded p-4">
     <h2 class="text-lg font-semibold mb-2">Director token holder</h2>

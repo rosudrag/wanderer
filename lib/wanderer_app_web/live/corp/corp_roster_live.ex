@@ -38,6 +38,27 @@ defmodule WandererAppWeb.CorpRosterLive do
   end
 
   @impl true
+  def handle_event("request_director_access", _params, socket) do
+    # `/auth/eve` is invite-gated whenever WANDERER_INVITES is on: with no
+    # `invite` param, WandererApp.Ueberauth.Strategy.Eve.check_invite_valid/1
+    # returns `{not invites(), :user}` and handle_request!/1 redirects to
+    # /welcome BEFORE ever reaching EVE SSO -- session or no session. A plain
+    # link to /auth/eve?director=true is therefore dead on any invite-only
+    # instance, which is what this deployment is. Mint the same short-lived
+    # cache token upstream's own "authorize" flow mints
+    # (characters_live.ex:62-76) and pass it through.
+    active_pool = WandererApp.Character.TrackingConfigUtils.get_active_pool!()
+
+    {:ok, esi_config} = Cachex.get(:esi_auth_cache, "config_#{active_pool}")
+
+    WandererApp.Cache.put("invite_#{esi_config.uuid}", true, ttl: :timer.minutes(30))
+
+    {:noreply,
+     socket
+     |> push_navigate(to: ~p"/auth/eve?invite=#{esi_config.uuid}&director=true")}
+  end
+
+  @impl true
   def handle_event(
         "set_director",
         %{"corporation_id" => corporation_id, "character_id" => character_id},
