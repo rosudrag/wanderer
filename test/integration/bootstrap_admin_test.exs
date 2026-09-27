@@ -10,9 +10,12 @@ defmodule WandererApp.BootstrapAdminTest do
   user ends up holding `:corp_suite_admin` per
   `WandererApp.Identity.PermissionCache`. Also proves a configured name
   that matches no character, or matches a character with no linked user,
-  returns `{:error, _}` without raising — `maybe_bootstrap/0` runs
-  unconditionally on every login (`auth_controller.ex`), so an exception
-  here would break login for everyone, not just the named admin.
+  returns `{:error, _}` without raising, and that an unexpected exception
+  anywhere underneath `maybe_bootstrap/0` is caught rather than
+  propagated — `maybe_bootstrap/0` runs unconditionally on every login
+  (`auth_controller.ex`), so any of these must degrade to a logged error,
+  never a crash that would break login for everyone, not just the named
+  admin.
 
   See docs/chewy/corp-suite-plan.md §9 Phase 0 bootstrap and
   `lib/wanderer_app/identity/bootstrap_admin.ex`.
@@ -82,6 +85,18 @@ defmodule WandererApp.BootstrapAdminTest do
     assert is_nil(character.user_id)
 
     assert {:error, :no_user_linked} = BootstrapAdmin.run(character.name)
+    assert {0, 0, 0} = bootstrap_group_row_counts()
+  end
+
+  test "an unexpected exception underneath maybe_bootstrap/0 (e.g. a bad env value) is caught, not raised" do
+    # WandererApp.Env.bootstrap_admin_character/0 calls String.trim/1 on
+    # whatever is configured; a non-string value raises FunctionClauseError
+    # deep inside maybe_bootstrap/0, before `run/1` is ever reached. This is
+    # the exact shape of "bad env value" the call site
+    # (`auth_controller.ex`, called on every login) must survive.
+    Application.put_env(:wanderer_app, :bootstrap_admin_character, 12_345)
+
+    assert {:error, :bootstrap_failed} = BootstrapAdmin.maybe_bootstrap()
     assert {0, 0, 0} = bootstrap_group_row_counts()
   end
 end

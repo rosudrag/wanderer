@@ -21,8 +21,19 @@ defmodule WandererApp.Identity.BootstrapAdmin do
   Runs the bootstrap if `WANDERER_BOOTSTRAP_ADMIN_CHARACTER` is set.
   Idempotent: safe to call on every boot and login.
 
-  Returns `:ok` if bootstrap succeeded or was skipped, `{:error, reason}` if
-  the named character doesn't exist. Does not raise.
+  Called unconditionally from every successful SSO callback
+  (`auth_controller.ex`), so this function's contract is absolute: it
+  **never** raises or exits, regardless of what goes wrong underneath it
+  (a bad env value, a DB hiccup, an unexpected Ash error shape) — a login
+  must complete even when this best-effort convenience step can't. Errors
+  are logged loudly (an operator needs to see a misconfiguration) and
+  swallowed into `{:error, reason}`; the caller never inspects the return
+  value and always proceeds to finish the login.
+
+  Returns `:ok` if bootstrap succeeded or was skipped (env var unset,
+  which short-circuits before any DB access), `{:error, reason}` if the
+  named character doesn't exist, isn't linked to a user, or anything else
+  went wrong.
   """
   def maybe_bootstrap() do
     case WandererApp.Env.bootstrap_admin_character() do
@@ -32,6 +43,22 @@ defmodule WandererApp.Identity.BootstrapAdmin do
       character_name ->
         run(character_name)
     end
+  rescue
+    error ->
+      Logger.error(
+        "[BootstrapAdmin] Unexpected error during bootstrap, login proceeding anyway: " <>
+          Exception.format(:error, error, __STACKTRACE__)
+      )
+
+      {:error, :bootstrap_failed}
+  catch
+    kind, reason ->
+      Logger.error(
+        "[BootstrapAdmin] Unexpected #{kind} during bootstrap, login proceeding anyway: " <>
+          Exception.format(kind, reason, __STACKTRACE__)
+      )
+
+      {:error, :bootstrap_failed}
   end
 
   @doc false
