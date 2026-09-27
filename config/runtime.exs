@@ -88,6 +88,15 @@ group_map_sync_enabled =
   |> get_var_from_path_or_env("WANDERER_GROUP_MAP_SYNC", "false")
   |> String.to_existing_atom()
 
+sync_framework_enabled =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_SYNC_FRAMEWORK", "false")
+  |> String.to_existing_atom()
+
+bootstrap_admin_character =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_BOOTSTRAP_ADMIN_CHARACTER", "")
+
 map_subscription_characters_limit =
   config_dir
   |> get_int_from_path_or_env("WANDERER_MAP_SUBSCRIPTION_CHARACTERS_LIMIT", 10_000)
@@ -277,6 +286,12 @@ config :wanderer_app,
   # CHEWY PATCH: map-ACL-from-groups sync, see
   # WandererApp.Env.group_map_sync_enabled?/0.
   group_map_sync_enabled: group_map_sync_enabled,
+  # CHEWY PATCH: ESI sync framework master switch, see
+  # WandererApp.Env.sync_framework_enabled?/0.
+  sync_framework_enabled: sync_framework_enabled,
+  # CHEWY PATCH: Bootstrap admin for identity suite by character name, see
+  # WandererApp.Env.bootstrap_admin_character/0 and WandererApp.Identity.BootstrapAdmin.
+  bootstrap_admin_character: bootstrap_admin_character,
   # CHEWY PATCH: DEV-ONLY authentication bypass token, see dev_auth_token above.
   dev_auth_token: dev_auth_token,
   # CHEWY PATCH: private ChewyTech branding, see WandererApp.Branding.
@@ -427,6 +442,14 @@ identity_suite_jobs =
     _ -> []
   end
 
+# CHEWY PATCH: daily sync-feed retention purge, see
+# WandererApp.Sync.Retention.purge_all/0.
+sync_framework_jobs =
+  case sync_framework_enabled do
+    true -> [{"@daily", {WandererApp.Sync.Retention, :purge_all, []}}]
+    _ -> []
+  end
+
 config :wanderer_app, WandererApp.Scheduler,
   timezone: :utc,
   jobs:
@@ -434,7 +457,7 @@ config :wanderer_app, WandererApp.Scheduler,
       {"@daily", {WandererApp.Map.Audit, :archive, []}},
       {"@daily", {WandererApp.Map.GarbageCollector, :cleanup_chain_passages, []}},
       {"@daily", {WandererApp.Map.GarbageCollector, :cleanup_system_signatures, []}}
-    ] ++ sheduler_jobs ++ identity_suite_jobs,
+    ] ++ sheduler_jobs ++ identity_suite_jobs ++ sync_framework_jobs,
   timeout: :infinity
 
 if config_env() == :prod do

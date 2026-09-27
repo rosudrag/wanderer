@@ -82,6 +82,25 @@ defmodule WandererApp.Env do
   # CHEWY PATCH: map-ACL-from-groups sync. See
   # WandererApp.Identity.MapAclSync and docs/chewy/corp-suite-plan.md §9 Phase 1.
   def group_map_sync_enabled?(), do: get_key(:group_map_sync_enabled, false)
+  # CHEWY PATCH: ESI sync framework master switch. See
+  # WandererApp.Sync.Scheduler and docs/chewy/corp-suite-plan.md §9 Phase 2.
+  def sync_framework_enabled?(), do: get_key(:sync_framework_enabled, false)
+  # CHEWY PATCH: Bootstrap admin for identity suite by character name. See
+  # WandererApp.Identity.BootstrapAdmin and docs/chewy/corp-suite-plan.md §9 Phase 0.
+  # When set, the logged-in user owning this character is granted corp_suite_admin
+  # permission. Default nil (off); format: exact EVE character name.
+  def bootstrap_admin_character() do
+    case get_key(:bootstrap_admin_character, nil) do
+      nil -> nil
+      char_name -> String.trim(char_name)
+    end
+    |> case do
+      nil -> nil
+      "" -> nil
+      char_name -> char_name
+    end
+  end
+
   def admins(), do: get_key(:admins, [])
   def admin_username(), do: get_key(:admin_username)
   def admin_password(), do: get_key(:admin_password)

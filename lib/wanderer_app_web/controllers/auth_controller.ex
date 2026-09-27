@@ -105,6 +105,11 @@ defmodule WandererAppWeb.AuthController do
         _ -> :ok
       end
     end
+    # CHEWY PATCH: identity/state/groups suite — bootstrap admin by character
+    # name on login, idempotent, inert unless WANDERER_BOOTSTRAP_ADMIN_CHARACTER
+    # is set. See docs/chewy/corp-suite-plan.md §9 Phase 0 bootstrap.
+    WandererApp.Identity.BootstrapAdmin.maybe_bootstrap()
+
 
     WandererApp.Character.TrackingConfigUtils.update_active_tracking_pool()
 

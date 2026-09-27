@@ -19,7 +19,7 @@
 
 | # | Question | Blocks | Default if owner says nothing |
 |---|---|---|---|
-| 1 | Who holds the director-scope token day one, and succession plan? | `OwnedCorporation.director_character_id` UI, Phases 4/6/7/13/16/17/18 staging | No default possible — real organizational fact |
+| 1 | Who holds the director-scope token day one, and succession plan? | `OwnedCorporation.director_character_id` UI, Phases 4/6/7/13/16/17/18 staging | **Fatloard** named bootstrap instance admin (via `WANDERER_BOOTSTRAP_ADMIN_CHARACTER`); director token supply and succession TBD |
 | 2 | Approximate active member count, and expected growth | Poll cadence tuning across every Phase-2+ phase | Tens to low hundreds; re-tune above ~500 |
 | 3 | Minimum-viable account-recovery/admin-disable action | Phase 1 go-live | Recommend: alongside Phase 1, not deferred |
 | 4 | Acceptable ops budget (RAM/DB) on Hetzner EX44 for Phases 16/17 | Whether Phases 16/17 ship at daily cadence or cut entirely | Treat as tight — daily cadence; these cut first if budget is constrained |

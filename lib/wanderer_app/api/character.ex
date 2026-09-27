@@ -36,6 +36,11 @@ defmodule WandererApp.Api.Character do
       action: :read
     )
 
+    define(:by_name,
+      get_by: [:name],
+      action: :read
+    )
+
     define(:active_by_user,
       action: :active_by_user
     )
