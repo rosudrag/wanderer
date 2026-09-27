@@ -793,6 +793,14 @@ defmodule WandererApp.Character.Tracker do
               :update_permissions
             )
 
+            # CHEWY PATCH: identity/state/groups suite — recompute state
+            # if this character is the affected user's designated main;
+            # inert unless WANDERER_IDENTITY_SUITE is on. See
+            # docs/chewy/corp-suite-plan.md §2.2, §9 Phase 0 hook #11.
+            if WandererApp.Env.identity_suite_enabled?() do
+              WandererApp.Identity.StateEngine.maybe_recompute_for_character!(character)
+            end
+
             state
             |> Map.merge(%{alliance_id: alliance_id})
 
@@ -854,6 +862,14 @@ defmodule WandererApp.Character.Tracker do
               "character:#{character.eve_id}",
               :update_permissions
             )
+
+            # CHEWY PATCH: identity/state/groups suite — recompute state
+            # if this character is the affected user's designated main;
+            # inert unless WANDERER_IDENTITY_SUITE is on. See
+            # docs/chewy/corp-suite-plan.md §2.2, §9 Phase 0 hook #11.
+            if WandererApp.Env.identity_suite_enabled?() do
+              WandererApp.Identity.StateEngine.maybe_recompute_for_character!(character)
+            end
 
             state
             |> Map.merge(%{corporation_id: corporation_id})

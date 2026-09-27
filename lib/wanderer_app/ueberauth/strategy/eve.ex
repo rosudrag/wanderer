@@ -18,6 +18,9 @@ defmodule WandererApp.Ueberauth.Strategy.Eve do
   def handle_request!(%{params: params} = conn) do
     with_wallet = Map.get(params, "w", "false") in ~w(true 1)
     is_admin? = Map.get(params, "admin", "false") in ~w(true 1)
+    # CHEWY PATCH: director-scope SSO tier. See
+    # docs/chewy/corp-suite-plan.md §4/§9 Phase 0.
+    is_director? = Map.get(params, "director", "false") in ~w(true 1)
     invite_token = Map.get(params, "invite", nil)
 
     {invite_token_valid, invite_type} = check_invite_valid(invite_token)
@@ -29,6 +32,7 @@ defmodule WandererApp.Ueberauth.Strategy.Eve do
         scopes =
           cond do
             is_admin? -> option(conn, :admin_scope) || params["scope"]
+            is_director? -> option(conn, :director_scope) || params["scope"]
             with_wallet -> option(conn, :wallet_scope) || params["scope"]
             true -> option(conn, :default_scope) || params["scope"]
           end
@@ -46,13 +50,14 @@ defmodule WandererApp.Ueberauth.Strategy.Eve do
           |> with_param(:hl, conn)
           |> with_state_param(conn)
 
-        opts = oauth_client_options_from_conn(conn, with_wallet, is_admin?)
+        opts = oauth_client_options_from_conn(conn, with_wallet, is_admin?, is_director?)
 
         WandererApp.Cache.put(
           "eve_auth_#{params[:state]}",
           [
             with_wallet: with_wallet,
             is_admin?: is_admin?,
+            is_director?: is_director?,
             tracking_pool: Keyword.get(opts, :tracking_pool)
           ],
           ttl: :timer.minutes(30)
@@ -200,13 +205,14 @@ defmodule WandererApp.Ueberauth.Strategy.Eve do
     if option(conn, key), do: Keyword.put(opts, key, option(conn, key)), else: opts
   end
 
-  defp oauth_client_options_from_conn(conn, with_wallet, is_admin?) do
+  defp oauth_client_options_from_conn(conn, with_wallet, is_admin?, is_director?) do
     tracking_pool = WandererApp.Character.TrackingConfigUtils.get_active_pool!()
 
     base_options = [
       redirect_uri: "#{WandererApp.Env.base_url()}/auth/eve/callback",
       with_wallet: with_wallet,
       is_admin?: is_admin?,
+      is_director?: is_director?,
       tracking_pool: tracking_pool
     ]
 

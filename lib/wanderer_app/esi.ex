@@ -23,6 +23,7 @@ defmodule WandererApp.Esi do
   defdelegate get_character_location(character_eve_id, opts \\ []), to: WandererApp.Esi.ApiClient
   defdelegate get_character_online(character_eve_id, opts \\ []), to: WandererApp.Esi.ApiClient
   defdelegate get_character_ship(character_eve_id, opts \\ []), to: WandererApp.Esi.ApiClient
+  defdelegate get_character_roles(character_eve_id, opts \\ []), to: WandererApp.Esi.ApiClient
   defdelegate get_routes_custom(hubs, origin, params), to: WandererApp.Esi.ApiClient
   defdelegate get_routes_eve(hubs, origin, params, opts), to: WandererApp.Esi.ApiClient
   defdelegate search(character_eve_id, opts \\ []), to: WandererApp.Esi.ApiClient

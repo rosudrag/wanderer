@@ -42,5 +42,13 @@ defmodule WandererApp.Api do
     resource WandererApp.Api.MapPing
     resource WandererApp.Api.MapInvite
     resource WandererApp.Api.MapWebhookSubscription
+    resource WandererApp.Api.OwnedCorporation
+    resource WandererApp.Api.Group
+    resource WandererApp.Api.GroupMembership
+    resource WandererApp.Api.GroupAutoRule
+    resource WandererApp.Api.GroupPermission
+    resource WandererApp.Api.StandingGrant
+    resource WandererApp.Api.UserIdentity
+    resource WandererApp.Api.AuditLog
   end
 end

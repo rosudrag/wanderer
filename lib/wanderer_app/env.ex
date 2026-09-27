@@ -76,6 +76,9 @@ defmodule WandererApp.Env do
   def character_api_disabled?(), do: get_key(:character_api_disabled, false)
   def wanderer_kills_service_enabled?(), do: get_key(:wanderer_kills_service_enabled, false)
   def wallet_tracking_enabled?(), do: get_key(:wallet_tracking_enabled, false)
+  # CHEWY PATCH: identity/state/groups suite master switch. See
+  # WandererApp.Identity.StateEngine and docs/chewy/corp-suite-plan.md.
+  def identity_suite_enabled?(), do: get_key(:identity_suite_enabled, false)
   def admins(), do: get_key(:admins, [])
   def admin_username(), do: get_key(:admin_username)
   def admin_password(), do: get_key(:admin_password)

@@ -214,6 +214,9 @@ defmodule WandererApp.Esi.ApiClient do
   def get_character_ship(character_eve_id, opts \\ []),
     do: get_character_auth_data(character_eve_id, "ship", opts ++ @cache_opts)
 
+  def get_character_roles(character_eve_id, opts \\ []),
+    do: get_character_auth_data(character_eve_id, "roles", opts)
+
   def search(character_eve_id, opts \\ []) do
     params = Keyword.get(opts, :params, %{}) |> Map.new()
 

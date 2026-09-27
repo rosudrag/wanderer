@@ -78,6 +78,11 @@ map_subscriptions_enabled =
   |> get_var_from_path_or_env("WANDERER_MAP_SUBSCRIPTIONS_ENABLED", "false")
   |> String.to_existing_atom()
 
+identity_suite_enabled =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_IDENTITY_SUITE", "false")
+  |> String.to_existing_atom()
+
 map_subscription_characters_limit =
   config_dir
   |> get_int_from_path_or_env("WANDERER_MAP_SUBSCRIPTION_CHARACTERS_LIMIT", 10_000)
@@ -261,6 +266,9 @@ config :wanderer_app,
   angle_snap: angle_snap,
   # CHEWY PATCH: connection traffic counter, see WandererApp.Map.ConnectionTraffic.
   connection_traffic: connection_traffic,
+  # CHEWY PATCH: identity/state/groups suite master switch, see
+  # WandererApp.Env.identity_suite_enabled?/0.
+  identity_suite_enabled: identity_suite_enabled,
   # CHEWY PATCH: DEV-ONLY authentication bypass token, see dev_auth_token above.
   dev_auth_token: dev_auth_token,
   # CHEWY PATCH: private ChewyTech branding, see WandererApp.Branding.
@@ -329,6 +337,12 @@ config :ueberauth, Ueberauth,
            "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1 esi-wallet.read_character_wallet.v1",
          admin_scope:
            "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1 esi-wallet.read_character_wallet.v1 esi-wallet.read_corporation_wallets.v1 esi-mail.send_mail.v1",
+         # CHEWY PATCH: director-scope SSO tier. See
+         # docs/chewy/corp-suite-plan.md §4/§9 Phase 0 — a fourth, additive
+         # entry in this same multi-tier mechanism, requested only through
+         # an explicit "director" request param, never the default login.
+         director_scope:
+           "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1 esi-characters.read_corporation_roles.v1",
          callback_url: "#{web_app_url}/auth/eve/callback"
        ]}
   ]
@@ -351,6 +365,8 @@ config :ueberauth, WandererApp.Ueberauth.Strategy.Eve.OAuth,
     System.get_env("EVE_CLIENT_WITH_WALLET_ID", "<EVE_CLIENT_WITH_WALLET_ID>"),
   client_id_with_corp_wallet:
     System.get_env("EVE_CLIENT_WITH_CORP_WALLET_ID", "<EVE_CLIENT_WITH_CORP_WALLET_ID>"),
+  client_id_with_director:
+    System.get_env("EVE_CLIENT_WITH_DIRECTOR_ID", "<EVE_CLIENT_WITH_DIRECTOR_ID>"),
   client_secret_default: System.get_env("EVE_CLIENT_SECRET", "<EVE_CLIENT_SECRET>"),
   client_secret_1: System.get_env("EVE_CLIENT_SECRET_1", ""),
   client_secret_2: System.get_env("EVE_CLIENT_SECRET_2", ""),
@@ -365,7 +381,9 @@ config :ueberauth, WandererApp.Ueberauth.Strategy.Eve.OAuth,
   client_secret_with_wallet:
     System.get_env("EVE_CLIENT_WITH_WALLET_SECRET", "<EVE_CLIENT_WITH_WALLET_SECRET>"),
   client_secret_with_corp_wallet:
-    System.get_env("EVE_CLIENT_WITH_CORP_WALLET_SECRET", "<EVE_CLIENT_WITH_CORP_WALLET_SECRET>")
+    System.get_env("EVE_CLIENT_WITH_CORP_WALLET_SECRET", "<EVE_CLIENT_WITH_CORP_WALLET_SECRET>"),
+  client_secret_with_director:
+    System.get_env("EVE_CLIENT_WITH_DIRECTOR_SECRET", "<EVE_CLIENT_WITH_DIRECTOR_SECRET>")
 
 config :logger,
   truncate: :infinity,
@@ -393,6 +411,14 @@ sheduler_jobs =
       []
   end
 
+# CHEWY PATCH: daily identity/state recompute sweep, see
+# WandererApp.Identity.StateEngine.recompute_all/0.
+identity_suite_jobs =
+  case identity_suite_enabled do
+    true -> [{"@daily", {WandererApp.Identity.StateEngine, :recompute_all, []}}]
+    _ -> []
+  end
+
 config :wanderer_app, WandererApp.Scheduler,
   timezone: :utc,
   jobs:
@@ -400,7 +426,7 @@ config :wanderer_app, WandererApp.Scheduler,
       {"@daily", {WandererApp.Map.Audit, :archive, []}},
       {"@daily", {WandererApp.Map.GarbageCollector, :cleanup_chain_passages, []}},
       {"@daily", {WandererApp.Map.GarbageCollector, :cleanup_system_signatures, []}}
-    ] ++ sheduler_jobs,
+    ] ++ sheduler_jobs ++ identity_suite_jobs,
   timeout: :infinity
 
 if config_env() == :prod do

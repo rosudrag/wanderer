@@ -7,6 +7,7 @@ defmodule WandererApp.Ueberauth do
 
     cond do
       Keyword.get(opts, :is_admin?) -> config[:client_id_with_corp_wallet]
+      Keyword.get(opts, :is_director?) -> config[:client_id_with_director]
       Keyword.get(opts, :with_wallet) -> config[:client_id_with_wallet]
       not is_nil(tracking_pool) -> get_settings(tracking_pool)[:client_id]
       true -> config[:client_id_default]
@@ -19,6 +20,7 @@ defmodule WandererApp.Ueberauth do
 
     cond do
       Keyword.get(opts, :is_admin?) -> config[:client_secret_with_corp_wallet]
+      Keyword.get(opts, :is_director?) -> config[:client_secret_with_director]
       Keyword.get(opts, :with_wallet) -> config[:client_secret_with_wallet]
       not is_nil(tracking_pool) -> get_settings(tracking_pool)[:client_secret]
       true -> config[:client_secret_default]
