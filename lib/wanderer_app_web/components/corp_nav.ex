@@ -40,6 +40,21 @@ defmodule WandererAppWeb.CorpNav do
         <.icon name="hero-key-solid" class="w-6 h-6" />
       </.link>
     </div>
+    <div :if={
+      @corp_flags[:identity_suite_enabled?] and @corp_flags[:corp_roster_enabled?] and
+        @show_sidebar
+    }>
+      <.link
+        navigate={~p"/corp/roster"}
+        class={[
+          "flex-1 w-full h-14 block text-gray-400 hover:text-white p-3 tooltip tooltip-right",
+          @active_tab == :corp && "text-white"
+        ]}
+        data-tip="Roster"
+      >
+        <.icon name="hero-users-solid" class="w-6 h-6" />
+      </.link>
+    </div>
     """
   end
 end

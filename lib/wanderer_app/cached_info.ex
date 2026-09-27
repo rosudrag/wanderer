@@ -360,6 +360,32 @@ defmodule WandererApp.CachedInfo do
     |> cache_items(:edencom_solar_systems)
   end
 
+  # CHEWY PATCH: corp roster feed (and any later phase needing arbitrary
+  # character-ID -> name resolution, e.g. a contract counterparty who
+  # isn't a corp member) resolves names via a single batch ESI call
+  # (WandererApp.Esi.resolve_universe_names/1) rather than one call per
+  # ID; this caches the result so a later render doesn't re-resolve an
+  # ID this process has already seen. Same additive-function pattern as
+  # get_ship_type/1 above, not its own Cachex worker -- WandererApp.Cache
+  # (Nebulex) already exists for exactly this shape of lookup, see
+  # cache_items/2 below. See docs/chewy/corp-suite-plan.md §9 Phase 3.
+  def get_character_name(character_id) do
+    case WandererApp.Cache.get({:character_name, character_id}) do
+      nil ->
+        case WandererApp.Esi.resolve_universe_names([character_id]) do
+          {:ok, [%{"id" => ^character_id, "name" => name}]} ->
+            WandererApp.Cache.put({:character_name, character_id}, name, ttl: :timer.hours(24))
+            {:ok, name}
+
+          _not_found ->
+            {:error, :not_found}
+        end
+
+      name ->
+        {:ok, name}
+    end
+  end
+
   defp cache_items([], _list_name), do: :ok
 
   defp cache_items(items, list_name),

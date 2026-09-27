@@ -53,5 +53,6 @@ defmodule WandererApp.Api do
     resource WandererApp.Api.GroupMapAccessGrant
     resource WandererApp.Api.GroupMapSyncedMember
     resource WandererApp.Api.SyncRun
+    resource WandererApp.Api.CorpRosterSnapshot
   end
 end

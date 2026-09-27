@@ -205,6 +205,49 @@ defmodule WandererApp.Esi.ApiClient do
         opts
       )
 
+  # CHEWY PATCH: corp roster feed (docs/chewy/corp-suite-plan.md §9 Phase 3).
+  # get_corporation_auth_data/3 doesn't accept a per-call :etag opt (it's a
+  # shared helper every existing wallet/structures caller uses unmodified),
+  # so this is a narrow sibling rather than widening that one. `opts` must
+  # include `access_token:`/`character_id:` (same shape as every other
+  # corp-auth call, e.g. get_corporation_wallet_journal/3) and may include
+  # `etag:` -- absent it still activates do_get/4's etag mode with no
+  # value to send (first-ever fetch), so a 200 always returns the 3-tuple.
+  # KNOWN GAP, disclosed not glossed over, not a silent truncation: this
+  # fetches page 1 only, no X-Pages loop. seat-parity.md §8.3 states
+  # ESI pages this endpoint at 100 rows/page. Concrete consequence: a
+  # corp with 101+ members will have members 101+ silently absent from
+  # every roster poll -- and this alliance's own stated target scale
+  # (~100 characters, seat-parity.md line 6) sits right at that
+  # boundary, not comfortably under it. This is a documented limitation
+  # for this phase, not a TODO scoped out of it: closing it means
+  # threading corp_roster_feed.ex's fetch/2 loop to call this with
+  # `params: [page: n]` for n in 2..x_pages, aggregating before
+  # returning to WandererApp.Sync.Scheduler. Revisit before roster size
+  # is trusted past 100 members.
+  def get_corp_membertracking(corporation_id, opts \\ []) do
+    path = "/corporations/#{corporation_id}/membertracking/"
+
+    do_get(
+      path,
+      [params: opts[:params] || []] ++ get_auth_opts(opts),
+      opts |> with_refresh_token() |> Keyword.put_new(:etag, nil)
+    )
+  end
+
+  # Public, unauthenticated. ESI caps this at 1000 IDs per call; a ~100
+  # -member roster's character/location/ship IDs combined stay well under
+  # that, so this is a single batch call, not a chunking loop.
+  def resolve_universe_names(ids) when is_list(ids) and ids != [] do
+    do_post_esi(
+      "/universe/names/",
+      [json: ids, params: %{datasource: "tranquility"}],
+      @general_pool
+    )
+  end
+
+  def resolve_universe_names([]), do: {:ok, []}
+
   def get_character_location(character_eve_id, opts \\ []),
     do: get_character_auth_data(character_eve_id, "location", opts ++ @cache_opts)
 

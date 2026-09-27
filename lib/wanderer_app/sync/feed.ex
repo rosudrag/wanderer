@@ -16,9 +16,34 @@ defmodule WandererApp.Sync.Feed do
   @doc "Seconds between polls of one scope. May vary by scope (e.g. a director-token feed polled more often than a member one)."
   @callback cadence_seconds(scope :: term()) :: pos_integer()
 
-  @doc "Which token this scope's fetch/2 call authenticates with."
+  @doc """
+  Which token this scope's fetch/2 call authenticates with, or why none
+  is available yet. `{:error, term()}` was added in
+  docs/chewy/corp-suite-plan.md §9 Phase 3 -- the original Phase 2 spec
+  didn't allow it, but the first real feed (`WandererApp.Sync.Feeds.
+  CorpRosterFeed`) needs to express "no director token configured for
+  this corp yet" without raising, and that's a legitimate, expected
+  steady state (not every WandererApp.Api.OwnedCorporation has one),
+  not an exceptional one.
+
+  `WandererApp.Sync.Scheduler` never calls this callback -- a feed's own
+  `fetch/2` is responsible for resolving its own token and turning a
+  resolution failure into `{:error, _}` on its own, so the Scheduler
+  never needs a separate answer to "what token". The real caller is
+  `WandererAppWeb.CorpRosterLive`'s admin panel: it calls
+  `CorpRosterFeed.token_holder/1` per corp to show a human "which token
+  will the next poll use, and does it still resolve", including
+  catching a dangling `director_character_id` (the FK is set, but the
+  `WandererApp.Api.Character` row it points at is gone) that a bare
+  `corp.director_character_id != nil` presence check would miss. If a
+  later feed's admin surface never needs this, `token_holder/1` stops
+  earning its place in the behaviour and should be removed rather than
+  kept as an unused formality.
+  """
   @callback token_holder(scope :: term()) ::
-              {:character, WandererApp.Api.Character.t()} | {:corp_director, term()}
+              {:character, WandererApp.Api.Character.t()}
+              | {:corp_director, term()}
+              | {:error, term()}
 
   @doc """
   Fetches one scope's data, threading the last-known ETag (nil on first

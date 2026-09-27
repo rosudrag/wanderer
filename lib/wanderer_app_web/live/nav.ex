@@ -13,7 +13,8 @@ defmodule WandererAppWeb.Nav do
     CharactersTrackingLive,
     CorpShellLive,
     CorpIdentityLive,
-    GroupMapGrantsLive
+    GroupMapGrantsLive,
+    CorpRosterLive
   }
 
   def on_mount(_scope, _params, _session, socket) do
@@ -43,7 +44,8 @@ defmodule WandererAppWeb.Nav do
        # hook #5 / Phase 1.
        corp_flags: %{
          identity_suite_enabled?: WandererApp.Env.identity_suite_enabled?(),
-         group_map_sync_enabled?: WandererApp.Env.group_map_sync_enabled?()
+         group_map_sync_enabled?: WandererApp.Env.group_map_sync_enabled?(),
+         corp_roster_enabled?: WandererApp.Env.corp_roster_enabled?()
        }
      )}
   end
@@ -93,6 +95,9 @@ defmodule WandererAppWeb.Nav do
           :corp
 
         {GroupMapGrantsLive, _} ->
+          :corp
+
+        {CorpRosterLive, _} ->
           :corp
 
         {_, _} ->
