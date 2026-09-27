@@ -24,7 +24,11 @@ defmodule WandererAppWeb.GroupMapGrantsLive do
       not socket.assigns.corp_flags[:group_map_sync_enabled?] ->
         {:ok, socket |> push_navigate(to: ~p"/corp")}
 
-      socket.assigns.current_user_role != :admin and not WandererApp.Identity.PermissionCache.has_permission?(socket.assigns.current_user.id, :corp_suite_admin) ->
+      socket.assigns.current_user_role != :admin and
+        not WandererApp.Identity.PermissionCache.has_permission?(
+          socket.assigns.current_user.id,
+          :corp_suite_admin
+        ) ->
         {:ok, socket |> push_navigate(to: ~p"/corp")}
 
       true ->
