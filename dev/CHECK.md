@@ -220,6 +220,43 @@ log file), so a failure in one phase doesn't cross-contaminate the other.
   [PASS] flag on: /corp/identity body contains id="corp-identity-state"
 ```
 
+**Extending `-Routes` for the next feature flag.** `-Routes` currently
+only proves the `WANDERER_IDENTITY_SUITE` contract. It intentionally does
+NOT also probe `WANDERER_GROUP_MAP_SYNC`'s `/corp/map-grants` page (added
+by the Phase 1 commit, `lib/wanderer_app_web/live/corp/group_map_grants_live.ex`)
+— one flag's contract per probe keeps a failure unambiguous about which
+feature broke. Note that page is gated differently from `/corp/identity`:
+it sits inside the same `/corp` scope (so it's still 404 when
+`WANDERER_IDENTITY_SUITE` is off, same as every other `/corp/*` route),
+but its OWN flag check is a LiveView-`mount/3` redirect
+(`push_navigate(to: ~p"/corp")` when `corp_flags[:group_map_sync_enabled?]`
+is false), not a second router-level 404 plug — and it also requires
+`current_user_role == :admin`, which the seeded dev-login user is not by
+default. To add a probe for a flag like this, follow the same shape as
+the existing `off`/`on` block in the `-Routes` section of `check.ps1`:
+
+1. Pick the fixed dev-only route for the new flag (e.g. `/corp/map-grants`).
+2. In the flag-off boot (`$bootOff`), the new flag is already unset (every
+   env var not explicitly overridden stays cleared), so the existing
+   `/corp` 404 assertion already covers "flag off" for any route nested
+   under `/corp` — no new off-boot assertion is needed unless the new
+   route has its OWN failure mode besides the shared 404 (like the
+   redirect above).
+3. In the flag-on boot (`$bootOn`), add the new flag's env var (e.g.
+   `WANDERER_GROUP_MAP_SYNC = "true"`) to the `Start-Boot` call's
+   hashtable alongside `WANDERER_IDENTITY_SUITE = "true"` — no new boot
+   cycle needed, since both flags' contracts can be proven against the
+   same authenticated session as long as they don't require mutually
+   exclusive states. If the route also requires a role the dev-login user
+   lacks (as `/corp/map-grants` does), promote that user first — e.g. via
+   a small addition to `dev/seed_identity.exs` setting the seeded user's
+   role, or a one-off `Ash.update!` in the probe boot itself — then probe
+   with the same `$session` cookie jar and assert 200 (plus a
+   distinguishing body substring, the way `id="corp-identity-state"`
+   distinguishes the identity suite's page).
+4. Print a `Status` row per new assertion — do not fold multiple flags'
+   assertions into one row, or a failure stops being self-explanatory.
+
 ### `-All`
 
 ```powershell
