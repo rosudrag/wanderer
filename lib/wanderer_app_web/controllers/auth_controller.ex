@@ -16,6 +16,10 @@ defmodule WandererAppWeb.AuthController do
         "has_refresh=#{not is_nil(auth.credentials.refresh_token)}"
     )
 
+    %{
+      "CharacterOwnerHash" => character_owner_hash
+    } = auth.extra.raw_info.user
+
     character_data = %{
       eve_id: "#{auth.info.email}",
       name: auth.info.name,
@@ -23,23 +27,31 @@ defmodule WandererAppWeb.AuthController do
       refresh_token: auth.credentials.refresh_token,
       expires_at: auth.credentials.expires_at,
       scopes: auth.credentials.scopes,
-      tracking_pool: active_tracking_pool
+      tracking_pool: active_tracking_pool,
+      character_owner_hash: character_owner_hash
     }
 
-    %{
-      "CharacterOwnerHash" => character_owner_hash
-    } = auth.extra.raw_info.user
-
-    {:ok, character} =
+    {:ok, character, stored_owner_hash} =
       case WandererApp.Api.Character.by_eve_id(character_data.eve_id) do
         {:ok, character} ->
+          # Captured BEFORE the update below overwrites it — this is the hash
+          # as of the character's previous login, compared against the
+          # incoming one in resolve_user_id/4 to detect an ownership
+          # transfer (CCP changes CharacterOwnerHash when a character moves
+          # to a different EVE account; see
+          # test/unit/controllers/auth_controller_test.exs's "resolve_user_id/4
+          # (ownership transfer detection)" describe block and
+          # docs/chewy/corp-suite-plan.md §2.8.1).
+          stored_owner_hash = character.character_owner_hash
+
           character_update = %{
             name: auth.info.name,
             access_token: auth.credentials.token,
             refresh_token: auth.credentials.refresh_token,
             expires_at: auth.credentials.expires_at,
             scopes: auth.credentials.scopes,
-            tracking_pool: active_tracking_pool
+            tracking_pool: active_tracking_pool,
+            character_owner_hash: character_owner_hash
           }
 
           {:ok, character} =
@@ -68,7 +80,7 @@ defmodule WandererAppWeb.AuthController do
           # Update corporation/alliance data from ESI to ensure access control is current
           update_character_affiliation(character)
 
-          {:ok, character}
+          {:ok, character, stored_owner_hash}
 
         {:error, _error} ->
           {:ok, character} = WandererApp.Api.Character.create(character_data)
@@ -77,39 +89,22 @@ defmodule WandererAppWeb.AuthController do
           # Fetch initial corporation/alliance data for new characters
           update_character_affiliation(character)
 
-          {:ok, character}
+          {:ok, character, nil}
       end
 
-    user_id =
-      case user do
-        nil ->
-          case WandererApp.Api.User.by_hash(character_owner_hash) do
-            {:ok, user} ->
-              user.id
-
-            _ ->
-              case character.user_id do
-                nil ->
-                  :telemetry.execute([:wanderer_app, :user, :registered], %{count: 1})
-
-                  WandererApp.Api.User
-                  |> Ash.Changeset.for_create(:create, %{
-                    name: "User_#{character_owner_hash}",
-                    hash: character_owner_hash
-                  })
-                  |> Ash.create!()
-                  |> Map.get(:id)
-
-                user_id ->
-                  user_id
-              end
-          end
-
-        user ->
-          user.id
-      end
+    user_id = resolve_user_id(user, character, character_owner_hash, stored_owner_hash)
 
     maybe_update_character_user_id(character, user_id)
+
+    # CHEWY PATCH: identity/state/groups suite — recompute state right
+    # after login, inert unless WANDERER_IDENTITY_SUITE is on. See
+    # docs/chewy/corp-suite-plan.md §2.2, §9 Phase 0 hook #8.
+    if WandererApp.Env.identity_suite_enabled?() do
+      case WandererApp.Api.User.by_id(user_id) do
+        {:ok, current_user} -> WandererApp.Identity.StateEngine.recompute!(current_user)
+        _ -> :ok
+      end
+    end
 
     WandererApp.Character.TrackingConfigUtils.update_active_tracking_pool()
 
@@ -151,6 +146,65 @@ defmodule WandererAppWeb.AuthController do
   end
 
   def maybe_update_character_user_id(_character, _user_id), do: :ok
+
+  # Resolves which `User` a login belongs to.
+  #
+  # `stored_owner_hash` is the character's `character_owner_hash` as it stood
+  # BEFORE this login's update — `nil` for a brand-new character, otherwise
+  # the value captured on the character's previous login. Comparing it
+  # against the incoming `character_owner_hash` is CCP's own signal that the
+  # character has moved to a different EVE account since it last logged in
+  # here (a transfer/sale) — see docs/chewy/corp-suite-plan.md §2.8.1/§2.8.2.
+  #
+  # A detected mismatch is treated exactly like a never-before-seen
+  # character (`character.user_id == nil`): the stale `character.user_id`
+  # link, which still points at the PREVIOUS owner's account, is never
+  # reused. This is the minimum correct fix — full transfer handling (audit
+  # logging, detaching the old user, state recompute) is a later change,
+  # not built here. Public (not `defp`) so it is directly exercisable, same
+  # posture as `maybe_update_character_user_id/2` above.
+  def resolve_user_id(nil, character, character_owner_hash, stored_owner_hash) do
+    case WandererApp.Api.User.by_hash(character_owner_hash) do
+      {:ok, existing_user} ->
+        existing_user.id
+
+      _ ->
+        if ownership_transferred?(stored_owner_hash, character_owner_hash) do
+          Logger.warning(
+            "[AuthController] character_owner_hash changed for character " <>
+              "#{character.id} (eve_id=#{character.eve_id}) — treating as an " <>
+              "ownership transfer, not reusing the previous user_id=" <>
+              inspect(character.user_id)
+          )
+
+          create_user_for_hash!(character_owner_hash)
+        else
+          case character.user_id do
+            nil -> create_user_for_hash!(character_owner_hash)
+            user_id -> user_id
+          end
+        end
+    end
+  end
+
+  def resolve_user_id(session_user, _character, _character_owner_hash, _stored_owner_hash) do
+    session_user.id
+  end
+
+  defp ownership_transferred?(nil, _incoming), do: false
+  defp ownership_transferred?(stored, incoming), do: stored != incoming
+
+  defp create_user_for_hash!(character_owner_hash) do
+    :telemetry.execute([:wanderer_app, :user, :registered], %{count: 1})
+
+    WandererApp.Api.User
+    |> Ash.Changeset.for_create(:create, %{
+      name: "User_#{character_owner_hash}",
+      hash: character_owner_hash
+    })
+    |> Ash.create!()
+    |> Map.get(:id)
+  end
 
   # Updates character's corporation and alliance data from ESI.
   # This ensures ACL-based access control uses current corporation membership,

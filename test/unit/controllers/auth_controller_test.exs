@@ -193,6 +193,88 @@ defmodule WandererAppWeb.AuthControllerTest do
     end
   end
 
+  describe "resolve_user_id/4 (ownership transfer detection)" do
+    test "a session user always wins, regardless of any hash" do
+      {:ok, session_user} =
+        WandererApp.Api.User
+        |> Ash.Changeset.for_create(:create, %{name: "Session User", hash: "SESSION_HASH"})
+        |> Ash.create()
+
+      {:ok, character} = create_character("111000001", "SOME_HASH")
+
+      resolved =
+        AuthController.resolve_user_id(session_user, character, "IRRELEVANT", "ALSO_IRRELEVANT")
+
+      assert resolved == session_user.id
+    end
+
+    test "same-hash re-login resolves to the character's existing owner, not a new user" do
+      {:ok, owner} =
+        WandererApp.Api.User
+        |> Ash.Changeset.for_create(:create, %{name: "Owner", hash: "STABLE_HASH"})
+        |> Ash.create()
+
+      {:ok, character} = create_character("111000002", "STABLE_HASH")
+      character = WandererApp.Api.Character.assign_user!(character, %{user_id: owner.id})
+
+      resolved = AuthController.resolve_user_id(nil, character, "STABLE_HASH", "STABLE_HASH")
+
+      assert resolved == owner.id
+    end
+
+    test "a changed hash does NOT resolve to the character's stale user_id (ownership transfer)" do
+      {:ok, seller} =
+        WandererApp.Api.User
+        |> Ash.Changeset.for_create(:create, %{name: "Seller", hash: "SELLER_HASH"})
+        |> Ash.create()
+
+      {:ok, character} = create_character("111000003", "SELLER_HASH")
+      character = WandererApp.Api.Character.assign_user!(character, %{user_id: seller.id})
+
+      resolved = AuthController.resolve_user_id(nil, character, "BUYER_HASH", "SELLER_HASH")
+
+      refute resolved == seller.id
+    end
+
+    test "a changed hash resolves to a fresh user keyed to the new hash" do
+      {:ok, seller} =
+        WandererApp.Api.User
+        |> Ash.Changeset.for_create(:create, %{name: "Seller2", hash: "SELLER_HASH_2"})
+        |> Ash.create()
+
+      {:ok, character} = create_character("111000004", "SELLER_HASH_2")
+      character = WandererApp.Api.Character.assign_user!(character, %{user_id: seller.id})
+
+      resolved = AuthController.resolve_user_id(nil, character, "BUYER_HASH_2", "SELLER_HASH_2")
+
+      {:ok, new_user} = WandererApp.Api.User.by_id(resolved)
+      assert new_user.hash == "BUYER_HASH_2"
+      assert new_user.id != seller.id
+    end
+
+    test "a brand-new character (no stored hash yet) falls through to character.user_id" do
+      {:ok, character} = create_character("111000005", "FRESH_HASH")
+
+      resolved = AuthController.resolve_user_id(nil, character, "FRESH_HASH", nil)
+
+      {:ok, new_user} = WandererApp.Api.User.by_id(resolved)
+      assert new_user.hash == "FRESH_HASH"
+    end
+
+    defp create_character(eve_id, owner_hash) do
+      WandererApp.Api.Character.create(%{
+        eve_id: eve_id,
+        name: "Test Character #{eve_id}",
+        access_token: "tok",
+        refresh_token: "reftok",
+        expires_at: 9_999_999_999,
+        scopes: "esi-location.read_location.v1",
+        tracking_pool: "default",
+        character_owner_hash: owner_hash
+      })
+    end
+  end
+
   # The SSO callback failure path calls put_flash/3, which requires the session
   # and flash plugs that the real :browser pipeline installs. A bare
   # build_conn/0 has neither, so these tests died with "flash not fetched"

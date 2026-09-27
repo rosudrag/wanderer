@@ -52,7 +52,8 @@ defmodule WandererApp.Api.Character do
       :refresh_token,
       :expires_at,
       :scopes,
-      :tracking_pool
+      :tracking_pool,
+      :character_owner_hash
     ]
 
     defaults [:create, :read, :destroy]
@@ -95,7 +96,16 @@ defmodule WandererApp.Api.Character do
 
     update :update do
       require_atomic? false
-      accept([:name, :access_token, :refresh_token, :expires_at, :scopes, :tracking_pool])
+
+      accept([
+        :name,
+        :access_token,
+        :refresh_token,
+        :expires_at,
+        :scopes,
+        :tracking_pool,
+        :character_owner_hash
+      ])
 
       change(set_attribute(:deleted, false))
     end
