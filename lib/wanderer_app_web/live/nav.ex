@@ -92,13 +92,13 @@ defmodule WandererAppWeb.Nav do
           :corp
 
         {CorpIdentityLive, _} ->
-          :corp
+          :corp_identity
 
         {GroupMapGrantsLive, _} ->
-          :corp
+          :corp_map_grants
 
         {CorpRosterLive, _} ->
-          :corp
+          :corp_roster
 
         {_, _} ->
           nil
