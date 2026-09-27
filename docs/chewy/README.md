@@ -19,7 +19,7 @@
 
 | # | Question | Blocks | Default if owner says nothing |
 |---|---|---|---|
-| 1 | Who holds the director-scope token day one, and succession plan? | `OwnedCorporation.director_character_id` UI, Phases 4/6/7/13/16/17/18 staging | **Fatloard** named bootstrap instance admin (via `WANDERER_BOOTSTRAP_ADMIN_CHARACTER`); director token supply and succession TBD |
+| 1 | Who holds the director-scope token day one, and succession plan? | `OwnedCorporation.director_character_id` UI, Phases 4/6/7/13/16/17/18 staging | **Resolved:** `Fatloard` is named instance admin via `WANDERER_BOOTSTRAP_ADMIN_CHARACTER` (Phase 0). **Open:** whether Fatloard holds in-game Director role, and succession plan if they leave. |
 | 2 | Approximate active member count, and expected growth | Poll cadence tuning across every Phase-2+ phase | Tens to low hundreds; re-tune above ~500 |
 | 3 | Minimum-viable account-recovery/admin-disable action | Phase 1 go-live | Recommend: alongside Phase 1, not deferred |
 | 4 | Acceptable ops budget (RAM/DB) on Hetzner EX44 for Phases 16/17 | Whether Phases 16/17 ship at daily cadence or cut entirely | Treat as tight — daily cadence; these cut first if budget is constrained |
@@ -56,8 +56,9 @@
 | **0** | Identity, state, groups foundation | `WANDERER_IDENTITY_SUITE` |
 | **1** | Map-ACL-from-groups | `WANDERER_GROUP_MAP_SYNC` |
 | **2** | ESI sync framework | `WANDERER_SYNC_FRAMEWORK` |
-| **3** | Discord role sync | `WANDERER_DISCORD_SYNC` |
-| **4** | Roster & corp member tracking | `WANDERER_CORP_ROSTER` |
+| **3** | Roster & corp member tracking | `WANDERER_CORP_ROSTER` |
+| **4** | Discord role sync | `WANDERER_DISCORD_SYNC` |
+
 | **5** | Corp wallet UI | `WANDERER_CORP_WALLET_UI` |
 | **6** | Structure timers (owned, ESI-synced) | `WANDERER_CORP_STRUCTURES_SYNC` |
 | **7** | Moon extraction tracking | `WANDERER_MOON_EXTRACTION` |
@@ -77,4 +78,5 @@
 
 ## Current Status
 
-**No implementation has started.** Phase 0 (Identity foundation) is the next executable unit. All upstream merges, backports, and non-suite bugfixes continue in parallel; they never conflict with additive suite code if the hook discipline is kept.
+**Phases 0–3 shipped and committed to `chewy` (not yet deployed).** Phase 0 (Identity foundation), Phase 1 (Map-ACL-from-groups), Phase 2 (ESI sync framework), Phase 3 (Corp roster feed) are complete. Phase 4 (Discord role sync) is next. All upstream merges, backports, and non-suite bugfixes continue in parallel; they never conflict with additive suite code if the hook discipline is kept.
+
