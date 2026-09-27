@@ -210,6 +210,13 @@ defmodule WandererAppWeb.Router do
     plug WandererAppWeb.Plugs.CheckWebhooksDisabled
   end
 
+  # CHEWY PATCH: scanner-client signature sync. See
+  # WandererAppWeb.Plugs.CheckBotSyncDisabled and
+  # WandererApp.Map.Operations.SignatureSync.
+  pipeline :api_bot_sync do
+    plug WandererAppWeb.Plugs.CheckBotSyncDisabled
+  end
+
   # CHEWY PATCH: identity/state/groups suite. See
   # WandererAppWeb.Plugs.CheckIdentitySuiteDisabled and
   # docs/chewy/corp-suite-plan.md §9 Phase 0.
@@ -333,6 +340,17 @@ defmodule WandererAppWeb.Router do
     resources "/webhooks", MapWebhooksAPIController, except: [:new, :edit] do
       post "/rotate-secret", MapWebhooksAPIController, :rotate_secret
     end
+  end
+
+  # CHEWY PATCH: scanner-client signature sync (requires WANDERER_BOT_SYNC=true).
+  # Its own scope rather than a line inside the big /api/maps block above, so an
+  # upstream edit to that block never conflicts with ours. POST /signatures/sync
+  # cannot collide with the `resources "/signatures"` routes there: those
+  # generate POST only on the collection root, never on a sub-path.
+  scope "/api/maps/:map_identifier", WandererAppWeb do
+    pipe_through [:api, :api_map, :api_bot_sync]
+
+    post "/signatures/sync", MapSignatureSyncAPIController, :sync
   end
 
   #

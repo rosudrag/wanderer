@@ -105,6 +105,11 @@ defmodule WandererApp.Env do
   # WandererApp.Sync.Feeds.CorpRosterFeed and docs/chewy/corp-suite-plan.md §9 Phase 3.
   def corp_roster_enabled?(), do: get_key(:corp_roster_enabled, false)
 
+  # CHEWY PATCH: scanner-client signature sync endpoint master switch. See
+  # WandererApp.Map.Operations.SignatureSync and
+  # WandererAppWeb.Plugs.CheckBotSyncDisabled.
+  def bot_sync_enabled?(), do: get_key(:bot_sync_enabled, false)
+
   def admins(), do: get_key(:admins, [])
   def admin_username(), do: get_key(:admin_username)
   def admin_password(), do: get_key(:admin_password)

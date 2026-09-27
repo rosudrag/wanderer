@@ -102,6 +102,11 @@ corp_roster_enabled =
   |> get_var_from_path_or_env("WANDERER_CORP_ROSTER", "false")
   |> String.to_existing_atom()
 
+bot_sync_enabled =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_BOT_SYNC", "false")
+  |> String.to_existing_atom()
+
 map_subscription_characters_limit =
   config_dir
   |> get_int_from_path_or_env("WANDERER_MAP_SUBSCRIPTION_CHARACTERS_LIMIT", 10_000)
@@ -300,6 +305,10 @@ config :wanderer_app,
   # CHEWY PATCH: corp roster feed master switch, see
   # WandererApp.Env.corp_roster_enabled?/0.
   corp_roster_enabled: corp_roster_enabled,
+  # CHEWY PATCH: scanner-client signature sync endpoint, see
+  # WandererApp.Env.bot_sync_enabled?/0 and
+  # WandererApp.Map.Operations.SignatureSync.
+  bot_sync_enabled: bot_sync_enabled,
   # CHEWY PATCH: DEV-ONLY authentication bypass token, see dev_auth_token above.
   dev_auth_token: dev_auth_token,
   # CHEWY PATCH: private ChewyTech branding, see WandererApp.Branding.
