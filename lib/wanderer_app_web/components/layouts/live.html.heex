@@ -9,6 +9,7 @@
   >
     {@inner_content}
   </main>
+
   <aside class={[
     "h-12 w-14 left-0 absolute bg-gray-400 bg-opacity-5  text-gray-200 shadow-lg border-r border-b border-stone-800  bg-opacity-70 bg-neutral-900",
     classes("h-full": @show_sidebar)
@@ -19,9 +20,16 @@
       show_sidebar={@show_sidebar}
       map_subscriptions_enabled={@map_subscriptions_enabled?}
     />
-    <.ping_container :if={@show_sidebar} rtt_class={@rtt_class} />
-    <.donate_container :if={@show_sidebar} />
-    <.feedback_container :if={@show_sidebar} />
+    <%!-- CHEWY PATCH: identity/state/groups suite nav entry, kept out of
+         sidebar_nav_links/1 (layouts.ex) on purpose -- see
+         WandererAppWeb.CorpNav and docs/chewy/corp-suite-plan.md §9 Phase 0
+         hook #5. --%>
+    <WandererAppWeb.CorpNav.corp_nav_links
+      corp_flags={@corp_flags}
+      active_tab={@active_tab}
+      show_sidebar={@show_sidebar}
+    /> <.ping_container :if={@show_sidebar} rtt_class={@rtt_class} />
+    <.donate_container :if={@show_sidebar} /> <.feedback_container :if={@show_sidebar} />
     <.youtube_container :if={@show_sidebar} />
     <div :if={@show_sidebar}>
       {live_render(@socket, WandererAppWeb.ServerStatusLive,
@@ -30,8 +38,6 @@
       )}
     </div>
   </aside>
-
   <.new_version_banner app_version={@app_version} enabled={true} latest_post={@latest_post} />
 </div>
-
 <.live_component module={WandererAppWeb.Alerts} id="notifications" view_flash={@flash} />

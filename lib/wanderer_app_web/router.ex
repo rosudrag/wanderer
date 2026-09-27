@@ -210,6 +210,13 @@ defmodule WandererAppWeb.Router do
     plug WandererAppWeb.Plugs.CheckWebhooksDisabled
   end
 
+  # CHEWY PATCH: identity/state/groups suite. See
+  # WandererAppWeb.Plugs.CheckIdentitySuiteDisabled and
+  # docs/chewy/corp-suite-plan.md §9 Phase 0.
+  pipeline :corp do
+    plug WandererAppWeb.Plugs.CheckIdentitySuiteDisabled
+  end
+
   pipeline :api_acl do
     plug WandererAppWeb.Plugs.CheckAclApiKey
   end
@@ -510,6 +517,24 @@ defmodule WandererAppWeb.Router do
   scope "/dev", WandererAppWeb do
     pipe_through :browser
     get "/login", DevAuthController, :login
+  end
+
+  # CHEWY PATCH: identity/state/groups suite. Route exists unconditionally
+  # (routes compile before config/runtime.exs runs -- see
+  # WandererAppWeb.Plugs.CheckIdentitySuiteDisabled's moduledoc);
+  # WANDERER_IDENTITY_SUITE=false makes every request in this scope 404.
+  # Later phases add routes inside this same live_session, not a new one.
+  scope "/corp", WandererAppWeb do
+    pipe_through [:browser, :corp]
+
+    live_session :corp,
+      on_mount: [
+        {WandererAppWeb.UserAuth, :ensure_authenticated},
+        WandererAppWeb.Nav
+      ] do
+      live "/", CorpShellLive, :index
+      live "/identity", CorpIdentityLive, :index
+    end
   end
 
   #
