@@ -93,14 +93,18 @@ put the printed `WANDERER_IMAGE=` into `.env` → `.\deploy.ps1`.
 ## Reaching the deploy config from here
 
 `infra/` is a **junction** to the monorepo's `projects/infrastructure/hetzner/wanderer/`
-(`.env`, `.env.example`, `deploy.ps1`, `docker-compose.yml`, `README.md`). It is untracked —
-listed in `.git/info/exclude`, not `.gitignore`, so it costs nothing on an upstream merge and
-can never be committed. Recreate it after a fresh clone:
+(`.env`, `.env.example`, `deploy.ps1`, `docker-compose.yml`, `README.md`), and `infra-repo/` is a
+second junction to that submodule's **root** (`projects/infrastructure/`), which is where its git
+repo actually lives. Both are untracked — listed in `.git/info/exclude`, not `.gitignore`, so they
+cost nothing on an upstream merge and can never be committed. Recreate them after a fresh clone:
 
 ```powershell
 New-Item -ItemType Junction -Path infra `
   -Target I:\Development\azure\chewytech\projects\infrastructure\hetzner\wanderer
+New-Item -ItemType Junction -Path infra-repo `
+  -Target I:\Development\azure\chewytech\projects\infrastructure
 Add-Content .git\info\exclude "infra/"
+Add-Content .git\info\exclude "infra-repo/"
 ```
 
 What works through it and what does not:
@@ -115,9 +119,16 @@ What works through it and what does not:
 "Silently finds nothing" is the trap: a search that should have matched returns clean, and the
 absence reads like the config not containing the thing. Search the absolute path instead.
 
-Editing `infra/**` edits the monorepo working tree; commit it from the monorepo, not here. The
-reverse junction also exists — `infra/wanderer` points back at this repo — but nothing traverses
-it, so there is no recursion.
+Editing `infra/**` edits the monorepo working tree. Commit it with `git -C infra-repo …` — that is
+what `infra-repo/` is for: `git -C infra` would work too (git walks up to the submodule root by the
+real path), but only `infra-repo` lets you see and stage paths outside `hetzner/wanderer/`. Stage
+explicit paths: that submodule usually carries unrelated dirty files from other projects. Its own
+`AGENTS.md` applies there — conventional-commit subjects, 50/72, no AI attribution — and after
+pushing it, bump the pointer in the superproject (`git -C I:/Development/azure/chewytech add
+projects/infrastructure`), or the change exists only in the submodule.
+
+The reverse junction also exists — `infra/wanderer` points back at this repo — but nothing
+traverses it, so there is no recursion.
 
 `deploy.ps1` must be **run** from the monorepo (it resolves siblings like
 `hetzner/reverse-proxy`), and it builds `origin/chewy`, not `infra/wanderer`.
