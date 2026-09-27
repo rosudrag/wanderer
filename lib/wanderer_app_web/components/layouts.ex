@@ -37,11 +37,13 @@ defmodule WandererAppWeb.Layouts do
     >
       <div class="hs-overlay-backdrop transition duration absolute left-0 top-0 w-full h-full bg-gray-900 bg-opacity-50 dark:bg-opacity-80 dark:bg-neutral-900">
       </div>
+
       <div class="absolute top-[50%] left-[50%] translate-x-[-50%] translate-y-[-50%] flex flex-col items-center gap-6">
         <div class="flex items-center">
           <div class="rounded w-9 h-9 w-[80px] h-[66px] flex items-center justify-center relative z-20">
             <.icon name="hero-chevron-double-right" class="w-9 h-9 mr-[-40px]" />
           </div>
+
           <div id="refresh-area">
             <.live_component module={WandererAppWeb.MapRefresh} id="map-refresh" />
           </div>
@@ -53,6 +55,7 @@ defmodule WandererAppWeb.Layouts do
                 <div class="text-white text-nowrap text-sm [text-shadow:_0_1px_0_rgb(0_0_0_/_40%)]">
                   Update Required
                 </div>
+
                 <a
                   href="/changelog"
                   target="_blank"
@@ -78,15 +81,17 @@ defmodule WandererAppWeb.Layouts do
                 />
                 <div class="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-transparent to-black/70">
                 </div>
+
                 <div class="absolute top-2 left-2 flex items-center gap-1 bg-orange-500/90 px-2 py-0.5 rounded text-xs font-semibold">
-                  <.icon name="hero-newspaper-solid" class="w-3 h-3" />
-                  <span>Latest News</span>
+                  <.icon name="hero-newspaper-solid" class="w-3 h-3" /> <span>Latest News</span>
                 </div>
+
                 <div class="absolute bottom-0 left-0 w-full p-3">
                   <% [first_part | rest] = String.split(@latest_post.title, ":", parts: 2) %>
                   <h3 class="text-white text-sm font-bold ccp-font [text-shadow:_0_1px_0_rgb(0_0_0_/_40%)]">
                     {first_part}
                   </h3>
+
                   <p
                     :if={rest != []}
                     class="text-gray-200 text-xs ccp-font text-ellipsis overflow-hidden whitespace-nowrap [text-shadow:_0_1px_0_rgb(0_0_0_/_40%)]"
@@ -108,13 +113,16 @@ defmodule WandererAppWeb.Layouts do
                 Support {WandererApp.Branding.name()}
               </span>
             </div>
+
             <div class="text-gray-300 text-xs mb-3 [text-shadow:_0_1px_0_rgb(0_0_0_/_40%)]">
               Buy PLEX from the official EVE Online store using our promocode to support the development.
             </div>
+
             <div class="flex items-center gap-3">
               <code class="bg-gray-900/60 px-2 py-1 rounded text-green-400 text-sm font-mono border border-gray-600">
                 WANDERER
               </code>
+
               <a
                 href="https://www.eveonline.com/plex"
                 target="_blank"
@@ -195,6 +203,10 @@ defmodule WandererAppWeb.Layouts do
   attr :show_admin, :boolean
   attr :show_sidebar, :boolean
   attr :map_subscriptions_enabled, :boolean
+  # CHEWY PATCH: corp suite nav flags, rendered inside this list by
+  # WandererAppWeb.CorpNav. Defaults to an empty map so the upstream
+  # callers of this component keep working unchanged.
+  attr :corp_flags, :map, default: %{}
 
   def sidebar_nav_links(assigns) do
     ~H"""
@@ -206,27 +218,32 @@ defmodule WandererAppWeb.Layouts do
               <.icon name="hero-bars-3-solid" class="w-6 h-6" />
             </li>
           </div>
+
           <ul
             tabindex="0"
             class="menu menu-sm dropdown-content bg-base-100 rounded-box z-[1] mt-3 w-52 p-2 shadow"
           >
             <li><a href="/changelog">Changelog</a></li>
+
             <li :if={WandererApp.Branding.news_enabled?()}><a href="/news">News</a></li>
+
             <li :if={@map_subscriptions_enabled and WandererApp.Branding.community_links?()}>
               <a href="/sponsors">Sponsors</a>
             </li>
+
             <li><a href="/license">License</a></li>
+
             <li :if={WandererApp.Branding.news_enabled?()}><a href="/contacts">Contact Us</a></li>
           </ul>
         </div>
+
         <div :if={@show_sidebar}>
           <.nav_link
             href="/last"
             active={@active_tab == :map}
             icon="hero-viewfinder-circle-solid"
             tip="Map"
-          />
-          <.nav_link href="/maps" active={@active_tab == :maps} icon="hero-map-solid" tip="Maps" />
+          /> <.nav_link href="/maps" active={@active_tab == :maps} icon="hero-map-solid" tip="Maps" />
           <.nav_link
             href="/access-lists"
             active={@active_tab == :access_lists}
@@ -252,8 +269,18 @@ defmodule WandererAppWeb.Layouts do
             icon="hero-heart-solid"
             tip="Our Sponsors"
           />
+          <%!-- CHEWY PATCH: corp suite entries. They must live INSIDE this
+               list, not as a sibling of the <ul> in live.html.heex: the ul is
+               `h-full`, so anything after it renders below the aside's bottom
+               edge and is invisible. See WandererAppWeb.CorpNav. --%>
+          <WandererAppWeb.CorpNav.corp_nav_links
+            corp_flags={@corp_flags}
+            active_tab={@active_tab}
+            show_sidebar={@show_sidebar}
+          />
         </div>
       </div>
+
       <div>
         <div
           :if={@show_sidebar}
@@ -266,27 +293,32 @@ defmodule WandererAppWeb.Layouts do
           >
             <.icon name="hero-user-solid" class="w-6 h-6" />
           </div>
+
           <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-[1] w-52 p-2 shadow">
             <li :if={@show_admin}>
               <.link navigate="/admin">
                 Admin
               </.link>
             </li>
+
             <li :if={@show_admin}>
               <.link navigate="/admin/characters">
                 Characters
               </.link>
             </li>
+
             <li :if={@show_admin}>
               <.link navigate="/admin/errors">
                 Errors
               </.link>
             </li>
+
             <li :if={@map_subscriptions_enabled}>
               <.link navigate="/profile">
                 Profile
               </.link>
             </li>
+
             <li>
               <.link navigate="/auth/signout">
                 Logout
@@ -294,6 +326,7 @@ defmodule WandererAppWeb.Layouts do
             </li>
           </ul>
         </div>
+
         <div
           phx-click="toggle_sidebar"
           class="z-10 flex-1 absolute bottom-0 left-0 w-full h-2 block text-gray-400 hover:bg-[#444]"
