@@ -21,6 +21,7 @@ defmodule WandererApp.Api.GroupPermission do
     define(:destroy, action: :destroy)
 
     define(:by_id, get_by: [:id], action: :read)
+    define(:by_group_and_permission, get_by: [:group_id, :permission], action: :read)
 
     define(:by_group,
       action: :by_group,

@@ -17,6 +17,7 @@ defmodule WandererApp.Api.Group do
     define(:destroy, action: :destroy)
 
     define(:by_id, get_by: [:id], action: :read)
+    define(:by_name, get_by: [:name], action: :read)
   end
 
   actions do

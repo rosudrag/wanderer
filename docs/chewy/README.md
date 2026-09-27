@@ -26,6 +26,16 @@
 | 5 | Reconciliation against `docs/chewy/seat-parity.md`'s ESI scope catalogue | Phase 0's `member_scope`/`director_scope` strings before implementation | Not a design blocker — only config-literal in hook #1 changes |
 
 
+## Two separate admin concepts — do not conflate them
+
+| | `WANDERER_ADMINS` | `WANDERER_BOOTSTRAP_ADMIN_CHARACTER` |
+|---|---|---|
+| Controls | Upstream `/admin/*` routes (`AdminLive`, `AdminMapsLive`, `AdminCharactersLive`, the ErrorTracker dashboard — `lib/wanderer_app_web/router.ex`'s `/admin` scope) | This fork's `/corp/*` admin surfaces (currently `GroupMapGrantsLive`'s `/corp/map-grants`) |
+| Value | Comma-separated list of `User.hash` (CCP's `CharacterOwnerHash`, unknowable before the user's first login) | A single EVE **character name** (any operator can write this before anyone has ever logged in) |
+| Mechanism | `WandererAppWeb.Plugs.SetUser` (`lib/wanderer_app_web/controllers/plugs/set_user.ex:20-29`) sets `current_user_role: :admin` when `user.hash in admins` — **or when `admins == []`** | `WandererApp.Identity.BootstrapAdmin.maybe_bootstrap/0`, called on every login (`auth_controller.ex`), finds the named `Character`'s owning `User` and ensures it holds a `GroupPermission` of `:corp_suite_admin` on a "Corp Suite Administrators" `Group`; read back via `WandererApp.Identity.PermissionCache.has_permission?/2` |
+| **Sharp edge** | `config/runtime.exs:230-235`: unset/empty `WANDERER_ADMINS` decodes to `[]`, and `set_user.ex:23` treats an empty list as "everyone is admin" (`Enum.empty?(admins) or user.hash in admins`) — **every logged-in user gets upstream `/admin` access** until at least one hash is configured. This is upstream's own default, unchanged by this fork; it is not a chewy-introduced bug, but it is easy to trip on a fresh deployment. | Unset/empty defaults to `nil` (`WandererApp.Env.bootstrap_admin_character/0` normalises `""` to `nil`) and `maybe_bootstrap/0` is a true no-op — no group, no permission, no membership row, ever written. Inert by construction, the opposite failure mode from `WANDERER_ADMINS`. |
+
+
 ## Read This First (Implementing Agent)
 
 **Non-negotiables from this codebase (`AGENTS.md`) and the plan:**

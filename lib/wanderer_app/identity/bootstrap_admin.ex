@@ -12,7 +12,6 @@ defmodule WandererApp.Identity.BootstrapAdmin do
   """
 
   require Logger
-  require Ash.Query
   alias WandererApp.Api.{Character, User, Group, GroupMembership, GroupPermission}
 
   @bootstrap_admin_permission :corp_suite_admin
@@ -75,18 +74,18 @@ defmodule WandererApp.Identity.BootstrapAdmin do
   end
 
   # Ensures the Corp Suite Administrators group exists with the
-  # corp_suite_admin permission.
+  # corp_suite_admin permission. Uses `Group.by_name/2` (a purpose-built
+  # `get_by` read, see `lib/wanderer_app/api/group.ex`) rather than a hand
+  # rolled `Ash.Query.filter/2` pipeline — piping `Ash.read/2`'s `{:ok,
+  # list}` result into `Ash.Query.filter/2` is not a valid query pipeline
+  # and raises `ArgumentError` at runtime (see the git history of this
+  # file for the bug this replaced).
   defp ensure_admin_group() do
-    case Ash.read(Group, authorize?: false)
-         |> Ash.Query.filter(name == ^@bootstrap_group_name)
-         |> Ash.read_one(authorize?: false) do
-      {:ok, group} when is_struct(group, Group) ->
-        # Group exists; ensure permission exists
+    case Group.by_name(@bootstrap_group_name, authorize?: false) do
+      {:ok, group} ->
         ensure_permission(group)
-        {:ok, group}
 
-      {:ok, nil} ->
-        # Create the group
+      {:error, _not_found} ->
         with {:ok, group} <-
                Group.create(
                  %{name: @bootstrap_group_name, kind: :manual},
@@ -96,23 +95,23 @@ defmodule WandererApp.Identity.BootstrapAdmin do
           Logger.info("[BootstrapAdmin] Created group #{@bootstrap_group_name}")
           {:ok, group}
         end
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 
-  # Ensures the permission exists on the group (idempotent).
+  # Ensures the permission exists on the group (idempotent). Uses
+  # `GroupPermission.by_group_and_permission/3`, a purpose-built `get_by`
+  # read keyed on the resource's own `uniq_group_permission` identity.
   defp ensure_permission(group) do
-    case Ash.read(GroupPermission, authorize?: false)
-         |> Ash.Query.filter(group_id == ^group.id and permission == ^@bootstrap_admin_permission)
-         |> Ash.read_one(authorize?: false) do
-      {:ok, perm} when is_struct(perm, GroupPermission) ->
+    case GroupPermission.by_group_and_permission(
+           group.id,
+           @bootstrap_admin_permission,
+           authorize?: false
+         ) do
+      {:ok, _perm} ->
         # Permission already exists
         {:ok, group}
 
-      {:ok, nil} ->
-        # Create the permission
+      {:error, _not_found} ->
         with {:ok, _} <-
                GroupPermission.create(
                  %{group_id: group.id, permission: @bootstrap_admin_permission},
@@ -124,23 +123,20 @@ defmodule WandererApp.Identity.BootstrapAdmin do
 
           {:ok, group}
         end
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 
-  # Adds the user to the group if not already a member (idempotent).
+  # Adds the user to the group if not already a member (idempotent). Uses
+  # `GroupMembership.by_group_and_user/3`, the existing purpose-built
+  # `get_by` read already used by `WandererApp.Identity.StateEngine` for
+  # the same idiom.
   defp ensure_user_in_group(user, group) do
-    case Ash.read(GroupMembership, authorize?: false)
-         |> Ash.Query.filter(group_id == ^group.id and user_id == ^user.id)
-         |> Ash.read_one(authorize?: false) do
-      {:ok, membership} when is_struct(membership, GroupMembership) ->
+    case GroupMembership.by_group_and_user(group.id, user.id, authorize?: false) do
+      {:ok, membership} ->
         # Already a member
         {:ok, membership}
 
-      {:ok, nil} ->
-        # Add user to group
+      {:error, _not_found} ->
         with {:ok, membership} <-
                GroupMembership.create(
                  %{
@@ -157,9 +153,6 @@ defmodule WandererApp.Identity.BootstrapAdmin do
 
           {:ok, membership}
         end
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 end
