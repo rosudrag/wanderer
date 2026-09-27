@@ -58,7 +58,6 @@
 | **2** | ESI sync framework | `WANDERER_SYNC_FRAMEWORK` |
 | **3** | Roster & corp member tracking | `WANDERER_CORP_ROSTER` |
 | **4** | Discord role sync | `WANDERER_DISCORD_SYNC` |
-
 | **5** | Corp wallet UI | `WANDERER_CORP_WALLET_UI` |
 | **6** | Structure timers (owned, ESI-synced) | `WANDERER_CORP_STRUCTURES_SYNC` |
 | **7** | Moon extraction tracking | `WANDERER_MOON_EXTRACTION` |
