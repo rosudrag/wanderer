@@ -6,9 +6,12 @@ defmodule WandererAppWeb.CorpRosterLive do
   a corp actually uses), distinguishing active from departed members.
   Viewable by any authenticated user (gated on `WANDERER_CORP_ROSTER`
   the same way as every other `/corp/*` page); assigning which character
-  holds an owned corp's director token is `current_user_role == :admin`
-  -only, the same posture as `WandererAppWeb.GroupMapGrantsLive`. See
-  docs/chewy/corp-suite-plan.md §9 Phase 3.
+  holds an owned corp's director token uses `WandererApp.Identity.
+  PermissionCache.corp_admin?/2` (the existing upstream
+  `current_user_role == :admin` concept, or the `:corp_suite_admin`
+  group permission), the same shared check as
+  `WandererAppWeb.GroupMapGrantsLive` and `WandererAppWeb.CorpShellLive`'s
+  "Map access grants" link. See docs/chewy/corp-suite-plan.md §9 Phase 3.
   """
 
   use WandererAppWeb, :live_view
@@ -19,9 +22,15 @@ defmodule WandererAppWeb.CorpRosterLive do
   @impl true
   def mount(_params, _session, socket) do
     if socket.assigns.corp_flags[:corp_roster_enabled?] do
+      is_corp_admin? =
+        WandererApp.Identity.PermissionCache.corp_admin?(
+          socket.assigns.current_user_role,
+          socket.assigns.current_user.id
+        )
+
       {:ok,
        socket
-       |> assign(active_tab: :corp, page_title: "Corp Roster")
+       |> assign(active_tab: :corp, page_title: "Corp Roster", is_corp_admin?: is_corp_admin?)
        |> load()}
     else
       {:ok, socket |> push_navigate(to: ~p"/corp")}
@@ -32,7 +41,7 @@ defmodule WandererAppWeb.CorpRosterLive do
   def handle_event(
         "set_director",
         %{"corporation_id" => corporation_id, "character_id" => character_id},
-        %{assigns: %{current_user_role: :admin}} = socket
+        %{assigns: %{is_corp_admin?: true}} = socket
       ) do
     with {:ok, corp} <- OwnedCorporation.by_id(corporation_id, authorize?: false),
          {:ok, _updated} <-
@@ -47,6 +56,25 @@ defmodule WandererAppWeb.CorpRosterLive do
   end
 
   def handle_event("set_director", _params, socket) do
+    {:noreply, socket |> put_flash(:error, "Not authorized")}
+  end
+
+  def handle_event(
+        "toggle_enabled",
+        %{"corporation_id" => corporation_id},
+        %{assigns: %{is_corp_admin?: true}} = socket
+      ) do
+    with {:ok, corp} <- OwnedCorporation.by_id(corporation_id, authorize?: false),
+         {:ok, _updated} <-
+           OwnedCorporation.update(corp, %{enabled: not corp.enabled}, authorize?: false) do
+      {:noreply, socket |> load()}
+    else
+      _error ->
+        {:noreply, socket |> put_flash(:error, "Could not toggle roster sync")}
+    end
+  end
+
+  def handle_event("toggle_enabled", _params, socket) do
     {:noreply, socket |> put_flash(:error, "Not authorized")}
   end
 

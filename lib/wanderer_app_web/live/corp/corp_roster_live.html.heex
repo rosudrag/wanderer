@@ -24,7 +24,7 @@
       Grant director access
     </.link>
   </div>
-  <div :if={@current_user_role == :admin} class="mb-8 border border-gray-700 rounded p-4">
+  <div :if={@is_corp_admin?} class="mb-8 border border-gray-700 rounded p-4">
     <h2 class="text-lg font-semibold mb-2">Director token holder</h2>
     <div :for={corp <- @corps} class="flex items-center gap-2 mb-2" id={"director-row-#{corp.id}"}>
       <span class="w-48 text-gray-400">{corp.name}</span>
@@ -55,6 +55,22 @@
       >
         token does not resolve: {inspect(elem(status, 1))}
       </span>
+      <span :if={corp.enabled} class="badge badge-sm badge-success">sync enabled</span>
+      <span
+        :if={not corp.enabled}
+        class="badge badge-sm badge-warning"
+        id={"corp-sync-disabled-#{corp.id}"}
+      >
+        sync disabled -- this corp is never polled, even with a working director token
+      </span>
+      <button
+        phx-click="toggle_enabled"
+        phx-value-corporation_id={corp.id}
+        class="btn btn-xs"
+        id={"toggle-enabled-#{corp.id}"}
+      >
+        {if corp.enabled, do: "Disable sync", else: "Enable sync"}
+      </button>
     </div>
   </div>
 

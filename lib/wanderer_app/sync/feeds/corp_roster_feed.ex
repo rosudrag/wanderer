@@ -39,15 +39,29 @@ defmodule WandererApp.Sync.Feeds.CorpRosterFeed do
 
   @doc """
   `WandererApp.Sync.Registry`'s scope_resolver for this feed. Only
-  corps that already have `director_character_id` set are returned --
-  an unconfigured corp is simply never scheduled, not
-  dispatched-and-immediately-errored every tick.
+  corps that already have `director_character_id` set AND `enabled:
+  true` are returned -- an unconfigured or disabled corp is simply
+  never scheduled, not dispatched-and-immediately-errored every tick.
+
+  CHEWY PATCH, decision made in review: `enabled` was a genuine gap
+  before this fix -- the attribute existed (default `false`) and the
+  plan described it as a per-corp kill switch independent of
+  `WANDERER_CORP_ROSTER`, but nothing consulted it. Chose to honour it
+  rather than delete it: a per-corp off switch is genuinely useful when
+  one corp's director token goes bad and an admin wants to stop
+  polling it without touching the global flag or unassigning the
+  director. The `false` default means an admin must explicitly flip it
+  before ANY corp (new or pre-existing) starts syncing --
+  `WandererAppWeb.CorpRosterLive`'s admin panel surfaces this state
+  explicitly (a distinct "sync disabled" badge, not folded into the
+  token-status line) plus a toggle, so a corp with a perfectly good
+  director token sitting idle is visible, not silently empty.
   """
   def scopes do
     case OwnedCorporation.read(authorize?: false) do
       {:ok, corps} ->
         corps
-        |> Enum.filter(& &1.director_character_id)
+        |> Enum.filter(&(&1.director_character_id && &1.enabled))
         |> Enum.map(&{&1, to_string(&1.eve_corporation_id)})
 
       _error ->
@@ -106,16 +120,19 @@ defmodule WandererApp.Sync.Feeds.CorpRosterFeed do
   def purge_stale(_corp), do: :ok
 
   # -- name resolution ------------------------------------------------------
+  #
+  # CHEWY PATCH: this used to loop CachedInfo.get_character_name/1 (one
+  # ESI call per member on a cold cache) -- fixed in review to a single
+  # CachedInfo.get_character_names/1 batch call, matching this module's
+  # own moduledoc and docs/chewy/corp-suite-plan.md's "one batch call"
+  # design. See test/integration/corp_roster_feed_test.exs's
+  # "resolve_names/1 issues exactly one batch call" test.
 
   defp resolve_names(rows) do
-    character_ids = rows |> Enum.map(& &1["character_id"]) |> Enum.reject(&is_nil/1)
-
-    Map.new(character_ids, fn id ->
-      case CachedInfo.get_character_name(id) do
-        {:ok, name} -> {id, name}
-        _not_found -> {id, nil}
-      end
-    end)
+    rows
+    |> Enum.map(& &1["character_id"])
+    |> Enum.reject(&is_nil/1)
+    |> CachedInfo.get_character_names()
   end
 
   defp resolve_location_name(nil), do: nil

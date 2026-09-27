@@ -9,6 +9,12 @@ defmodule WandererAppWeb.CorpShellLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, socket |> assign(active_tab: :corp, page_title: "Corp")}
+    is_corp_admin? =
+      WandererApp.Identity.PermissionCache.corp_admin?(
+        socket.assigns.current_user_role,
+        socket.assigns.current_user.id
+      )
+
+    {:ok, socket |> assign(active_tab: :corp, page_title: "Corp", is_corp_admin?: is_corp_admin?)}
   end
 end

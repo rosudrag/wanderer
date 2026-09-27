@@ -32,10 +32,13 @@ defmodule WandererApp.Sync.Feeds.CorpRosterFeedTest do
 
   setup do
     Application.put_env(:wanderer_app, :corp_roster_enabled, true)
+    {:ok, _pid} = FakeEsi.start_link()
+    Application.put_env(:wanderer_app, :esi_module, FakeEsi)
 
     on_exit(fn ->
       Application.delete_env(:wanderer_app, :corp_roster_enabled)
       Application.delete_env(:wanderer_app, :sync_feeds)
+      Application.delete_env(:wanderer_app, :esi_module)
     end)
 
     {:ok, corp} =
@@ -134,6 +137,45 @@ defmodule WandererApp.Sync.Feeds.CorpRosterFeedTest do
 
     assert {:ok, []} = CorpRosterSnapshot.by_corporation(@corp_id, authorize?: false)
   end
+
+  test "resolve_names/1 issues exactly one batch resolution call for an N-member payload, not N",
+       %{corp: corp} do
+    rows = Enum.map(1..10, &member_row(2_100_002_000 + &1))
+
+    :ok = CorpRosterFeed.upsert(corp, rows)
+
+    assert FakeEsi.call_count() == 1
+
+    {:ok, saved} = CorpRosterSnapshot.by_corporation(@corp_id, authorize?: false)
+    assert length(saved) == 10
+    assert Enum.all?(saved, &(&1.name != nil))
+  end
+
+  test "a corp with enabled: false is not scheduled even with a director token configured", %{
+    corp: corp
+  } do
+    {:ok, director} =
+      WandererApp.Api.Character.create(
+        %{eve_id: "2100003000", name: "Test Director Character"},
+        authorize?: false
+      )
+
+    {:ok, corp} =
+      OwnedCorporation.update(corp, %{director_character_id: director.id, enabled: true},
+        authorize?: false
+      )
+
+    assert Enum.any?(CorpRosterFeed.scopes(), fn {scoped_corp, _key} ->
+             scoped_corp.id == corp.id
+           end),
+           "sanity check: with enabled: true and a director set, the corp IS scheduled"
+
+    {:ok, corp} = OwnedCorporation.update(corp, %{enabled: false}, authorize?: false)
+
+    refute Enum.any?(CorpRosterFeed.scopes(), fn {scoped_corp, _key} ->
+             scoped_corp.id == corp.id
+           end)
+  end
 end
 
 defmodule FakeCorpRosterFetch do
@@ -170,5 +212,33 @@ defmodule FakeCorpRosterFetch do
   def fetch(_scope, _etag) do
     unless Process.whereis(__MODULE__), do: start_link()
     Agent.get(__MODULE__, & &1)
+  end
+end
+
+defmodule FakeEsi do
+  @moduledoc """
+  Counting stub for `WandererApp.Esi.resolve_universe_names/1` --
+  injected via the `:esi_module` application env
+  (`WandererApp.CachedInfo.get_character_names/2`'s test-injection
+  seam, the same idiom `WandererApp.Sync.Registry.feeds/0` already
+  uses) so `test/integration/corp_roster_feed_test.exs` can assert "one
+  call for N IDs" against a real call count instead of timing, and so
+  every test in that file resolving names never touches live ESI.
+  """
+
+  use Agent
+
+  def start_link(_opts \\ []), do: Agent.start_link(fn -> 0 end, name: __MODULE__)
+  def call_count, do: Agent.get(__MODULE__, & &1)
+
+  def resolve_universe_names(ids) when is_list(ids) do
+    Agent.update(__MODULE__, &(&1 + 1))
+
+    results =
+      Enum.map(ids, fn id ->
+        %{"id" => id, "category" => "character", "name" => "Character #{id}"}
+      end)
+
+    {:ok, results}
   end
 end

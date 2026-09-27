@@ -362,13 +362,18 @@ defmodule WandererApp.CachedInfo do
 
   # CHEWY PATCH: corp roster feed (and any later phase needing arbitrary
   # character-ID -> name resolution, e.g. a contract counterparty who
-  # isn't a corp member) resolves names via a single batch ESI call
-  # (WandererApp.Esi.resolve_universe_names/1) rather than one call per
-  # ID; this caches the result so a later render doesn't re-resolve an
-  # ID this process has already seen. Same additive-function pattern as
-  # get_ship_type/1 above, not its own Cachex worker -- WandererApp.Cache
-  # (Nebulex) already exists for exactly this shape of lookup, see
-  # cache_items/2 below. See docs/chewy/corp-suite-plan.md §9 Phase 3.
+  # isn't a corp member). `get_character_name/1` below is a single-ID
+  # convenience wrapper around the cache -- callers resolving many IDs
+  # at once (the roster feed's whole point) MUST use
+  # `get_character_names/2` instead, which batches every cache miss
+  # into one `WandererApp.Esi.resolve_universe_names/1` call rather
+  # than one call per ID. Both share the same cache entries (a name
+  # `get_character_names/2` just resolved is immediately available to
+  # `get_character_name/1` and vice versa). Same additive-function
+  # pattern as `get_ship_type/1` above, not its own Cachex worker --
+  # `WandererApp.Cache` (Nebulex) already exists for exactly this shape
+  # of lookup, see `cache_items/2` below. See
+  # docs/chewy/corp-suite-plan.md §9 Phase 3.
   def get_character_name(character_id) do
     case WandererApp.Cache.get({:character_name, character_id}) do
       nil ->
@@ -384,6 +389,53 @@ defmodule WandererApp.CachedInfo do
       name ->
         {:ok, name}
     end
+  end
+
+  @doc """
+  Batch character-ID -> name resolution: every ID already in
+  `WandererApp.Cache` is served from there, and every cache miss is
+  resolved with exactly **one** `WandererApp.Esi.resolve_universe_names/1`
+  call (not one per miss) before being written back to the cache.
+  Returns a map keyed by the exact `character_id` values passed in,
+  value `nil` for any ID ESI didn't return a name for.
+
+  `esi_module` defaults to the real `WandererApp.Esi` and is
+  overridable via the `:esi_module` application env -- same
+  test-injection idiom as `WandererApp.Sync.Registry.feeds/0` -- so
+  tests can assert "exactly one call for N IDs" against a counting
+  stub instead of hitting live ESI.
+  """
+  def get_character_names(character_ids, esi_module \\ nil) when is_list(character_ids) do
+    esi_module = esi_module || Application.get_env(:wanderer_app, :esi_module, WandererApp.Esi)
+    character_ids = Enum.uniq(character_ids)
+
+    {cached, missing} =
+      Enum.reduce(character_ids, {%{}, []}, fn id, {cached, missing} ->
+        case WandererApp.Cache.get({:character_name, id}) do
+          nil -> {cached, [id | missing]}
+          name -> {Map.put(cached, id, name), missing}
+        end
+      end)
+
+    resolved =
+      case missing do
+        [] ->
+          %{}
+
+        ids ->
+          case esi_module.resolve_universe_names(ids) do
+            {:ok, results} when is_list(results) ->
+              Map.new(results, fn %{"id" => id, "name" => name} ->
+                WandererApp.Cache.put({:character_name, id}, name, ttl: :timer.hours(24))
+                {id, name}
+              end)
+
+            _error ->
+              %{}
+          end
+      end
+
+    Map.new(character_ids, fn id -> {id, Map.get(cached, id) || Map.get(resolved, id)} end)
   end
 
   defp cache_items([], _list_name), do: :ok

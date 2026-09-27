@@ -7,8 +7,9 @@ defmodule WandererAppWeb.GroupMapGrantsLive do
   Gated two ways: `WANDERER_GROUP_MAP_SYNC` (redirect to `/corp` if off,
   checked in `mount/3` since a LiveView route can't return a plain HTTP
   404 the way `WandererAppWeb.Plugs.CheckIdentitySuiteDisabled` does for
-  `/corp/*` as a whole) and `current_user_role == :admin` (the existing
-  upstream admin concept, reused rather than inventing a parallel one).
+  `/corp/*` as a whole) and `WandererApp.Identity.PermissionCache.
+  corp_admin?/2` (the existing upstream `current_user_role == :admin`
+  concept, or the `:corp_suite_admin` group permission).
   See docs/chewy/corp-suite-plan.md §9 Phase 1.
   """
 
@@ -24,11 +25,10 @@ defmodule WandererAppWeb.GroupMapGrantsLive do
       not socket.assigns.corp_flags[:group_map_sync_enabled?] ->
         {:ok, socket |> push_navigate(to: ~p"/corp")}
 
-      socket.assigns.current_user_role != :admin and
-        not WandererApp.Identity.PermissionCache.has_permission?(
-          socket.assigns.current_user.id,
-          :corp_suite_admin
-        ) ->
+      not WandererApp.Identity.PermissionCache.corp_admin?(
+        socket.assigns.current_user_role,
+        socket.assigns.current_user.id
+      ) ->
         {:ok, socket |> push_navigate(to: ~p"/corp")}
 
       true ->
