@@ -237,8 +237,11 @@ if ($Format -or $All) {
     # `mix format --check-formatted` (or worse, `mix format`) treats that
     # CRLF/LF difference as "unformatted" for the ENTIRE repo -- a
     # previous agent ran it unscoped and it rewrote ~550 unrelated files.
-    $diffFiles = @(git diff --name-only --diff-filter=ACMR $base -- '*.ex' '*.exs' 2>$null)
-    $untrackedFiles = @(git ls-files --others --exclude-standard -- '*.ex' '*.exs' 2>$null)
+    # `.heex` is in .formatter.exs's inputs (the LiveView HTMLFormatter
+    # plugin), so it MUST be in this filter too: it was omitted at first
+    # and four rewritten templates passed the gate unchecked.
+    $diffFiles = @(git diff --name-only --diff-filter=ACMR $base -- '*.ex' '*.exs' '*.heex' 2>$null)
+    $untrackedFiles = @(git ls-files --others --exclude-standard -- '*.ex' '*.exs' '*.heex' 2>$null)
     $changed = @($diffFiles + $untrackedFiles | Sort-Object -Unique |
         Where-Object { Test-Path (Join-Path $RepoRoot $_) })
 
@@ -247,7 +250,7 @@ if ($Format -or $All) {
     if ($changed.Count -eq 0) {
         $elapsed = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
         Record "Format" $true $elapsed "SKIP"
-        Status "SKIP" "No .ex/.exs files changed vs $base"
+        Status "SKIP" "No .ex/.exs/.heex files changed vs $base"
     } else {
         $log = Join-Path $LogsDir "format.log"
         Push-Location $RepoRoot

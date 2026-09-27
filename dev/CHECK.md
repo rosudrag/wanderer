@@ -346,6 +346,28 @@ single file by hand:
 (Get-Content .\file.ex -Raw).Replace("`r`n", "`n") | Set-Content .\file.ex -NoNewline
 ```
 
+### 1a. `-Routes` asserts status codes, not layout
+
+`-Routes` proves a page is *reachable* and that the feature flag gates it.
+It cannot see that the page renders **underneath the sidebar**, or that a
+nav link laid out below the visible area — both shipped to production
+while `-Routes` was green, because both return `200`.
+
+For any UI change, verify the rendered DOM, not just the status code:
+boot, log in via `/dev/login`, and check element parentage and classes.
+Two rules that each cost a release (they are in `AGENTS.md`'s corp-suite
+navigation convention):
+
+- a page root needs `p-4 pl-20 … overflow-auto`, like every upstream page,
+  or the absolutely-positioned `<aside>` covers its content;
+- sidebar entries must render **inside**
+  `Layouts.sidebar_nav_links/1`'s `<ul>` — it is `h-full`, so a sibling
+  after it lays out past the aside's bottom edge and is invisible.
+
+Note the local boot serves an **empty stylesheet** (assets are not built
+there), so pixel geometry measured locally is meaningless. DOM parentage
+and class lists are still valid; screenshots are not.
+
 ### 2. Orphan `erl.exe` Processes (there is no `beam.smp` on Windows)
 
 Windows Erlang has no separate `beam.smp` binary — the VM runs as
