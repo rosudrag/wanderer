@@ -10,6 +10,20 @@
     fetches the first 100-row page from ESI right now -- members beyond
     that may be silently missing. See WandererApp.Esi.ApiClient.get_corp_membertracking/2.
   </p>
+  <div class="mb-8 border border-gray-700 rounded p-4" id="grant-director-access">
+    <h2 class="text-lg font-semibold mb-2">Grant director access</h2>
+    <p class="text-sm text-gray-400 mb-2">
+      If you hold the Director role for this corp in-game, click below to let this app
+      read the corp's full member roster (last login/logout, location, ship) via ESI --
+      a corp-wide read permission on top of your normal map login. Only useful if your
+      character actually has the in-game Director role: if it doesn't, this app still
+      logs you in normally, but the roster stays unpopulated (visibly `:stalled`, not
+      broken) until a character who does have it grants access.
+    </p>
+    <.link href={~p"/auth/eve?director=true"} class="btn btn-sm">
+      Grant director access
+    </.link>
+  </div>
   <div :if={@current_user_role == :admin} class="mb-8 border border-gray-700 rounded p-4">
     <h2 class="text-lg font-semibold mb-2">Director token holder</h2>
     <div :for={corp <- @corps} class="flex items-center gap-2 mb-2" id={"director-row-#{corp.id}"}>

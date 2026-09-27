@@ -372,8 +372,23 @@ config :ueberauth, Ueberauth,
          # docs/chewy/corp-suite-plan.md §4/§9 Phase 0 — a fourth, additive
          # entry in this same multi-tier mechanism, requested only through
          # an explicit "director" request param, never the default login.
+         # Scope audit — every scope here maps to a call that exists today,
+         # not a speculative grab for an unbuilt phase:
+         #   esi-location.read_location.v1/read_ship_type.v1/read_online.v1,
+         #   esi-ui.write_waypoint.v1, esi-search.search_structures.v1
+         #     — same base set as default_scope; a director's own character
+         #       still needs ordinary map/character tracking to keep working.
+         #   esi-characters.read_corporation_roles.v1
+         #     — WandererApp.Identity.DirectorCheck.esi_director?/2.
+         #   esi-corporations.track_members.v1
+         #     — WandererApp.Sync.Feeds.CorpRosterFeed.fetch/2 (docs/chewy/
+         #       corp-suite-plan.md §9 Phase 3). Was MISSING until this
+         #       fix — the roster feed would 403/:stalled forever even
+         #       after a real director consented, since EVE SSO only
+         #       grants what's actually requested. Caught in review, not
+         #       by a test, which is why one now pins both scopes below.
          director_scope:
-           "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1 esi-characters.read_corporation_roles.v1",
+           "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1 esi-characters.read_corporation_roles.v1 esi-corporations.track_members.v1",
          callback_url: "#{web_app_url}/auth/eve/callback"
        ]}
   ]
