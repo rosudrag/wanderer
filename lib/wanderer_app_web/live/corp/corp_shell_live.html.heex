@@ -6,4 +6,11 @@
   <.link navigate={~p"/corp/identity"} class="btn btn-sm">
     Your identity
   </.link>
+  <.link
+    :if={@corp_flags[:group_map_sync_enabled?] and @current_user_role == :admin}
+    navigate={~p"/corp/map-grants"}
+    class="btn btn-sm"
+  >
+    Map access grants
+  </.link>
 </div>

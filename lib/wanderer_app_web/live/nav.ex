@@ -12,7 +12,8 @@ defmodule WandererAppWeb.Nav do
     CharactersLive,
     CharactersTrackingLive,
     CorpShellLive,
-    CorpIdentityLive
+    CorpIdentityLive,
+    GroupMapGrantsLive
   }
 
   def on_mount(_scope, _params, _session, socket) do
@@ -39,8 +40,11 @@ defmodule WandererAppWeb.Nav do
        latest_post: latest_post,
        # CHEWY PATCH: identity/state/groups suite nav flags. See
        # WandererAppWeb.CorpNav and docs/chewy/corp-suite-plan.md §9 Phase 0
-       # hook #5.
-       corp_flags: %{identity_suite_enabled?: WandererApp.Env.identity_suite_enabled?()}
+       # hook #5 / Phase 1.
+       corp_flags: %{
+         identity_suite_enabled?: WandererApp.Env.identity_suite_enabled?(),
+         group_map_sync_enabled?: WandererApp.Env.group_map_sync_enabled?()
+       }
      )}
   end
 
@@ -86,6 +90,9 @@ defmodule WandererAppWeb.Nav do
           :corp
 
         {CorpIdentityLive, _} ->
+          :corp
+
+        {GroupMapGrantsLive, _} ->
           :corp
 
         {_, _} ->

@@ -38,16 +38,34 @@ defmodule WandererApp.Api.GroupMembership do
       action: :active_by_user,
       args: [:user_id]
     )
+
+    define(:active_by_group,
+      action: :active_by_group,
+      args: [:group_id]
+    )
   end
 
   actions do
     default_accept [:group_id, :user_id, :source, :status, :granted_by_user_id]
 
-    defaults [:create, :read, :destroy]
+    defaults [:read]
+
+    create :create do
+      primary? true
+      accept [:group_id, :user_id, :source, :status, :granted_by_user_id]
+      change WandererApp.Identity.Changes.SyncGroupMembership
+    end
+
+    destroy :destroy do
+      primary? true
+      require_atomic? false
+      change WandererApp.Identity.Changes.SyncGroupMembership
+    end
 
     update :update do
       require_atomic? false
       accept [:status]
+      change WandererApp.Identity.Changes.SyncGroupMembership
     end
 
     read :by_group do
@@ -63,6 +81,11 @@ defmodule WandererApp.Api.GroupMembership do
     read :active_by_user do
       argument :user_id, :uuid, allow_nil?: false
       filter expr(user_id == ^arg(:user_id) and status == :active)
+    end
+
+    read :active_by_group do
+      argument :group_id, :uuid, allow_nil?: false
+      filter expr(group_id == ^arg(:group_id) and status == :active)
     end
   end
 

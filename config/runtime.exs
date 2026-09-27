@@ -83,6 +83,11 @@ identity_suite_enabled =
   |> get_var_from_path_or_env("WANDERER_IDENTITY_SUITE", "false")
   |> String.to_existing_atom()
 
+group_map_sync_enabled =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_GROUP_MAP_SYNC", "false")
+  |> String.to_existing_atom()
+
 map_subscription_characters_limit =
   config_dir
   |> get_int_from_path_or_env("WANDERER_MAP_SUBSCRIPTION_CHARACTERS_LIMIT", 10_000)
@@ -269,6 +274,9 @@ config :wanderer_app,
   # CHEWY PATCH: identity/state/groups suite master switch, see
   # WandererApp.Env.identity_suite_enabled?/0.
   identity_suite_enabled: identity_suite_enabled,
+  # CHEWY PATCH: map-ACL-from-groups sync, see
+  # WandererApp.Env.group_map_sync_enabled?/0.
+  group_map_sync_enabled: group_map_sync_enabled,
   # CHEWY PATCH: DEV-ONLY authentication bypass token, see dev_auth_token above.
   dev_auth_token: dev_auth_token,
   # CHEWY PATCH: private ChewyTech branding, see WandererApp.Branding.

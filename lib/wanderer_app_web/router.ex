@@ -534,6 +534,7 @@ defmodule WandererAppWeb.Router do
       ] do
       live "/", CorpShellLive, :index
       live "/identity", CorpIdentityLive, :index
+      live "/map-grants", GroupMapGrantsLive, :index
     end
   end
 

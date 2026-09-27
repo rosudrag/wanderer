@@ -1,0 +1,66 @@
+<div class="p-8 text-gray-200">
+  <h1 class="text-2xl font-semibold mb-2">Map Access Grants</h1>
+  <p class="mb-6 text-gray-400">
+    A grant maps a Group to a map's Access List and a role. Sync keeps
+    <code>AccessListMember</code>
+    rows in step with group membership automatically.
+  </p>
+
+  <form phx-submit="create_grant" class="flex flex-wrap items-end gap-2 mb-8" id="grant-form">
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">Group</label>
+      <select name="group_id" class="select select-sm select-bordered" id="grant-form-group">
+        <option value="">Choose a group</option>
+        <option :for={group <- @groups} value={group.id}>{group.name}</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">Access List</label>
+      <select
+        name="access_list_id"
+        class="select select-sm select-bordered"
+        id="grant-form-access-list"
+      >
+        <option value="">Choose an access list</option>
+        <option :for={al <- @access_lists} value={al.id}>{al.name}</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">Role</label>
+      <select name="role" class="select select-sm select-bordered" id="grant-form-role">
+        <option :for={role <- @roles} value={role}>{role}</option>
+      </select>
+    </div>
+    <button type="submit" class="btn btn-sm btn-primary" id="grant-form-submit">
+      Create grant
+    </button>
+  </form>
+
+  <table class="table w-full" id="group-map-grants">
+    <thead>
+      <tr>
+        <th>Group</th>
+        <th>Access List</th>
+        <th>Role</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr :for={row <- @grant_rows} id={"grant-row-#{row.grant.id}"}>
+        <td>{row.group && row.group.name}</td>
+        <td>{row.access_list && row.access_list.name}</td>
+        <td>{row.grant.role}</td>
+        <td>
+          <button
+            phx-click="destroy_grant"
+            phx-value-grant_id={row.grant.id}
+            class="btn btn-xs btn-error"
+            data-confirm="Remove this grant? Rows it created will be removed from the map access list."
+          >
+            Remove
+          </button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
