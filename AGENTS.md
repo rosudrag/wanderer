@@ -48,6 +48,15 @@ This file is OURS — upstream has no `AGENTS.md`, so it never conflicts on a me
 | Bootstrap admin by character name (Phase 0): on every login, ensures named character's owning user holds `:corp_suite_admin` permission via "Corp Suite Administrators" group; idempotent; unset/empty = inert (no group/permission ever created), unlike `WANDERER_ADMINS` | `WANDERER_BOOTSTRAP_ADMIN_CHARACTER` (EVE character name, unset/empty = off) | `lib/wanderer_app/identity/bootstrap_admin.ex` (`maybe_bootstrap/0` never raises), `lib/wanderer_app/env.ex` `bootstrap_admin_character/0`, `read` actions (`Character.by_name/2`, `Group.by_name/2`, `GroupPermission.by_group_and_permission/3` in `lib/wanderer_app/api/`) (+ hook in `lib/wanderer_app_web/controllers/auth_controller.ex` line 111, permission check in `lib/wanderer_app_web/live/corp/group_map_grants_live.ex:27-31`) |
 | Scanner-client signature sync: `POST /api/maps/:map_identifier/signatures/sync` takes the COMPLETE probe-scanner list for one system and reconciles it server-side (the map UI diffs in TypeScript; nothing did it server-side before), applying adds/updates/removals as one `Server.update_signatures/2` batch. Removals need `authoritative: true`; an empty authoritative payload for a non-empty system is refused unless `allow_empty: true`; connections are never deleted off a signature absence. Fields the client omits keep their stored value. Feeds the eveknob/isxbob EVE bot — see `docs/design/wanderer-bridge.md` in the eve-command-center monorepo | `WANDERER_BOT_SYNC` | `lib/wanderer_app/map/operations/signature_sync.ex`, `lib/wanderer_app_web/controllers/map_signature_sync_api_controller.ex`, `lib/wanderer_app_web/controllers/plugs/check_bot_sync_disabled.ex` (+ `router.ex` `:api_bot_sync` pipeline and its own `/api/maps/:map_identifier` scope, `env.ex` `bot_sync_enabled?/0`, `config/runtime.exs`) |
 
+**Corp-suite navigation convention.** A new suite feature is reachable from the `/corp` hub
+(`corp_shell_live.html.heex`), as one card that says what the feature does and names its env var when
+it is off — not by a route the user has to know. The sidebar stays at two icons
+(`components/corp_nav.ex`: hub + roster); it is a fixed column shared with the map canvas and cannot
+grow one icon per phase. Never gate a sidebar entry on `PermissionCache.corp_admin?/2`: `Nav.on_mount/4`
+runs for every LiveView, so that is a DB round trip per map mount — admin-only pages are listed on the
+hub, which computes the check once. Each page gets its own `active_tab` atom in `Nav.set_active_tab/3`,
+or the whole suite highlights at once.
+
 ## Testing the map without an EVE account
 
 `dev/README.md` is the command sequence: a throwaway compose stack on `127.0.0.1:4100`, `/dev/login?token=…`,
@@ -60,6 +69,14 @@ the map and you get an empty canvas with an "Update Required" splash.
 **round-trip stability** — beautify, add k systems, beautify again — which is the number that matters, plus the
 cold full re-solve cost. `--json`/`--compare` gate regressions. Run it after any change under
 `assets/js/hooks/Mapper/components/map/layout/`.
+
+`powershell -NoProfile -File dev/check.ps1 -All` is the one-command gate for anything server-side:
+compile (`--warnings-as-errors`), scoped format, DB + migrations, seed, every discovered test file,
+a real HTTP boot, and the feature-flag route contract probed **both ways** (flag off ⇒ 404, flag on
+⇒ 200). Runbook and traps: `dev/CHECK.md`. Two things to read correctly: `Format` reports `SKIP`
+on a clean tree because it diffs against the base, and a `SKIP` still counts toward the "7/7"
+total; and `-Boot` uses `dev/boot.exs` (`mix run --no-start`, overriding only `server:`/`watchers:`)
+because `mix phx.server` hangs forever on the npm watcher `config/dev.exs` configures.
 
 ## Traps that cost real time here
 
@@ -77,6 +94,24 @@ cold full re-solve cost. `--json`/`--compare` gate regressions. Run it after any
   is `root@…`, while the agent's ssh alias authenticates as `claude`. Replicate its steps over
   `ssh ex44 "sudo …"` — fetch + `git checkout --detach origin/chewy`, read `@version`, `docker build` with
   both tags, install `.env`/`docker-compose.yml`, `compose pull` the sidecars, `compose up -d --force-recreate`.
+- **A new `WANDERER_*` in `.env` does not reach the container on its own.** `infra/docker-compose.yml`
+  names every app env var explicitly — deliberately, so the deploy repo's `SSH_KEY_PATH`/`SERVER_HOST`
+  can never leak in via `env_file`. Miss the `environment:` entry and the deploy reports success while
+  the feature stays off and `.env` claims otherwise. Add the var in both places, in the same change.
+- **`/auth/eve` is invite-gated whenever `WANDERER_INVITES=true`.** With no `invite` param,
+  `Eve.check_invite_valid/1` returns `{not invites(), :user}` and `handle_request!/1` redirects to
+  `/welcome` **before** reaching EVE SSO — logged-in session or not. Any in-app link to `/auth/eve?…`
+  must first mint `invite_<uuid>` in `WandererApp.Cache` and pass it through, the way
+  `characters_live.ex`'s `"authorize"` handler and `corp_roster_live.ex`'s `"request_director_access"`
+  handler both do. A plain `<.link href={~p"/auth/eve?…"}>` is dead on this deployment.
+- **Boolean env vars are `String.to_existing_atom`'d** (`config/runtime.exs`, the upstream idiom every
+  flag follows). A trailing space — `WANDERER_IDENTITY_SUITE=true ` — crashes the container at boot
+  with `not an already existing atom`. Loud, not silent, but baffling until you know.
+- **`mix compile` proves nothing about Ash query pipelines.** `Ash.read(Resource, …) |> Ash.Query.filter(…)`
+  compiles clean and raises `ArgumentError: Expected a resource or a query` on first execution —
+  it shipped that way once, in the login path, where it would have broken every login. Build queries as
+  `Resource |> Ash.Query.filter(…) |> Ash.read_one(…)`, or use purpose-built `get_by:` code interfaces,
+  and require a real run or test before believing any Ash change works.
 
 ## Loop
 
