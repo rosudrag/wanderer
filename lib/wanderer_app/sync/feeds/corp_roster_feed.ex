@@ -52,7 +52,7 @@ defmodule WandererApp.Sync.Feeds.CorpRosterFeed do
   polling it without touching the global flag or unassigning the
   director. The `false` default means an admin must explicitly flip it
   before ANY corp (new or pre-existing) starts syncing --
-  `WandererAppWeb.CorpRosterLive`'s admin panel surfaces this state
+  `WandererAppWeb.CorpManagementLive`'s admin panel surfaces this state
   explicitly (a distinct "sync disabled" badge, not folded into the
   token-status line) plus a toggle, so a corp with a perfectly good
   director token sitting idle is visible, not silently empty.

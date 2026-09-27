@@ -24,15 +24,13 @@ defmodule WandererApp.Identity.PermissionCache do
   @doc """
   true if `current_user_role` is the existing upstream `:admin` concept
   **or** `user_id` holds the `:corp_suite_admin` permission via a
-  group. The one check every `/corp/*` admin-only page/panel/link
-  should call -- was previously three separately-maintained copies of
-  `current_user_role == :admin and not has_permission?(...)` across
-  `WandererAppWeb.GroupMapGrantsLive`, `WandererAppWeb.CorpRosterLive`'s
-  director-token panel, and `WandererAppWeb.CorpShellLive`'s "Map
-  access grants" link -- the last two of which had drifted out of sync
-  with the first (a `:corp_suite_admin` user could reach a page but
-  never see the link to it). See docs/chewy/corp-suite-plan.md §9
-  Phase 3.
+  group. The one check every `/corp/*` admin-only page, panel and link
+  should call -- it was previously several separately-maintained copies
+  of `current_user_role == :admin`, which had drifted out of sync (a
+  `:corp_suite_admin` user could reach a page by URL but never see the
+  link to it). Callers: `WandererAppWeb.GroupMapGrantsLive`'s mount and
+  `WandererAppWeb.CorpManagementLive`'s director-token panel and
+  map-grants link. See docs/chewy/corp-suite-plan.md §9 Phase 3.
   """
   def corp_admin?(current_user_role, user_id) do
     current_user_role == :admin or has_permission?(user_id, :corp_suite_admin)

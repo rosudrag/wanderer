@@ -11,10 +11,9 @@ defmodule WandererAppWeb.Nav do
     MapsLive,
     CharactersLive,
     CharactersTrackingLive,
-    CorpShellLive,
+    CorpManagementLive,
     CorpIdentityLive,
-    GroupMapGrantsLive,
-    CorpRosterLive
+    GroupMapGrantsLive
   }
 
   def on_mount(_scope, _params, _session, socket) do
@@ -88,7 +87,7 @@ defmodule WandererAppWeb.Nav do
         {CharactersTrackingLive, _} ->
           :characters_tracking
 
-        {CorpShellLive, _} ->
+        {CorpManagementLive, _} ->
           :corp
 
         {CorpIdentityLive, _} ->
@@ -96,9 +95,6 @@ defmodule WandererAppWeb.Nav do
 
         {GroupMapGrantsLive, _} ->
           :corp_map_grants
-
-        {CorpRosterLive, _} ->
-          :corp_roster
 
         {_, _} ->
           nil

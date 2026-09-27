@@ -550,10 +550,9 @@ defmodule WandererAppWeb.Router do
         {WandererAppWeb.UserAuth, :ensure_authenticated},
         WandererAppWeb.Nav
       ] do
-      live "/", CorpShellLive, :index
+      live "/", CorpManagementLive, :index
       live "/identity", CorpIdentityLive, :index
       live "/map-grants", GroupMapGrantsLive, :index
-      live "/roster", CorpRosterLive, :index
     end
   end
 

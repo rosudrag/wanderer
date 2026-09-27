@@ -30,7 +30,7 @@ defmodule WandererApp.Sync.Feed do
   `fetch/2` is responsible for resolving its own token and turning a
   resolution failure into `{:error, _}` on its own, so the Scheduler
   never needs a separate answer to "what token". The real caller is
-  `WandererAppWeb.CorpRosterLive`'s admin panel: it calls
+  `WandererAppWeb.CorpManagementLive`'s admin panel: it calls
   `CorpRosterFeed.token_holder/1` per corp to show a human "which token
   will the next poll use, and does it still resolve", including
   catching a dangling `director_character_id` (the FK is set, but the

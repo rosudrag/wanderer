@@ -77,7 +77,7 @@ defmodule WandererAppWeb.DirectorAccessFlowTest do
     refute "esi-corporations.track_members.v1" in requested_scopes
   end
 
-  test "the /corp/roster page renders a director-access consent link pointing at director=true" do
+  test "the /corp management page renders a director-access consent control" do
     Application.put_env(:wanderer_app, :identity_suite_enabled, true)
     Application.put_env(:wanderer_app, :corp_roster_enabled, true)
 
@@ -92,9 +92,12 @@ defmodule WandererAppWeb.DirectorAccessFlowTest do
       build_conn()
       |> Plug.Test.init_test_session(%{"user_id" => user.id})
 
-    {:ok, _view, html} = live(conn, ~p"/corp/roster")
+    {:ok, _view, html} = live(conn, ~p"/corp")
 
-    assert html =~ ~s(href="/auth/eve?director=true")
+    # A plain <a href="/auth/eve?director=true"> is dead on an invite-only
+    # instance (see the module doc); the control is a phx-click that mints
+    # an invite token first, so assert on that, not on an href.
+    assert html =~ ~s(phx-click="request_director_access")
     assert html =~ "Grant director access"
   end
 end
