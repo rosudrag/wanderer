@@ -153,7 +153,8 @@ defmodule WandererApp.Application do
         runtime_children ++
         maybe_start_corp_wallet_tracker(WandererApp.Env.map_subscriptions_enabled?()) ++
         maybe_start_kills_services() ++
-        maybe_start_external_events_services()
+        maybe_start_external_events_services() ++
+        maybe_start_sync_scheduler(WandererApp.Env.sync_framework_enabled?())
 
     opts = [strategy: :one_for_one, name: WandererApp.Supervisor]
 
@@ -192,6 +193,19 @@ defmodule WandererApp.Application do
   end
 
   defp maybe_start_corp_wallet_tracker(_), do: []
+
+  # CHEWY PATCH: ESI sync framework master switch. See
+  # WandererApp.Sync.Scheduler and docs/chewy/corp-suite-plan.md §3/§9 Phase 2.
+  defp maybe_start_sync_scheduler(true) do
+    if Application.get_env(:wanderer_app, :environment) == :test do
+      []
+    else
+      WandererApp.Esi.RateLimitGate.attach!()
+      [WandererApp.Sync.Scheduler]
+    end
+  end
+
+  defp maybe_start_sync_scheduler(_), do: []
 
   defp maybe_start_kills_services do
     # Don't start kills services in test environment

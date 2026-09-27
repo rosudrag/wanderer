@@ -325,17 +325,54 @@ defmodule WandererApp.Esi.ApiClient do
   defp with_cache_opts(opts),
     do: opts |> Keyword.merge(@cache_opts) |> Keyword.merge(cache_dir: System.tmp_dir!())
 
+  # CHEWY PATCH: hook #10 (docs/chewy/corp-suite-plan.md §3.4/§5). Callers
+  # that pass an `:etag` opt (only WandererApp.Sync.Feed machinery does;
+  # every existing caller's `opts` never has this key, so
+  # `with_etag_request_header/2` and this branch are no-ops for them)
+  # bypass the generic :api_cache short-circuit entirely -- staleness for
+  # those callers is tracked via sync_runs_v1's own etag column, and a
+  # conditional request must always reach ESI to learn 304 vs 200, never
+  # be satisfied from a local cache that knows nothing about ETags.
   defp do_get(path, api_opts, opts, pool \\ @general_pool) do
-    case Cachex.get(:api_cache, path) do
-      {:ok, cached_data} when not is_nil(cached_data) ->
-        {:ok, cached_data}
+    if Keyword.has_key?(opts, :etag) do
+      do_get_request(path, api_opts, opts, pool)
+    else
+      case Cachex.get(:api_cache, path) do
+        {:ok, cached_data} when not is_nil(cached_data) ->
+          {:ok, cached_data}
 
-      _ ->
-        do_get_request(path, api_opts, opts, pool)
+        _ ->
+          do_get_request(path, api_opts, opts, pool)
+      end
     end
   end
 
+  # Appends (never replaces) an If-None-Match header when the caller
+  # passed a non-nil `:etag` opt. A caller in etag-mode with no
+  # previously-seen etag (first-ever fetch) passes `etag: nil`, which
+  # this leaves alone -- no header to send yet, but do_get/4 above still
+  # takes the etag-aware branch so the response-handling case below still
+  # captures the freshly-issued ETag on the resulting 200.
+  defp with_etag_request_header(req_opts, opts) do
+    case Keyword.get(opts, :etag) do
+      nil ->
+        req_opts
+
+      etag ->
+        Keyword.update(
+          req_opts,
+          :headers,
+          [{"if-none-match", etag}],
+          &(&1 ++ [{"if-none-match", etag}])
+        )
+    end
+  end
+
+  defp response_etag(headers), do: headers |> Map.get("etag", []) |> List.first()
+
   defp do_get_request(path, api_opts, opts, pool) do
+    etag_requested? = Keyword.has_key?(opts, :etag)
+
     try do
       req_options_for_pool(pool)
       |> Req.new()
@@ -343,15 +380,23 @@ defmodule WandererApp.Esi.ApiClient do
         api_opts
         |> Keyword.merge(url: path)
         |> with_user_agent_opts()
+        |> with_etag_request_header(opts)
         |> with_cache_opts()
         |> Keyword.merge(@retry_opts)
         |> Keyword.merge(@timeout_opts)
       )
       |> case do
+        {:ok, %{status: 304}} when etag_requested? ->
+          :not_modified
+
         {:ok, %{status: 200, body: body, headers: headers}} ->
           maybe_cache_response(path, body, headers, opts)
 
-          {:ok, body}
+          if etag_requested? do
+            {:ok, body, response_etag(headers)}
+          else
+            {:ok, body}
+          end
 
         {:ok, %{status: 504}} ->
           {:error, :timeout}

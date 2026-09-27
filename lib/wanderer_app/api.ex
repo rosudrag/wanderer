@@ -52,5 +52,6 @@ defmodule WandererApp.Api do
     resource WandererApp.Api.AuditLog
     resource WandererApp.Api.GroupMapAccessGrant
     resource WandererApp.Api.GroupMapSyncedMember
+    resource WandererApp.Api.SyncRun
   end
 end
