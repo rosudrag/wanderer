@@ -88,17 +88,26 @@ different timezones, so the local column is not comparable across rows.
 Both are in the writer (`core/obj_StructureWatch.iss`), not here, and both
 cost a wrong column mapping if you parse that file positionally.
 
-1. **The on-disk header is stale.** It names 24 columns; the writer emits
-   **26**. `anchoring` and `unanchoring` were added between `vulnerable` and
-   `timer_seconds` and the header row — written once, on file creation — was
-   never rewritten. Rows written before that change really do have 24 fields,
-   so a parser should switch on the field count, not trust the header.
+1. **The on-disk header is stale, and the width keeps moving.** The header is
+   written once, on file creation, and never rewritten — so a long-lived log
+   carries whatever header was current when it was created while its rows
+   carry whatever the writer emits today. Observed: a file headed with 24
+   columns whose rows were 26, and the writer has since grown a 27th
+   (`timer_utc`). Older rows really are narrower. **Switch on the field
+   count; never trust the header.**
 
-   Real order: `timestamp, character, event, system_id, system_name,
-   system_truesec, structure_id, type_id, type_name, group_name, owner_id,
-   owner_name, alliance_id, upkeep_state, upkeep_label, structure_state,
-   state_label, vulnerable, anchoring, unanchoring, timer_seconds, shield_pct,
-   armor_pct, hull_pct, distance_m, utc_timestamp`.
+   Current order (27), from `obj_StructureWatch:RecordRow`: `timestamp,
+   character, event, system_id, system_name, system_truesec, structure_id,
+   type_id, type_name, group_name, owner_id, owner_name, alliance_id,
+   upkeep_state, upkeep_label, structure_state, state_label, vulnerable,
+   anchoring, unanchoring, timer_seconds, shield_pct, armor_pct, hull_pct,
+   distance_m, utc_timestamp, timer_utc`.
+
+   `anchoring`/`unanchoring` were inserted before `timer_seconds` (24 → 26)
+   and `timer_utc` appended (26 → 27). `timer_utc` is the absolute instant
+   the timer expires, computed client-side; this endpoint ignores it and
+   derives `timer_expires_at` from `observed_at + timer_seconds` itself, so
+   the two are cross-checkable rather than redundant.
 
 2. **`type_name` is not a type name.** The writer fills it from
    `Entity.Name`, i.e. the player-set structure name ("Sirekur - Happy MC
