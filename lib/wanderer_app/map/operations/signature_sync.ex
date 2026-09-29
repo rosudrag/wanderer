@@ -232,6 +232,14 @@ defmodule WandererApp.Map.Operations.SignatureSync do
   # Resolve the acting character. `character_eve_id` is the in-game id; the
   # batch applier wants our internal character UUID. Falls back to the map
   # owner, exactly like the per-signature endpoint does.
+  #
+  # An id we do not KNOW also falls back rather than refusing the sweep. A
+  # scanner client runs on whichever character is flying -- typically a bot alt
+  # that has never signed into the map, so it has no `Character` row at all.
+  # Refusing there would reject the entire system's signatures over an
+  # attribution detail, while the thing that actually authorises the write --
+  # the map's own API key -- already checked out. Attribution degrades to the
+  # owner; the signatures still land.
   defp resolve_character(params, fallback_char_id) do
     case Map.get(params, "character_eve_id") do
       nil ->
@@ -239,8 +247,15 @@ defmodule WandererApp.Map.Operations.SignatureSync do
 
       eve_id when is_binary(eve_id) ->
         case Character.by_eve_id(eve_id) do
-          {:ok, character} -> {:ok, character.id}
-          _ -> {:error, :invalid_character}
+          {:ok, character} ->
+            {:ok, character.id}
+
+          _ ->
+            Logger.debug(fn ->
+              "[SignatureSync] unknown character_eve_id #{inspect(eve_id)} -- attributing to the map owner"
+            end)
+
+            {:ok, fallback_char_id}
         end
 
       _ ->
