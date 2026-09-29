@@ -685,6 +685,47 @@ const placeChainBandNode = (
   return pickPlacementCell(nodeId, ideal, ctx);
 };
 
+/**
+ * CHEWY PATCH (rigid chain pockets): the chain-only systems grouped into
+ * connected components over wormhole/bridge edges. One component is one
+ * "pocket" — the chain a user reads as a single object hanging off k-space.
+ * K-space members are excluded from the graph, so two chains that meet only
+ * THROUGH the lattice stay separate pockets.
+ */
+const chainPockets = (
+  nodes: readonly LayoutNodeInput[],
+  chainEdges: readonly LayoutEdgeInput[],
+  kspaceMemberIds: ReadonlySet<string>,
+): string[][] => {
+  const parent = new Map<string, string>();
+  for (const n of nodes) if (!kspaceMemberIds.has(n.id)) parent.set(n.id, n.id);
+  const find = (id: string): string => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    let walk = id;
+    while (parent.get(walk) !== root) {
+      const next = parent.get(walk)!;
+      parent.set(walk, root);
+      walk = next;
+    }
+    return root;
+  };
+  for (const e of chainEdges) {
+    if (!parent.has(e.source) || !parent.has(e.target)) continue;
+    const a = find(e.source);
+    const b = find(e.target);
+    if (a !== b) parent.set(a, b);
+  }
+  const groups = new Map<string, string[]>();
+  for (const id of parent.keys()) {
+    const root = find(id);
+    const list = groups.get(root);
+    if (list) list.push(id);
+    else groups.set(root, [id]);
+  }
+  return [...groups.values()].map(group => group.sort());
+};
+
 export interface IncrementalLayoutResult {
   positions: Record<string, { x: number; y: number }>;
   movedCount: number;
@@ -764,6 +805,80 @@ export const placeIncrementalNodes = (
   const positions: Record<string, { x: number; y: number }> = {};
   let movedCount = 0;
 
+  // CHEWY PATCH (rigid chain pockets): an EXISTING wormhole pocket is never
+  // taken apart. It moves as one body or it stays exactly where it is — and
+  // measurement (below) says it stays.
+  //
+  // Reported on the live map: a C5 that had been sitting one cell off Amamake
+  // was pushed out clear of the lattice while the systems chained BEHIND it
+  // stayed where they were, so that chain's own links then ran straight back
+  // across the lattice the hop had just been cleared of. The cause is
+  // structural, not a tuning miss: classifyNodes judges the standoff rule per
+  // NODE, so only the one hop touching k-space comes out "crowded", and the
+  // placement below then relocates that single node (placeChainBandNode)
+  // while every other member of its chain is "already validly placed" and, by
+  // this module's whole contract, must not be re-derived.
+  //
+  // So the clearance decision is taken for the POCKET — a connected component
+  // of chain-only systems — not for the node. Both honest answers were built
+  // and measured with `node dev/layout-bench.mjs --standoff 2 --angles`:
+  //   - translate the whole pocket rigidly to the nearest cell set that
+  //     clears the lattice: `occlusion` round-trip rankInv 1.50 -> 3.20
+  //     (fails the suite's own rankInv<=2 gate), meanShift 0.08 -> 0.16,
+  //     maxShift 1.40 -> 2.90. Moving four systems to buy one system's
+  //     clearance is more churn than the clearance is worth.
+  //   - pin the pocket where the user already has it: every round-trip
+  //     number improves instead — rankInv 1.50 -> 0.60 at k=5, and 0.90 -> 0
+  //     with maxShift 1.55 -> 0 at k=1.
+  // So: pin.
+  //
+  // Standoff still applies everywhere it costs nothing: a newly scanned
+  // system is off-grid, so it is not part of the body and still goes out to
+  // the band via placeChainBandNode; a lone chain system with nothing chained
+  // behind it has no shape to preserve and is placed normally; and index.ts's
+  // repair pass still moves any pocket member that genuinely hides a
+  // connection.
+  const pocketPinnedIds = new Set<string>();
+  const fence = ctx.isCellAllowed;
+  if (chainStandoff > 0 && fence) {
+    const toPlaceSet = new Set(classification.toPlace);
+    const occupantCount = new Map<string, number>();
+    for (const n of nodes) {
+      if (!n.locked && !isOnGrid(n)) continue;
+      const key = cellKey(cellOf(n));
+      occupantCount.set(key, (occupantCount.get(key) ?? 0) + 1);
+    }
+
+    for (const pocket of chainPockets(nodes, chainEdges, kspaceMemberIds)) {
+      // The pocket's rigid body: its members that already hold a real cell.
+      const body = new Map<string, CellCoord>();
+      let stacked = false;
+      for (const id of pocket) {
+        const node = nodeById.get(id)!;
+        if (node.locked || !isOnGrid(node)) continue;
+        if (!ctx.cells.has(id) && !toPlaceSet.has(id)) continue;
+        const cell = cellOf(node);
+        if ((occupantCount.get(cellKey(cell)) ?? 0) > 1) stacked = true;
+        body.set(id, cell);
+      }
+      // A one-system pocket has no shape to keep (ordinary placement is
+      // strictly better for it), and a pocket with two systems in one cell has
+      // no trustworthy shape to keep at all — both take the normal path.
+      if (stacked || body.size < 2) continue;
+
+      // Crowding is the only reason this pass exists, and it is read straight
+      // off the standoff fence rather than re-derived: `ctx.isCellAllowed`
+      // rejecting a member's CURRENT cell is exactly what made classifyNodes
+      // put it in `toPlace`.
+      if (![...body].some(([id, cell]) => toPlaceSet.has(id) && !fence(id, cell))) continue;
+
+      for (const [id, cell] of body) {
+        commit(ctx, id, cell);
+        pocketPinnedIds.add(id);
+      }
+    }
+  }
+
   // Fixed, deterministic processing order. A node placed earlier in this
   // same pass is immediately available as an anchor/neighbour for a later
   // one (e.g. two new systems chained onto each other), so single-pass
@@ -775,7 +890,9 @@ export const placeIncrementalNodes = (
   // id order alone put `Anckee` at its raw lattice cell because its chain
   // parent had not been placed yet). Remaining nodes (no placed neighbour at
   // all) are handled by the final unconditional pass, exactly as before.
-  const pending = [...classification.toPlace].sort();
+  // Members of a rigid pocket handled above are already committed (moved or
+  // deliberately left alone) and must not be re-placed one by one.
+  const pending = classification.toPlace.filter(id => !pocketPinnedIds.has(id)).sort();
   const placeOne = (id: string): void => {
     const node = nodeById.get(id)!;
 

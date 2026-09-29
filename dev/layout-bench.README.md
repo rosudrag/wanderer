@@ -306,6 +306,27 @@ over `k = 1, 3, 5` of each round-trip metric is checked against:
 A scenario `PASS`es only if all nine hold. This is the pass/fail line the
 whole effort is judged against, independent of `--compare`/tolerances.
 
+## Chain-pocket integrity (hard invariant, own fixture)
+
+Printed as its own table after the verdict, and not affected by
+`--standoff`/`--angles`: the check pins its own options because the defect
+it guards only exists with a standoff configured.
+
+The fixture is the yugen lattice laid out from scratch with
+`chainStandoff: 2`, plus a four-system wormhole pocket hung off the
+**rightmost** k-space system starting one cell away — i.e. inside the
+standoff zone, which is the state a real map reaches when the user drags a
+chain in or a hole is scanned before the feature was turned on. It is then
+beautified once with `angleSnap` off and once on.
+
+`maxLinkStretch` is the largest growth, in cells, of any link **inside** the
+pocket. The engine may relocate an existing pocket, but it must never take it
+apart: a per-node relocation moves the one hop that touches k-space and
+leaves the rest of the chain behind, which is exactly what shipped once and
+is what this catches (pre-fix: 2 cells, i.e. FAIL). Limit is 1 cell — the
+repair/angle passes may legitimately nudge a single member — and a violation
+is a hard failure, like `newOffGrid`, not a tolerance-compared metric.
+
 ## `--compare` tolerances
 
 Every "lower is better" metric is compared as

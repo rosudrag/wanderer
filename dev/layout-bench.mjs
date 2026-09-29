@@ -1723,6 +1723,119 @@ function parseArgs(argv) {
   return opts;
 }
 
+// ---------------------------------------------------------------------------
+// CHEWY PATCH: chain-pocket integrity — a hard invariant, not a metric.
+//
+// Reported on the live map: with WANDERER_CHAIN_STANDOFF on, beautify moved
+// the C5 that hung off Amamake clear of the lattice and left the systems
+// chained BEHIND it exactly where they were, so the chain's own links ran
+// back across the lattice and the pocket read as torn in half. The engine's
+// standoff rule is per NODE (anchor.ts classifyNodes), so nothing in the
+// metric battery above can see this: crossings, occlusions, shift and rank
+// inversions were all fine while one link had stretched across the map.
+//
+// The invariant: beautifying a map whose EXISTING wormhole pocket sits too
+// close to the lattice may relocate the pocket, but must never stretch a
+// link inside it. Checked directly, on its own fixture, with its own fixed
+// options (the defect only exists with a standoff), so it runs on every
+// invocation regardless of --standoff/--angles.
+// ---------------------------------------------------------------------------
+
+const POCKET_STANDOFF = 2;
+/** A pocket link may lengthen by at most this many cells (the repair/angle passes legitimately nudge a member by one). */
+const POCKET_MAX_STRETCH = 1;
+
+async function checkChainPocketIntegrity(beautifyLayout, CELL_W, CELL_H) {
+  const scenario = buildYugenScenario();
+  // A real, tidy k-space lattice to hang the pocket off: the yugen fixture
+  // laid out from scratch with the same standoff this check exercises.
+  const p1 = await beautifyLayout(
+    structuredClone(scenario.nodes),
+    structuredClone(scenario.edges),
+    { mode: "full", chainStandoff: POCKET_STANDOFF },
+  );
+  const laidOut = withPositions(scenario.nodes, mergeFinalPositions(scenario.nodes, p1));
+  const cellOf = (n) => [Math.round(n.x / CELL_W), Math.round(n.y / CELL_H)];
+  const occupied = new Set(laidOut.map((n) => cellOf(n).join(",")));
+
+  // Anchor on the RIGHTMOST k-space system and grow the pocket sideways from
+  // it, starting one cell off — i.e. inside the standoff zone (the state the
+  // live map was in) and nowhere near the band the engine would relocate a
+  // crowded chain node to, which is what makes a per-node relocation visibly
+  // tear the pocket apart.
+  const anchor = laidOut.reduce((a, b) => (cellOf(a)[0] >= cellOf(b)[0] ? a : b));
+  const [ac, ar] = cellOf(anchor);
+  const pocketCells = [
+    [ac + 1, ar],
+    [ac + 2, ar],
+    [ac + 3, ar - 1],
+    [ac + 4, ar - 1],
+  ];
+  for (const cell of pocketCells) {
+    if (occupied.has(cell.join(","))) {
+      throw new Error(`pocket fixture cell ${cell} is already taken by the lattice`);
+    }
+  }
+  const pocketIds = pocketCells.map((_, i) => `J90000${i}`);
+  const nodes = [
+    ...laidOut,
+    ...pocketCells.map(([c, r], i) => ({
+      id: pocketIds[i],
+      x: c * CELL_W,
+      y: r * CELL_H,
+      locked: false,
+      systemClass: 5,
+    })),
+  ];
+  const pocketEdges = [
+    { source: anchor.id, target: pocketIds[0], type: 0 },
+    ...pocketIds.slice(1).map((id, i) => ({ source: pocketIds[i], target: id, type: 0 })),
+  ];
+  const edges = [...scenario.edges, ...pocketEdges];
+  const internal = pocketEdges.slice(1);
+
+  const runs = [];
+  for (const angleSnap of [false, true]) {
+    const result = await beautifyLayout(structuredClone(nodes), structuredClone(edges), {
+      chainStandoff: POCKET_STANDOFF,
+      angleSnap,
+    });
+    const after = mergeFinalPositions(nodes, result);
+    const cellIn = (positions, id) => [
+      Math.round(positions.get(id).x / CELL_W),
+      Math.round(positions.get(id).y / CELL_H),
+    ];
+    const before = new Map(nodes.map((n) => [n.id, { x: n.x, y: n.y }]));
+    let worst = 0;
+    for (const e of internal) {
+      const len = (positions) => {
+        const [c1, r1] = cellIn(positions, e.source);
+        const [c2, r2] = cellIn(positions, e.target);
+        return Math.max(Math.abs(c1 - c2), Math.abs(r1 - r2));
+      };
+      worst = Math.max(worst, len(after) - len(before));
+    }
+    runs.push({ angleSnap, mode: result.mode, stretch: worst, ok: worst <= POCKET_MAX_STRETCH });
+  }
+  return runs;
+}
+
+function printPocketIntegrity(runs) {
+  console.log("\n== Chain-pocket integrity (existing pocket inside the standoff zone) ==\n");
+  console.log(
+    renderTable(
+      ["angleSnap", "mode", "maxLinkStretch(cells)", "limit", "PASS"],
+      runs.map((r) => [
+        String(r.angleSnap),
+        r.mode,
+        r.stretch,
+        POCKET_MAX_STRETCH,
+        r.ok ? "PASS" : "FAIL",
+      ]),
+    ),
+  );
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const { mod } = await loadEngine();
@@ -1808,10 +1921,17 @@ async function main() {
     scenarios: results,
   };
 
+  // CHEWY PATCH: runs on the engine's own entry point with its own fixed
+  // options (see checkChainPocketIntegrity) — the CLI's --standoff/--angles
+  // only shape the metric battery above.
+  const pocketRuns = await checkChainPocketIntegrity(mod.beautifyLayout, CELL_W, CELL_H);
+  output.chainPocketIntegrity = pocketRuns;
+
   printQualityTable(results);
   printRoundTripStabilityTable(results);
   printColdStabilityTable(results);
   printVerdictTable(results);
+  printPocketIntegrity(pocketRuns);
 
   let hardFail = false;
   for (const s of results) {
@@ -1837,12 +1957,15 @@ async function main() {
       if (s.stability.roundTrip[k].nodeOcclusions !== 0) hardFail = true;
     }
   }
+  // CHEWY PATCH: an existing pocket may be relocated, but never torn apart.
+  if (pocketRuns.some(r => !r.ok)) hardFail = true;
   if (hardFail) {
     console.error(
       "\nFAIL: a hard invariant was violated (overlaps/offGrid must be 0; output must be deterministic; " +
         "an unchanged already-beautified map must stay unchanged on repeat beautify; every newly added " +
         "node must land on-grid and must actually be moved off its raw drop point; no edge pair may " +
-        "collinear-overlap and no node may sit on an edge it isn't an endpoint of).\n",
+        "collinear-overlap, no node may sit on an edge it isn't an endpoint of, and no link inside an " +
+        "existing wormhole pocket may be stretched).\n",
     );
   }
 
