@@ -99,14 +99,26 @@ because `mix phx.server` hangs forever on the npm watcher `config/dev.exs` confi
   while the table holds hundreds — a duplicate guard built on it silently inserts every time. Use the
   purpose-built read actions (`:read_by_locations`, `:read_by_map`) in any script or seeder that runs
   without an actor.
-- **`deploy.ps1` does not run from an agent session**: `SSH_KEY_PATH` is empty in `.env` and `SERVER_HOST`
-  is `root@…`, while the agent's ssh alias authenticates as `claude`. Replicate its steps over
-  `ssh ex44 "sudo …"` — fetch + `git checkout --detach origin/chewy`, read `@version`, `docker build` with
-  both tags, install `.env`/`docker-compose.yml`, `compose pull` the sidecars, `compose up -d --force-recreate`.
+- **`deploy.ps1` DOES run from an agent session now** (changed 2026-09-29, infra repo). `SSH_KEY_PATH`
+  may be blank — an ssh_config alias is a complete answer, and `SERVER_HOST=ex44` is one — and a
+  non-root account is fine: every mutating command goes through passwordless `sudo`, with files staged
+  in `/tmp` and `install`ed, because `scp` cannot write the root-owned deploy path. Run it from the REAL
+  infra path (`…\infrastructure\hetzner\wanderer`), never through the `infra/` junction: `$PSScriptRoot`
+  resolved through a junction cannot find `..\common\deploy-functions.ps1`. The old manual
+  `ssh ex44 "sudo …"` fetch/build/install/compose sequence this file used to prescribe is OBSOLETE —
+  do not reintroduce it.
 - **A new `WANDERER_*` in `.env` does not reach the container on its own.** `infra/docker-compose.yml`
   names every app env var explicitly — deliberately, so the deploy repo's `SSH_KEY_PATH`/`SERVER_HOST`
   can never leak in via `env_file`. Miss the `environment:` entry and the deploy reports success while
   the feature stays off and `.env` claims otherwise. Add the var in both places, in the same change.
+- **Several agent sessions run against this box at once, so a deploy is not atomic.** Observed
+  2026-09-29: `compose up -d --force-recreate` reported all four containers Started, and a minute later
+  `wanderer-db`, `wanderer-kills` and `wanderer-route-builder` sat in `Created` beside a renamed
+  `<hash>_wanderer` duplicate — a second session's `compose up` had been interrupted mid-recreate,
+  leaving the app running with its database down and the site answering **502**. `docker compose up -d`
+  reconciles it. So: after any deploy, verify the END state rather than trusting the command's own
+  output — `docker ps --filter name=wanderer` must show four containers `Up`, and the site must answer.
+  A renamed `<hash>_<service>` container is the tell that someone else is mid-recreate.
 - **`/auth/eve` is invite-gated whenever `WANDERER_INVITES=true`.** With no `invite` param,
   `Eve.check_invite_valid/1` returns `{not invites(), :user}` and `handle_request!/1` redirects to
   `/welcome` **before** reaching EVE SSO — logged-in session or not. Any in-app link to `/auth/eve?…`
