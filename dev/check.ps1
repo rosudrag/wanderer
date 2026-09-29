@@ -305,16 +305,15 @@ if ($Test -or $All) {
     $t0 = Get-Date
 
     if ([string]::IsNullOrEmpty($TestPattern)) {
-        # Discovered, not hardcoded: every .exs file under test/integration/
-        # (recursively) plus the one unit-test file the identity suite's
-        # auth path depends on. A hardcoded two-file list silently stops
-        # covering new integration tests the moment one is added.
-        $integrationDir = Join-Path $RepoRoot "test/integration"
-        $integrationTests = @(Get-ChildItem -Path $integrationDir -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Extension -eq ".exs" } |
-            ForEach-Object { $_.FullName.Substring($RepoRoot.Length + 1).Replace('\', '/') } |
-            Sort-Object)
-        $testPaths = $integrationTests + @("test/unit/controllers/auth_controller_test.exs")
+        # DIRECTORY, not a discovered file list. Passing the ~34 discovered
+        # .exs paths as separate arguments made `mix test` run only the LAST
+        # one: 18 tests instead of 384, while this step still printed "34
+        # file(s) passed" and a PASS. Measured 2026-09-29 -- the file-list
+        # form reported 18 tests, the directory form 384 (65 excluded by the
+        # :integration/:pending tags in test/test_helper.exs). A directory
+        # also keeps covering new test files the moment they are added,
+        # which was the original reason for discovering them.
+        $testPaths = @("test/integration", "test/unit/controllers/auth_controller_test.exs")
     } else {
         $testPaths = $TestPattern -split '\s+' | Where-Object { $_ -ne "" }
     }
@@ -328,15 +327,27 @@ if ($Test -or $All) {
     # DBConnection.ConnectionPool, raising immediately.
     $prevMixEnv = $Env:MIX_ENV
     $Env:MIX_ENV = "test"
-    mix test $testPaths *> $log
+    # Through `cmd /c`, with the paths already joined into ONE string.
+    # `mix test $testPaths` (array variable -> native command) silently
+    # drops every argument but the last when the command is a .bat, which
+    # `mix` is on Windows: measured 2026-09-29, the array form ran 18 tests
+    # and the identical literal form ran 384. cmd re-splits the line itself,
+    # so mix.bat sees every path. No path here contains a space.
+    cmd /c "mix test $($testPaths -join ' ') > `"$log`" 2>&1"
     $ok = ($LASTEXITCODE -eq 0)
     $Env:MIX_ENV = $prevMixEnv
     Pop-Location
     $elapsed = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
     Record "Tests" $ok $elapsed $(if ($ok) { "PASS" } else { "FAIL" })
     if ($ok) {
-        Status "PASS" "$($testPaths.Count) file(s) passed (${elapsed}s)"
-        $testPaths | ForEach-Object { Write-Host "    $_ (passed)" }
+        # Report ExUnit's own count, not the number of paths handed to it.
+        # "34 file(s) passed" was true and useless: it stayed green while
+        # only one file's tests actually ran.
+        $summary = (Select-String -Path $log -Pattern '^\s*\d+ tests?,' |
+            Select-Object -Last 1).Line
+        if ($summary) { $summary = $summary.Trim() } else { $summary = "see $log" }
+        Status "PASS" "$summary (${elapsed}s)"
+        $testPaths | ForEach-Object { Write-Host "    $_" }
     } else {
         Status "FAIL" "See $log"
         Show-LogTail $log 60

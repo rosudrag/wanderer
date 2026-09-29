@@ -44,7 +44,8 @@ defmodule WandererAppWeb.Nav do
        corp_flags: %{
          identity_suite_enabled?: WandererApp.Env.identity_suite_enabled?(),
          group_map_sync_enabled?: WandererApp.Env.group_map_sync_enabled?(),
-         corp_roster_enabled?: WandererApp.Env.corp_roster_enabled?()
+         corp_roster_enabled?: WandererApp.Env.corp_roster_enabled?(),
+         scout_intel_enabled?: WandererApp.Env.scout_intel_enabled?()
        }
      )}
   end
@@ -95,6 +96,12 @@ defmodule WandererAppWeb.Nav do
 
         {GroupMapGrantsLive, _} ->
           :corp_map_grants
+
+        {ScoutIntelLive, _} ->
+          :corp_scout
+
+        {ScoutAccessLive, _} ->
+          :corp_scout_access
 
         {_, _} ->
           nil

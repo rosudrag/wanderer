@@ -29,7 +29,8 @@ defmodule WandererAppWeb.CorpNav do
         navigate={~p"/corp"}
         class={[
           "flex-1 w-full h-14 block text-gray-400 hover:text-white p-3 tooltip tooltip-right",
-          @active_tab in [:corp, :corp_identity, :corp_map_grants] && "text-white"
+          @active_tab in [:corp, :corp_identity, :corp_map_grants, :corp_scout, :corp_scout_access] &&
+            "text-white"
         ]}
         data-tip="Management"
       >

@@ -54,5 +54,8 @@ defmodule WandererApp.Api do
     resource WandererApp.Api.GroupMapSyncedMember
     resource WandererApp.Api.SyncRun
     resource WandererApp.Api.CorpRosterSnapshot
+    # CHEWY PATCH: scout intel log. See WandererApp.Scout.Ingest.
+    resource WandererApp.Api.ScoutSpawnSighting
+    resource WandererApp.Api.ScoutStructureSighting
   end
 end

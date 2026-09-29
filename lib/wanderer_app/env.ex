@@ -110,6 +110,11 @@ defmodule WandererApp.Env do
   # WandererAppWeb.Plugs.CheckBotSyncDisabled.
   def bot_sync_enabled?(), do: get_key(:bot_sync_enabled, false)
 
+  # CHEWY PATCH: scout intel log (faction spawns + structure timers) master
+  # switch. Gates both the ingest endpoint and the /corp/scout pages. See
+  # WandererApp.Scout.Ingest and WandererAppWeb.Plugs.CheckScoutIntelDisabled.
+  def scout_intel_enabled?(), do: get_key(:scout_intel_enabled, false)
+
   def admins(), do: get_key(:admins, [])
   def admin_username(), do: get_key(:admin_username)
   def admin_password(), do: get_key(:admin_password)

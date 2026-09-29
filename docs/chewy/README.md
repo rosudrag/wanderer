@@ -12,6 +12,7 @@
 | **corp-suite-research.md** | Domain research: what corp/alliance management actually is, what's reusable in this codebase, ESI availability per feature, three scoped proposals, open questions for the owner | After inventory; to understand the problem space and feasibility | Owner (sections D–E), agents (sections A–C) |
 | **seat-parity.md** | SeAT and Alliance Auth as reference implementations — module inventory, auth model data details, Discord mechanics, complete ESI scope catalogue with ETag/rate-limit facts, what they get wrong | When building a specific phase; to know exactly what endpoints to call and how to model auth/perms | Agents (sections 5–10); owner (section 7) |
 | **corp-suite-plan.md** | The build plan: 19 phases ordered by value, architecture decisions (State/Group, ESI sync framework, Discord bot), data models, 11 numbered hooks to existing files, acceptance criteria per phase | Before implementing anything; then as each phase starts, for smoke procedures | Agents (primary); owner (§1 decision summary, phases 0–3) |
+| **scout-intel.md** | The scout intel log (`WANDERER_SCOUT_INTEL`): ingest API contract for eveknob, the two traps in `structures.tsv`, and the `:scout_intel_view` permission tier that only the bootstrap admin can grant | When touching the scout log or writing the client side of it | Agents; owner (§Permissions) |
 
 ## Read This First (Owner)
 

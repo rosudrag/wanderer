@@ -217,6 +217,12 @@ defmodule WandererAppWeb.Router do
     plug WandererAppWeb.Plugs.CheckBotSyncDisabled
   end
 
+  # CHEWY PATCH: scout intel log ingest. See
+  # WandererAppWeb.Plugs.CheckScoutIntelDisabled and WandererApp.Scout.Ingest.
+  pipeline :api_scout_intel do
+    plug WandererAppWeb.Plugs.CheckScoutIntelDisabled
+  end
+
   # CHEWY PATCH: identity/state/groups suite. See
   # WandererAppWeb.Plugs.CheckIdentitySuiteDisabled and
   # docs/chewy/corp-suite-plan.md §9 Phase 0.
@@ -351,6 +357,17 @@ defmodule WandererAppWeb.Router do
     pipe_through [:api, :api_map, :api_bot_sync]
 
     post "/signatures/sync", MapSignatureSyncAPIController, :sync
+  end
+
+  # CHEWY PATCH: scout intel ingest (requires WANDERER_SCOUT_INTEL=true). Own
+  # scope, same reasoning as the signature-sync block above. Rides :api_map so
+  # the bot authenticates with the map public_api_key it already holds; the
+  # stored log is not map-scoped, the map is recorded as provenance only.
+  scope "/api/maps/:map_identifier", WandererAppWeb do
+    pipe_through [:api, :api_map, :api_scout_intel]
+
+    post "/scout/spawns", ScoutIntelAPIController, :spawns
+    post "/scout/structures", ScoutIntelAPIController, :structures
   end
 
   #
@@ -553,6 +570,11 @@ defmodule WandererAppWeb.Router do
       live "/", CorpManagementLive, :index
       live "/identity", CorpIdentityLive, :index
       live "/map-grants", GroupMapGrantsLive, :index
+      # CHEWY PATCH: scout intel log. Gated a second time inside the mount on
+      # WANDERER_SCOUT_INTEL and on the scout_intel_view permission -- this
+      # live_session's pipeline only knows about WANDERER_IDENTITY_SUITE.
+      live "/scout", ScoutIntelLive, :index
+      live "/scout/access", ScoutAccessLive, :index
     end
   end
 

@@ -160,18 +160,26 @@ safe from the npm watcher — Phoenix only starts `watchers:` when
 ```
 
 Runs `mix test` (temporarily forcing `MIX_ENV=test` for just this check —
-see Trap 5). Default pattern is **discovered, not hardcoded**: every
-`.exs` file found recursively under `test/integration/` at run time, plus
+see Trap 5). Default target is the `test/integration/` **directory** plus
 `test/unit/controllers/auth_controller_test.exs`. A pattern argument
-(space-separated file paths/globs) overrides discovery entirely.
+(space-separated file paths/globs) overrides it entirely.
+
+It reports **ExUnit's own count**, not a file count, and it invokes mix
+through `cmd /c` with the paths joined into one string. Both of those are
+load-bearing, and the reason is Trap 7 below: this step used to hand mix a
+discovered list of ~34 separate path arguments, which silently ran only the
+last file — 18 tests instead of 384 — while printing "34 file(s) passed"
+and a green PASS.
 
 **Expected output:**
 ```
-  [PASS] 30 file(s) passed (2.8s)
-    test/integration/acl_member_cache_invalidation_test.exs (passed)
-    ...
-    test/unit/controllers/auth_controller_test.exs (passed)
+  [PASS] 384 tests, 0 failures, 65 excluded (109.4s)
+    test/integration
+    test/unit/controllers/auth_controller_test.exs
 ```
+
+The 65 exclusions are the `:integration`/`:pending` tags configured in
+`test/test_helper.exs`, not a harness decision.
 
 ### `-Boot`
 
@@ -431,6 +439,33 @@ Another agent may be committing to `lib/**`/`config/**`/`test/**`/
 AGENTS.md rule 4). A `-Compile`/`-Test` failure that mentions files this
 harness doesn't touch is very likely theirs, not the harness's or your
 own change's; check the log's file paths before assuming otherwise.
+
+### 7. Passing an array of paths to `mix` runs only the LAST one
+
+`mix` on Windows is `mix.bat`. Handing a PowerShell **array variable** to
+it as arguments silently drops every element but the last:
+
+```powershell
+$tp = @('test/integration','test/unit/controllers/auth_controller_test.exs')
+mix test $tp        # 18 tests, 0 failures      <- only the last path ran
+mix test test/integration test/unit/controllers/auth_controller_test.exs
+                    # 384 tests, 0 failures, 65 excluded
+```
+
+Both measured 2026-09-29. It is silent and it is green: `mix` exits 0, so
+the harness reported PASS while running 5% of the suite, and the `-Test`
+step had been doing exactly that (it discovered ~34 files and passed them
+as an array). The fix is to join the paths into one string and go through
+`cmd /c`, which re-splits the line itself:
+
+```powershell
+cmd /c "mix test $($testPaths -join ' ') > `"$log`" 2>&1"
+```
+
+The tell is wall-clock time: the real integration suite takes ~110s, so a
+`Tests` row reading 2.9s means it did not run. That is why the step now
+prints ExUnit's own `N tests, N failures` line instead of a file count —
+a file count cannot distinguish the two cases.
 
 ## Typical Workflow
 

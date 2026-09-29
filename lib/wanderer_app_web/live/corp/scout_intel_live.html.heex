@@ -1,0 +1,170 @@
+<main class="w-full h-full p-4 pl-20 pb-20 overflow-auto text-gray-200">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+    <h1 class="text-2xl font-semibold">Scout Log</h1>
+    <.link :if={@can_manage_access?} navigate={~p"/corp/scout/access"} class="btn btn-sm">
+      Manage access
+    </.link>
+  </div>
+  <p class="mb-6 text-gray-400">
+    Special spawns and structure states reported by scanner clients. Times are UTC.
+  </p>
+
+  <div class="flex flex-wrap items-end gap-4 mb-6">
+    <div role="tablist" class="tabs tabs-boxed">
+      <button
+        role="tab"
+        id="scout-tab-structures"
+        phx-click="select_tab"
+        phx-value-tab="structures"
+        class={["tab", @tab == :structures && "tab-active"]}
+      >
+        Structures
+      </button>
+      <button
+        role="tab"
+        id="scout-tab-spawns"
+        phx-click="select_tab"
+        phx-value-tab="spawns"
+        class={["tab", @tab == :spawns && "tab-active"]}
+      >
+        Spawns
+      </button>
+    </div>
+
+    <form phx-change="select_window">
+      <label class="block text-xs text-gray-400 mb-1">Window</label>
+      <select name="days" id="scout-window" class="select select-sm select-bordered">
+        <option :for={{label, days} <- @windows} value={days} selected={days == @days}>
+          {label}
+        </option>
+      </select>
+    </form>
+  </div>
+
+  <div :if={@tab == :structures}>
+    <h2 class="text-lg font-semibold mb-2">Live timers</h2>
+    <p class="mb-3 text-gray-400 text-sm">
+      Reinforcement timers that have not run out, soonest first. Independent of the
+      window above — a timer is either running or it is not.
+    </p>
+
+    <table class="table w-full mb-10" id="scout-active-timers">
+      <thead>
+        <tr>
+          <th>Expires in</th>
+          <th>At</th>
+          <th>Structure</th>
+          <th>System</th>
+          <th>Owner</th>
+          <th>State</th>
+          <th>Seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr :for={row <- @active_timers} id={"scout-timer-#{row.id}"}>
+          <td class="font-mono whitespace-nowrap">{countdown(row.timer_expires_at, @now)}</td>
+          <td class="whitespace-nowrap">{at(row.timer_expires_at)}</td>
+          <td>
+            {row.structure_name || row.structure_id}
+            <span :if={row.group_name} class="badge badge-ghost badge-sm ml-1">
+              {row.group_name}
+            </span>
+          </td>
+          <td>{system(row)}</td>
+          <td>{row.owner_name || "—"}</td>
+          <td>{row.state_label || "—"}</td>
+          <td class="whitespace-nowrap text-gray-400">{at(row.observed_at)}</td>
+        </tr>
+        <tr :if={@active_timers == []}>
+          <td colspan="7" class="text-gray-500">No structure timers running.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2 class="text-lg font-semibold mb-2">Last seen</h2>
+    <p class="mb-3 text-gray-400 text-sm">
+      The most recent observation of each structure seen in this window.
+    </p>
+
+    <table class="table w-full" id="scout-structures">
+      <thead>
+        <tr>
+          <th>Seen</th>
+          <th>Structure</th>
+          <th>System</th>
+          <th>Owner</th>
+          <th>Power</th>
+          <th>State</th>
+          <th>S / A / H</th>
+          <th>By</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr :for={row <- @structures} id={"scout-structure-#{row.id}"}>
+          <td class="whitespace-nowrap">{at(row.observed_at)}</td>
+          <td>
+            {row.structure_name || row.structure_id}
+            <span :if={row.group_name} class="badge badge-ghost badge-sm ml-1">
+              {row.group_name}
+            </span>
+          </td>
+          <td>{system(row)}</td>
+          <td>{row.owner_name || "—"}</td>
+          <td>{row.upkeep_label || "—"}</td>
+          <td>
+            {row.state_label || "—"}
+            <span :if={row.unanchoring} class="badge badge-error badge-sm ml-1">unanchoring</span>
+            <span :if={row.anchoring} class="badge badge-warning badge-sm ml-1">anchoring</span>
+          </td>
+          <td class="font-mono whitespace-nowrap">
+            {row.shield_pct || 0}/{row.armor_pct || 0}/{row.hull_pct || 0}
+          </td>
+          <td class="text-gray-400">{row.character_name}</td>
+        </tr>
+        <tr :if={@structures == []}>
+          <td colspan="8" class="text-gray-500">
+            No structures reported in this window.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div :if={@tab == :spawns}>
+    <table class="table w-full" id="scout-spawns">
+      <thead>
+        <tr>
+          <th>Seen</th>
+          <th>Spawn</th>
+          <th>Type</th>
+          <th>System</th>
+          <th>Location</th>
+          <th>Local</th>
+          <th>Value</th>
+          <th>By</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr :for={row <- @spawns} id={"scout-spawn-#{row.id}"}>
+          <td class="whitespace-nowrap">{at(row.observed_at)}</td>
+          <td>{row.spawn_name}</td>
+          <td>
+            <span :if={row.spawn_category} class="badge badge-ghost badge-sm">
+              {row.spawn_category}
+            </span>
+          </td>
+          <td>{system(row)}</td>
+          <td class="text-gray-400">{row.location_name}</td>
+          <td class="font-mono">{row.players_in_local}</td>
+          <td class="font-mono whitespace-nowrap">{isk(row.isk_value)}</td>
+          <td class="text-gray-400">{row.character_name}</td>
+        </tr>
+        <tr :if={@spawns == []}>
+          <td colspan="8" class="text-gray-500">
+            No spawns reported in this window.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</main>
