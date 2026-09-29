@@ -13,14 +13,6 @@
       >
         Map access grants
       </.link>
-      <.link
-        :if={@can_view_scout_log? and @corp_flags[:scout_intel_enabled?]}
-        navigate={~p"/corp/scout"}
-        class="btn btn-sm"
-        id="link-corp-scout"
-      >
-        Scout log
-      </.link>
     </div>
   </div>
 

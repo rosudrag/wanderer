@@ -1,7 +1,7 @@
 defmodule WandererAppWeb.Plugs.CheckScoutIntelDisabled do
   @moduledoc """
   CHEWY PATCH: gates the scout intel routes (both the ingest endpoints and
-  the `/corp/scout` pages) behind `WandererApp.Env.scout_intel_enabled?/0`
+  the `/scout` pages) behind `WandererApp.Env.scout_intel_enabled?/0`
   (`WANDERER_SCOUT_INTEL`).
 
   Router routes are compiled once, at build time, before `config/runtime.exs`

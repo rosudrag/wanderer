@@ -42,20 +42,9 @@ defmodule WandererAppWeb.CorpManagementLive do
         socket.assigns.current_user.id
       )
 
-    # Only worth the read when the feature is on: this is the suite's
-    # landing page and it already does one permission round trip.
-    can_view_scout_log? =
-      WandererApp.Env.scout_intel_enabled?() and
-        WandererApp.Identity.ScoutAccess.can_view?(socket.assigns.current_user.id)
-
     {:ok,
      socket
-     |> assign(
-       active_tab: :corp,
-       page_title: "Management",
-       is_corp_admin?: is_corp_admin?,
-       can_view_scout_log?: can_view_scout_log?
-     )
+     |> assign(active_tab: :corp, page_title: "Management", is_corp_admin?: is_corp_admin?)
      |> load()}
   end
 

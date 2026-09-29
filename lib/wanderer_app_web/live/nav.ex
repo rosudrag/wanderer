@@ -13,7 +13,9 @@ defmodule WandererAppWeb.Nav do
     CharactersTrackingLive,
     CorpManagementLive,
     CorpIdentityLive,
-    GroupMapGrantsLive
+    GroupMapGrantsLive,
+    ScoutIntelLive,
+    ScoutAccessLive
   }
 
   def on_mount(_scope, _params, _session, socket) do
@@ -44,9 +46,14 @@ defmodule WandererAppWeb.Nav do
        corp_flags: %{
          identity_suite_enabled?: WandererApp.Env.identity_suite_enabled?(),
          group_map_sync_enabled?: WandererApp.Env.group_map_sync_enabled?(),
-         corp_roster_enabled?: WandererApp.Env.corp_roster_enabled?(),
-         scout_intel_enabled?: WandererApp.Env.scout_intel_enabled?()
-       }
+         corp_roster_enabled?: WandererApp.Env.corp_roster_enabled?()
+       },
+       # CHEWY PATCH: the one permission-gated sidebar entry. Cached, and
+       # short-circuited on the flag, because this runs on EVERY LiveView
+       # mount including the map canvas. See WandererAppWeb.ScoutNav.
+       show_scout?:
+         WandererApp.Env.scout_intel_enabled?() and
+           WandererApp.Identity.ScoutAccess.can_view_cached?(socket.assigns.current_user.id)
      )}
   end
 
@@ -98,10 +105,10 @@ defmodule WandererAppWeb.Nav do
           :corp_map_grants
 
         {ScoutIntelLive, _} ->
-          :corp_scout
+          :scout
 
         {ScoutAccessLive, _} ->
-          :corp_scout_access
+          :scout_access
 
         {_, _} ->
           nil

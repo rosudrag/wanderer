@@ -223,6 +223,13 @@ defmodule WandererAppWeb.Router do
     plug WandererAppWeb.Plugs.CheckScoutIntelDisabled
   end
 
+  # CHEWY PATCH: same flag, browser side (the /scout pages). Separate from
+  # :api_scout_intel only because the two are piped after different base
+  # pipelines.
+  pipeline :scout_intel do
+    plug WandererAppWeb.Plugs.CheckScoutIntelDisabled
+  end
+
   # CHEWY PATCH: identity/state/groups suite. See
   # WandererAppWeb.Plugs.CheckIdentitySuiteDisabled and
   # docs/chewy/corp-suite-plan.md §9 Phase 0.
@@ -570,11 +577,25 @@ defmodule WandererAppWeb.Router do
       live "/", CorpManagementLive, :index
       live "/identity", CorpIdentityLive, :index
       live "/map-grants", GroupMapGrantsLive, :index
-      # CHEWY PATCH: scout intel log. Gated a second time inside the mount on
-      # WANDERER_SCOUT_INTEL and on the scout_intel_view permission -- this
-      # live_session's pipeline only knows about WANDERER_IDENTITY_SUITE.
-      live "/scout", ScoutIntelLive, :index
-      live "/scout/access", ScoutAccessLive, :index
+    end
+  end
+
+  # CHEWY PATCH: scout intel log. A TOP-LEVEL scope, not a /corp sub-route:
+  # it is not part of the corp suite (its permission is granted by the
+  # instance owner, not by a corp admin) and it has its own sidebar entry,
+  # so nesting it under /corp would have meant a page reachable only by
+  # knowing the URL. Gated by WANDERER_SCOUT_INTEL for the scope, and by
+  # WandererApp.Identity.ScoutAccess inside each mount/3.
+  scope "/scout", WandererAppWeb do
+    pipe_through [:browser, :scout_intel]
+
+    live_session :scout,
+      on_mount: [
+        {WandererAppWeb.UserAuth, :ensure_authenticated},
+        WandererAppWeb.Nav
+      ] do
+      live "/", ScoutIntelLive, :index
+      live "/access", ScoutAccessLive, :index
     end
   end
 

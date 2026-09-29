@@ -21,18 +21,15 @@ defmodule WandererAppWeb.ScoutAccessLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    cond do
-      not socket.assigns.corp_flags[:scout_intel_enabled?] ->
-        {:ok, socket |> push_navigate(to: ~p"/corp")}
-
-      not ScoutAccess.superadmin?(socket.assigns.current_user.id) ->
-        {:ok, socket |> push_navigate(to: ~p"/corp")}
-
-      true ->
-        {:ok,
-         socket
-         |> assign(active_tab: :corp_scout_access, page_title: "Scout Log Access")
-         |> load()}
+    # The flag is the scope pipeline's job; this page's own gate is the
+    # superadmin tier, which is stricter than the log page's.
+    if ScoutAccess.superadmin?(socket.assigns.current_user.id) do
+      {:ok,
+       socket
+       |> assign(active_tab: :scout_access, page_title: "Scout Log Access")
+       |> load()}
+    else
+      {:ok, socket |> push_navigate(to: ~p"/maps")}
     end
   end
 

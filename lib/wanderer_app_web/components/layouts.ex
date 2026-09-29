@@ -207,6 +207,10 @@ defmodule WandererAppWeb.Layouts do
   # WandererAppWeb.CorpNav. Defaults to an empty map so the upstream
   # callers of this component keep working unchanged.
   attr :corp_flags, :map, default: %{}
+  # CHEWY PATCH: whether to draw the /scout icon. Resolved once in
+  # WandererAppWeb.Nav; defaults to false so upstream callers of this
+  # component keep working unchanged.
+  attr :show_scout?, :boolean, default: false
 
   def sidebar_nav_links(assigns) do
     ~H"""
@@ -275,6 +279,11 @@ defmodule WandererAppWeb.Layouts do
                edge and is invisible. See WandererAppWeb.CorpNav. --%>
           <WandererAppWeb.CorpNav.corp_nav_links
             corp_flags={@corp_flags}
+            active_tab={@active_tab}
+            show_sidebar={@show_sidebar}
+          />
+          <WandererAppWeb.ScoutNav.scout_nav_links
+            show_scout?={@show_scout?}
             active_tab={@active_tab}
             show_sidebar={@show_sidebar}
           />

@@ -36,25 +36,25 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    cond do
-      not socket.assigns.corp_flags[:scout_intel_enabled?] ->
-        {:ok, socket |> push_navigate(to: ~p"/corp")}
-
-      not ScoutAccess.can_view?(socket.assigns.current_user.id) ->
-        {:ok, socket |> push_navigate(to: ~p"/corp")}
-
-      true ->
-        {:ok,
-         socket
-         |> assign(
-           active_tab: :corp_scout,
-           page_title: "Scout Log",
-           tab: :structures,
-           days: @default_days,
-           windows: @windows,
-           can_manage_access?: ScoutAccess.superadmin?(socket.assigns.current_user.id)
-         )
-         |> load()}
+    # WANDERER_SCOUT_INTEL is enforced by the scope's pipeline
+    # (WandererAppWeb.Plugs.CheckScoutIntelDisabled -> 404), so the only
+    # thing left to decide here is the permission. Uncached on purpose:
+    # the nav icon may be drawn from a cached answer, reading the log may
+    # not be.
+    if ScoutAccess.can_view?(socket.assigns.current_user.id) do
+      {:ok,
+       socket
+       |> assign(
+         active_tab: :scout,
+         page_title: "Scout Log",
+         tab: :structures,
+         days: @default_days,
+         windows: @windows,
+         can_manage_access?: ScoutAccess.superadmin?(socket.assigns.current_user.id)
+       )
+       |> load()}
+    else
+      {:ok, socket |> push_navigate(to: ~p"/maps")}
     end
   end
 

@@ -20,6 +20,7 @@
       show_sidebar={@show_sidebar}
       map_subscriptions_enabled={@map_subscriptions_enabled?}
       corp_flags={@corp_flags}
+      show_scout?={@show_scout?}
     />
     <.ping_container :if={@show_sidebar} rtt_class={@rtt_class} />
     <.donate_container :if={@show_sidebar} /> <.feedback_container :if={@show_sidebar} />

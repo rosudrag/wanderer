@@ -296,6 +296,34 @@ defmodule WandererApp.ScoutIntelTest do
       assert ScoutAccess.members() == []
     end
 
+    # The sidebar icon is drawn from can_view_cached?/1 on every LiveView
+    # mount. If a grant or a revoke did not invalidate it, a revoked user
+    # would keep the icon (and a freshly granted one would not get it)
+    # until the TTL expired.
+    test "the cached answer follows a grant and a revoke immediately", ctx do
+      refute ScoutAccess.can_view_cached?(ctx.grantee.id)
+
+      assert {:ok, _} =
+               ScoutAccess.grant_by_character_name(
+                 ctx.grantee_character.name,
+                 ctx.superadmin.id
+               )
+
+      assert ScoutAccess.can_view_cached?(ctx.grantee.id)
+
+      assert :ok = ScoutAccess.revoke(ctx.grantee.id, ctx.superadmin.id)
+      refute ScoutAccess.can_view_cached?(ctx.grantee.id)
+    end
+
+    test "a refused grant does not poison the cache", ctx do
+      refute ScoutAccess.can_view_cached?(ctx.grantee.id)
+
+      assert {:error, :forbidden} =
+               ScoutAccess.grant_by_character_name(ctx.grantee_character.name, ctx.grantee.id)
+
+      refute ScoutAccess.can_view_cached?(ctx.grantee.id)
+    end
+
     test "with no bootstrap character configured there is no superadmin at all", ctx do
       Application.put_env(:wanderer_app, :bootstrap_admin_character, "")
 

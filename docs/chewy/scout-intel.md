@@ -9,7 +9,12 @@ Two halves:
 | | |
 |---|---|
 |**Ingest**|`POST /api/maps/:map_identifier/scout/spawns`, `POST .../scout/structures`. Bot auth, map API key.|
-|**Read**|`/corp/scout`, gated on the `:scout_intel_view` permission, which **only the bootstrap admin can grant** (`/corp/scout/access`).|
+|**Read**|`/scout`, gated on the `:scout_intel_view` permission, which **only the bootstrap admin can grant** (`/scout/access`).|
+
+`/scout` is a **top-level** route with its own sidebar icon, not a page
+under `/corp`. It is not part of the corp suite: its permission is granted
+by the instance owner rather than by a corp admin, so nesting it under the
+corp management page would have made it reachable only by knowing the URL.
 
 Not one of the phases in `corp-suite-plan.md`. Phase 6 ("Structure timers")
 is ESI-synced data about structures *we own*; this is scouted observation of
@@ -116,7 +121,7 @@ two observations of the same Egmar citadel seven hours apart, with
 
 | | |
 |---|---|
-|`:scout_intel_view`|Read `/corp/scout`. An ordinary `GroupPermission` row on a managed "Scout Intel Viewers" group, so `PermissionCache.has_permission?/2` answers for it like any other.|
+|`:scout_intel_view`|Read `/scout`. An ordinary `GroupPermission` row on a managed "Scout Intel Viewers" group, so `PermissionCache.has_permission?/2` answers for it like any other.|
 |Who can grant it|**Only** `ScoutAccess.superadmin?/1`: the single user owning `WANDERER_BOOTSTRAP_ADMIN_CHARACTER`. A `:corp_suite_admin` cannot grant it, cannot revoke it, and cannot grant it to themselves.|
 |With the env var unset|Nobody is superadmin and the permission cannot be granted through the UI at all — an unset bootstrap character means the deployment has no declared owner.|
 
@@ -127,6 +132,22 @@ revokable row would be a lie.
 `grant_by_character_name/2` and `revoke/2` re-check the tier themselves, so a
 socket that was authorized at mount and is not any more still cannot write.
 
+### The sidebar entry
+
+`/scout` is the one permission-gated icon in the sidebar
+(`WandererAppWeb.ScoutNav`). Every other entry is gated on a flag or a
+role already in the socket, because `Nav.on_mount/4` runs on EVERY
+LiveView mount — the map canvas included — and AGENTS.md forbids a
+database round trip there. `CorpNav` links no admin-only page for exactly
+that reason.
+
+This one is affordable because `ScoutAccess.can_view_cached?/1` answers
+from `WandererApp.Cache`, and `grant_*`/`revoke/2` invalidate the entry,
+so the icon appears and disappears on the next page load rather than on a
+TTL. The 5-minute TTL is only a backstop for a write that bypassed the
+module. The page's own `mount/3` calls the **uncached** `can_view?/1`: a
+stale cache may cost a wrong icon, never a wrong page.
+
 ## Files
 
 |What|Where|
@@ -136,7 +157,8 @@ socket that was authorized at mount and is not any more still cannot write.
 |Controller|`lib/wanderer_app_web/controllers/scout_intel_api_controller.ex`|
 |Flag plug|`lib/wanderer_app_web/controllers/plugs/check_scout_intel_disabled.ex`|
 |Permission tier|`lib/wanderer_app/identity/scout_access.ex`|
-|Pages|`lib/wanderer_app_web/live/corp/scout_{intel,access}_live.ex`|
+|Pages|`lib/wanderer_app_web/live/scout/scout_{intel,access}_live.ex`|
+|Sidebar entry|`lib/wanderer_app_web/components/scout_nav.ex`|
 |Tests|`test/integration/scout_intel_test.exs`|
 
 ## Verified
@@ -149,5 +171,5 @@ rows), 2026-09-29:
 - 80/80 and 14/14 stored, 0 failed; posting both files twice left exactly
   80 and 14 rows in the database
 - a row with no timestamp failed alone, the good row in the same batch stored
-- `/corp/scout` renders the timer and last-seen tables for the bootstrap
-  admin; a logged-in non-grantee is redirected to `/corp` and sees neither
+- `/scout` renders the timer and last-seen tables for the bootstrap
+  admin; a logged-in non-grantee is redirected to `/maps` and sees neither

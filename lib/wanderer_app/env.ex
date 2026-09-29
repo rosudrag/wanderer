@@ -111,7 +111,7 @@ defmodule WandererApp.Env do
   def bot_sync_enabled?(), do: get_key(:bot_sync_enabled, false)
 
   # CHEWY PATCH: scout intel log (faction spawns + structure timers) master
-  # switch. Gates both the ingest endpoint and the /corp/scout pages. See
+  # switch. Gates both the ingest endpoints and the /scout pages. See
   # WandererApp.Scout.Ingest and WandererAppWeb.Plugs.CheckScoutIntelDisabled.
   def scout_intel_enabled?(), do: get_key(:scout_intel_enabled, false)
 

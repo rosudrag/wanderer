@@ -33,6 +33,10 @@ defmodule WandererApp.Identity.ScoutAccess do
   @permission :scout_intel_view
   @group_name "Scout Intel Viewers"
 
+  # Backstop only -- grant/revoke invalidate explicitly. See
+  # can_view_cached?/1.
+  @cache_ttl :timer.minutes(5)
+
   @doc "The permission atom this module manages."
   def permission, do: @permission
 
@@ -66,6 +70,38 @@ defmodule WandererApp.Identity.ScoutAccess do
   end
 
   @doc """
+  `can_view?/1` behind a short-lived cache, for callers on a hot path.
+
+  `WandererAppWeb.Nav.on_mount/4` runs for EVERY LiveView mount, the map
+  canvas included, so deciding whether to draw the sidebar icon must not
+  cost two `Ash` reads per mount — that rule is in AGENTS.md and it is why
+  no other `/corp` nav entry is permission-gated. Grants and revokes both
+  call `invalidate/1`, so the TTL is only a backstop for writes that
+  bypassed this module (a direct DB edit); a stale `false` costs one page
+  reload, a stale `true` still hits the real check in the LiveView's own
+  `mount/3`, which is never cached.
+  """
+  def can_view_cached?(nil), do: false
+
+  def can_view_cached?(user_id) when is_binary(user_id) do
+    case WandererApp.Cache.get(cache_key(user_id)) do
+      nil ->
+        allowed = can_view?(user_id)
+        WandererApp.Cache.put(cache_key(user_id), allowed, ttl: @cache_ttl)
+        allowed
+
+      allowed ->
+        allowed
+    end
+  end
+
+  @doc "Drops the `can_view_cached?/1` entry for one user."
+  def invalidate(user_id) when is_binary(user_id),
+    do: WandererApp.Cache.delete(cache_key(user_id))
+
+  defp cache_key(user_id), do: "scout_access:can_view:#{user_id}"
+
+  @doc """
   Grants `:scout_intel_view` to the user owning `character_name`.
 
   `granted_by_user_id` must be the superadmin; anything else returns
@@ -87,24 +123,27 @@ defmodule WandererApp.Identity.ScoutAccess do
   def revoke(user_id, revoked_by_user_id) when is_binary(user_id) do
     with :ok <- authorize(revoked_by_user_id),
          {:ok, group} <- ensure_group() do
-      case GroupMembership.by_group_and_user(group.id, user_id, authorize?: false) do
-        {:ok, membership} ->
-          case GroupMembership.destroy(membership, authorize?: false) do
-            :ok ->
-              Logger.info("[ScoutAccess] Revoked #{@permission} from user #{user_id}")
-              :ok
+      result =
+        case GroupMembership.by_group_and_user(group.id, user_id, authorize?: false) do
+          {:ok, membership} ->
+            case GroupMembership.destroy(membership, authorize?: false) do
+              :ok -> :ok
+              {:ok, _} -> :ok
+              {:error, reason} -> {:error, reason}
+            end
 
-            {:ok, _} ->
-              Logger.info("[ScoutAccess] Revoked #{@permission} from user #{user_id}")
-              :ok
+          {:error, _not_found} ->
+            :ok
+        end
 
-            {:error, reason} ->
-              {:error, reason}
-          end
-
-        {:error, _not_found} ->
-          :ok
+      if result == :ok do
+        # Before logging: the nav gate reads this cache, and a revoked user
+        # keeping the icon for five minutes is the whole reason it exists.
+        invalidate(user_id)
+        Logger.info("[ScoutAccess] Revoked #{@permission} from user #{user_id}")
       end
+
+      result
     end
   end
 
@@ -173,6 +212,7 @@ defmodule WandererApp.Identity.ScoutAccess do
   defp grant_user(user, granted_by_user_id) do
     with {:ok, group} <- ensure_group(),
          {:ok, _membership} <- ensure_member(group, user, granted_by_user_id) do
+      invalidate(user.id)
       Logger.info("[ScoutAccess] Granted #{@permission} to user #{user.id} (#{user.name})")
       {:ok, user}
     end
@@ -212,7 +252,7 @@ defmodule WandererApp.Identity.ScoutAccess do
                  %{
                    name: @group_name,
                    description:
-                     "Grants read access to the scout intel log. Managed from /corp/scout/access; " <>
+                     "Grants read access to the scout intel log. Managed from /scout/access; " <>
                        "only the bootstrap admin can change its membership.",
                    kind: :manual
                  },
