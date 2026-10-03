@@ -365,6 +365,30 @@ defmodule WandererAppWeb.ScoutIntelLive do
   end
 
   @doc false
+  # The closest static-map body to the STRUCTURE (not the observer),
+  # rendered as a dim second line under the structure name. `distance_m`
+  # is the observer's range and goes stale the moment the session ends;
+  # this is permanent, which is the point of showing it at all. Accepts
+  # any struct/map carrying the two fields -- `List.first/1` on an empty
+  # history list hands back `nil`, and an unrelated row (a spawn, a
+  # hotspot) simply has neither key.
+  def nearest_celestial_label(row) do
+    row = row || %{}
+
+    case Map.get(row, :nearest_celestial) do
+      nil -> nil
+      "" -> nil
+      name -> format_celestial(name, Map.get(row, :nearest_celestial_m))
+    end
+  end
+
+  defp format_celestial(name, meters) when is_integer(meters) and meters >= 1000,
+    do: "#{name} — #{Float.round(meters / 1000, 1)} km"
+
+  defp format_celestial(name, meters) when is_integer(meters), do: "#{name} — #{meters} m"
+  defp format_celestial(name, _meters), do: name
+
+  @doc false
   # The client logs the raw system ID as the name when it has not
   # resolved the real one yet; `systems` is this page's own resolution,
   # and the stored string is the fallback.

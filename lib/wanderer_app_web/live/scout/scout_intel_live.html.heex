@@ -119,6 +119,9 @@
             <span :if={row.group_name} class="badge badge-ghost badge-sm ml-1">
               {row.group_name}
             </span>
+            <div :if={nearest_celestial_label(row)} class="text-gray-500 text-xs">
+              {nearest_celestial_label(row)}
+            </div>
           </td>
           <td>
             <button phx-click="filter_system" phx-value-id={row.solar_system_id} class="link link-hover">
@@ -173,6 +176,9 @@
             <span :if={row.group_name} class="badge badge-ghost badge-sm ml-1">
               {row.group_name}
             </span>
+            <div :if={nearest_celestial_label(row)} class="text-gray-500 text-xs">
+              {nearest_celestial_label(row)}
+            </div>
           </td>
           <td>
             <button phx-click="filter_system" phx-value-id={row.solar_system_id} class="link link-hover">
@@ -337,6 +343,9 @@
           </h3>
           <p class="text-gray-400 text-sm">
             Every observation of structure {@detail.structure_id}, newest first.
+          </p>
+          <p :if={nearest_celestial_label(List.first(@detail.rows))} class="text-gray-500 text-xs">
+            Nearest celestial: {nearest_celestial_label(List.first(@detail.rows))}
           </p>
         </div>
         <button phx-click="close_structure" class="btn btn-sm btn-ghost">Close</button>

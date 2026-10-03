@@ -46,6 +46,7 @@ defmodule WandererApp.Scout.Ingest do
   require Logger
 
   alias WandererApp.Api.{ScoutSpawnSighting, ScoutStructureSighting}
+  alias WandererApp.CachedInfo
 
   # An upper bound on one POST. The client posts incrementally; a batch
   # larger than this is a bug or an abuse, and either way is worth an
@@ -149,7 +150,7 @@ defmodule WandererApp.Scout.Ingest do
        %{
          observed_at: observed_at,
          solar_system_id: system_id,
-         solar_system_name: string(row, ["system_name", "solar_system_name"]),
+         solar_system_name: resolve_system_name(system_id, row),
          system_truesec: float(row, ["system_truesec"]),
          location_type: string(row, ["location_type"]),
          # Identity components: "" not nil, or Postgres stops enforcing
@@ -181,7 +182,7 @@ defmodule WandererApp.Scout.Ingest do
          observed_at: observed_at,
          event: event,
          solar_system_id: system_id,
-         solar_system_name: string(row, ["system_name", "solar_system_name"]),
+         solar_system_name: resolve_system_name(system_id, row),
          system_truesec: float(row, ["system_truesec"]),
          structure_id: structure_id,
          type_id: int(row, ["type_id"]),
@@ -204,10 +205,52 @@ defmodule WandererApp.Scout.Ingest do
          armor_pct: int(row, ["armor_pct"]),
          hull_pct: int(row, ["hull_pct"]),
          distance_m: int(row, ["distance_m"]),
+         nearest_celestial: string(row, ["nearest_celestial"]),
+         nearest_celestial_m: int(row, ["nearest_celestial_m"]),
          map_id: map_id
        }}
     end
   end
+
+  # Resolves the solar system name server-side rather than trusting the
+  # client. The client used to send `system_name` / `solar_system_name`
+  # alongside `system_id`; a bug in one `obj_StructureWatch` code path
+  # fell back to the raw numeric ID when the name had not resolved yet,
+  # and ~35% of live rows carried that digit string as the "name". The
+  # client no longer sends the field at all, but an older client might
+  # still post one, so it is kept as a last-resort fallback -- EXCEPT
+  # when it is all digits, which is exactly the defect above and worth
+  # treating as absent rather than stored as a name.
+  #
+  # `CachedInfo.get_system_static_info!/1` is the same Cachex-backed
+  # lookup `ScoutIntelLive` uses to resolve names at read time; despite
+  # the `!`, it swallows its own errors and returns `nil` rather than
+  # raising. The `try/rescue` below is extra insurance against any
+  # future change to that contract: one bad row must cost one row, never
+  # the batch.
+  defp resolve_system_name(system_id, row) do
+    case CachedInfo.get_system_static_info!(system_id) do
+      %{solar_system_name: name} when is_binary(name) ->
+        case String.trim(name) do
+          "" -> client_system_name(row)
+          trimmed -> trimmed
+        end
+
+      _ ->
+        client_system_name(row)
+    end
+  rescue
+    _ -> client_system_name(row)
+  end
+
+  defp client_system_name(row) do
+    case string(row, ["system_name", "solar_system_name"]) do
+      nil -> nil
+      value -> if numeric_string?(value), do: nil, else: value
+    end
+  end
+
+  defp numeric_string?(value), do: String.match?(value, ~r/^[0-9]+$/)
 
   # "SEEN"/"CHANGE" from the writer; anything else is a row we do not
   # understand, and guessing :seen would quietly corrupt the identity.

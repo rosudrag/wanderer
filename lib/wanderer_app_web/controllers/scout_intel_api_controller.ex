@@ -92,12 +92,18 @@ defmodule WandererAppWeb.ScoutIntelAPIController do
     sit between `vulnerable` and `timer_seconds`), and its `type_name`
     column holds the player-set structure name, not a type name. Post the
     fields by name and neither matters.
+
+    The solar system name is resolved server-side from `system_id`
+    against the static map, the same lookup the `/scout` page uses --
+    posting it is no longer necessary. A `system_name` /
+    `solar_system_name` field is still accepted for backward
+    compatibility, but only as a last-resort fallback when server-side
+    resolution comes back empty.
     """,
     properties: %{
       utc_timestamp: %OpenApiSpex.Schema{type: :string, description: "Required."},
       event: %OpenApiSpex.Schema{type: :string, enum: ["SEEN", "CHANGE"]},
       system_id: %OpenApiSpex.Schema{type: :integer, description: "Required."},
-      system_name: %OpenApiSpex.Schema{type: :string},
       system_truesec: %OpenApiSpex.Schema{type: :number},
       structure_id: %OpenApiSpex.Schema{type: :integer, description: "Required."},
       type_id: %OpenApiSpex.Schema{type: :integer},
@@ -123,14 +129,23 @@ defmodule WandererAppWeb.ScoutIntelAPIController do
       shield_pct: %OpenApiSpex.Schema{type: :integer},
       armor_pct: %OpenApiSpex.Schema{type: :integer},
       hull_pct: %OpenApiSpex.Schema{type: :integer},
-      distance_m: %OpenApiSpex.Schema{type: :integer}
+      distance_m: %OpenApiSpex.Schema{type: :integer},
+      nearest_celestial: %OpenApiSpex.Schema{
+        type: :string,
+        description:
+          "Closest static-map body to the STRUCTURE's position (not the observer's). " <>
+            "Empty when the client could not resolve it yet -- never a guess."
+      },
+      nearest_celestial_m: %OpenApiSpex.Schema{
+        type: :integer,
+        description: "Metres from the structure to nearest_celestial."
+      }
     },
     required: [:utc_timestamp, :system_id, :structure_id],
     example: %{
       utc_timestamp: "2026-09-27 17:38:15",
       event: "CHANGE",
       system_id: 30_002_099,
-      system_name: "Egmar",
       system_truesec: 0.25287,
       structure_id: 1_055_680_805_214,
       type_id: 35_832,
@@ -150,7 +165,9 @@ defmodule WandererAppWeb.ScoutIntelAPIController do
       shield_pct: 0,
       armor_pct: 100,
       hull_pct: 100,
-      distance_m: 225_354
+      distance_m: 225_354,
+      nearest_celestial: "Egmar VI - Moon 3",
+      nearest_celestial_m: 12_480
     }
   }
 

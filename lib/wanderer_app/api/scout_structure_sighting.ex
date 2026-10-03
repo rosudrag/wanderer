@@ -101,6 +101,8 @@ defmodule WandererApp.Api.ScoutStructureSighting do
       :armor_pct,
       :hull_pct,
       :distance_m,
+      :nearest_celestial,
+      :nearest_celestial_m,
       :map_id
     ]
 
@@ -133,11 +135,12 @@ defmodule WandererApp.Api.ScoutStructureSighting do
                  (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
                  (is_nil(^arg(:q)) or
                     fragment(
-                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
                       structure_name,
                       owner_name,
                       solar_system_name,
                       group_name,
+                      nearest_celestial,
                       ^arg(:q)
                     ))
              )
@@ -169,11 +172,12 @@ defmodule WandererApp.Api.ScoutStructureSighting do
                  (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
                  (is_nil(^arg(:q)) or
                     fragment(
-                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
                       structure_name,
                       owner_name,
                       solar_system_name,
                       group_name,
+                      nearest_celestial,
                       ^arg(:q)
                     ))
              )
@@ -244,6 +248,15 @@ defmodule WandererApp.Api.ScoutStructureSighting do
 
     # Metres to the observing character. int64: values above 1e13 occur.
     attribute :distance_m, :integer
+
+    # The closest static-map body to the STRUCTURE's position (not to the
+    # observer), and the gap in metres. Unlike `distance_m` -- observer-
+    # relative, and worthless once that session ends -- the celestial is
+    # permanent: it is what a target list sorts and searches by later.
+    # Empty when the client could not resolve it yet (snapshot not ready),
+    # never a guess.
+    attribute :nearest_celestial, :string
+    attribute :nearest_celestial_m, :integer
 
     attribute :map_id, :uuid
 
