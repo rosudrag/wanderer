@@ -61,13 +61,23 @@ rows, so writes upsert on a natural identity:
 
 |Resource|Identity|
 |---|---|
-|`ScoutSpawnSighting`|`character_name, observed_at, solar_system_id, location_name, spawn_name`|
+|`ScoutSpawnSighting`|`observed_at, solar_system_id, location_name, spawn_name`|
 |`ScoutStructureSighting`|`structure_id, observed_at, event`|
 
 Every column in those identities is `NOT NULL` (in Postgres `NULL <> NULL`,
 so a nullable identity column silently disables the constraint). Both logs
 are append-only: the same structure seen an hour later is a new row, and the
 difference between the two rows is the point.
+
+### The observing character is not stored
+
+Neither resource carries submitter attribution: this log answers "what was
+there", not "who was parked next to it". A `character` / `character_name`
+key in an incoming row is **ignored, not rejected**, so an older client keeps
+working unchanged. Two consequences worth knowing: the name is out of
+`ScoutSpawnSighting`'s identity, so two pilots reporting the same spawn at
+the same second in the same place upsert onto one row — the honest count of
+the event — and `character` is not a required field on either endpoint.
 
 ### Field names
 
@@ -76,8 +86,8 @@ The TSV's own column names are accepted, as are the resource's
 
 |Endpoint|Required|
 |---|---|
-|`/scout/spawns`|`utc_timestamp`, `character`, `system_id`|
-|`/scout/structures`|`utc_timestamp`, `character`, `system_id`, `structure_id`|
+|`/scout/spawns`|`utc_timestamp`, `system_id`|
+|`/scout/structures`|`utc_timestamp`, `system_id`, `structure_id`|
 
 `utc_timestamp` (`"YYYY-MM-DD HH:MM:SS"`, UTC) is preferred over the local
 `timestamp` column, which is only a fallback: the log is shared by clients in
@@ -126,6 +136,52 @@ countdown is meaningless in a log read hours later. Verified on real data —
 two observations of the same Egmar citadel seven hours apart, with
 `timer_seconds` of 32405 and 7278, resolve to the same expiry.
 
+## The page
+
+`/scout` is two tabs over the same two tables, and one `WANDERER_SCOUT_INTEL`
+flag covers all of it.
+
+|Tab|What it leads with|
+|---|---|
+|Structures|Live reinforcement timers (soonest first, colour-coded: red under an hour, amber under six), then the latest observation **per structure** folded by Postgres `DISTINCT ON (structure_id)`, then that structure's full history on click|
+|Spawns|Hotspots — `GROUP BY` system + location + spawn with a count and an ISK sum — over the flat reverse-chronological log|
+
+Five properties that are deliberate, not incidental:
+
+- **It ticks.** `now` is re-assigned every 30s and timers that ran out drop
+  out of the live table. No query: a 30s poll per open page would be a
+  database round trip to display arithmetic.
+- **It is pushed to.** `Ingest` broadcasts `{:scout_intel_ingested, :spawns |
+  :structures}` on the `"scout_intel"` topic whenever a batch stored
+  anything; the page reloads only the tab that kind affects.
+- **It never silently truncates.** Reads ask for `limit + 1` rows and the
+  extra row *is* the "there are more" banner — cheaper than a `count(*)` over
+  the window, and exactly as honest. "Load more" raises the limit by a page
+  (250).
+- **It resolves system names itself.** The client logs the raw system ID
+  until it has cached a name, so the page asks `CachedInfo.
+  get_system_static_info/1` (Cachex-backed) rather than printing "30002386".
+- **An empty table says which kind of empty it is.** `Stats.totals/0` is
+  queried *only* when a table came back empty, so "nothing in this window"
+  and "nothing has ever been reported" are different sentences. `count(*)` on
+  an append-only table is a sequential scan; that is why it is conditional.
+
+Filtering is one search box (an ILIKE in Postgres over the four strings a
+reader would type) plus a system filter set by clicking any system cell and
+cleared by the chip in the toolbar. Both apply to every table on the tab,
+including the timer table — `since` deliberately does not: a running timer is
+running however old the sighting that found it.
+
+`GET /scout/export.csv?tab=&days=&q=&system_id=` takes the same filters and
+emits **every** stored column (the CSV exists for the fields the HTML has no
+room for), capped at 50k rows. It is a plain controller, so it re-checks the
+login and the permission itself — the `/scout` `live_session` gate does not
+cover it.
+
+`WandererApp.Scout.Stats` holds the three reads Ash cannot express
+(`GROUP BY`, `max(observed_at)`, `count(*)`) as schemaless Ecto. It hard-codes
+the two table names; renaming a table means editing it too.
+
 ## Permissions
 
 | | |
@@ -162,8 +218,10 @@ stale cache may cost a wrong icon, never a wrong page.
 |What|Where|
 |---|---|
 |Ingest + coercion|`lib/wanderer_app/scout/ingest.ex`|
+|Aggregates (group-by, freshness, totals)|`lib/wanderer_app/scout/stats.ex`|
 |Resources|`lib/wanderer_app/api/scout_{spawn,structure}_sighting.ex`|
-|Controller|`lib/wanderer_app_web/controllers/scout_intel_api_controller.ex`|
+|Ingest controller|`lib/wanderer_app_web/controllers/scout_intel_api_controller.ex`|
+|CSV export|`lib/wanderer_app_web/controllers/scout_export_controller.ex`|
 |Flag plug|`lib/wanderer_app_web/controllers/plugs/check_scout_intel_disabled.ex`|
 |Permission tier|`lib/wanderer_app/identity/scout_access.ex`|
 |Pages|`lib/wanderer_app_web/live/scout/scout_{intel,access}_live.ex`|

@@ -1,13 +1,28 @@
 <main class="w-full h-full p-4 pl-20 pb-20 overflow-auto text-gray-200">
   <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
     <h1 class="text-2xl font-semibold">Scout Log</h1>
-    <.link :if={@can_manage_access?} navigate={~p"/scout/access"} class="btn btn-sm">
-      Manage access
-    </.link>
+    <div class="flex items-center gap-2">
+      <a href={export_path(assigns)} class="btn btn-sm btn-ghost" download>Export CSV</a>
+      <button phx-click="refresh" class="btn btn-sm btn-ghost">Refresh</button>
+      <.link :if={@can_manage_access?} navigate={~p"/scout/access"} class="btn btn-sm">
+        Manage access
+      </.link>
+    </div>
   </div>
-  <p class="mb-6 text-gray-400">
+  <p class="mb-4 text-gray-400">
     Special spawns and structure states reported by scanner clients. Times are UTC.
   </p>
+
+  <div class="flex flex-wrap items-center gap-4 mb-4 text-xs text-gray-500">
+    <span>
+      Last structure report:
+      <span class="text-gray-300">{ago(@last_observed.structures, @now)}</span>
+    </span>
+    <span>
+      Last spawn report: <span class="text-gray-300">{ago(@last_observed.spawns, @now)}</span>
+    </span>
+    <span class="text-gray-600">Live: new reports appear without a reload.</span>
+  </div>
 
   <div class="flex flex-wrap items-end gap-4 mb-6">
     <div role="tablist" class="tabs tabs-boxed">
@@ -39,6 +54,33 @@
         </option>
       </select>
     </form>
+
+    <form phx-change="search" class="grow max-w-sm">
+      <label class="block text-xs text-gray-400 mb-1">Search</label>
+      <input
+        type="text"
+        name="q"
+        id="scout-search"
+        value={@q}
+        phx-debounce="300"
+        autocomplete="off"
+        placeholder={
+          if @tab == :structures,
+            do: "structure, owner, system, type",
+            else: "spawn, belt, system, category"
+        }
+        class="input input-sm input-bordered w-full"
+      />
+    </form>
+
+    <button
+      :if={@system_id}
+      phx-click="clear_system"
+      id="scout-system-filter"
+      class="btn btn-sm btn-outline"
+    >
+      System: {system(%{solar_system_id: @system_id, solar_system_name: nil}, @systems)} ✕
+    </button>
   </div>
 
   <div :if={@tab == :structures}>
@@ -57,33 +99,54 @@
           <th>System</th>
           <th>Owner</th>
           <th>State</th>
+          <th>HP S/A/H</th>
           <th>Seen</th>
         </tr>
       </thead>
       <tbody>
         <tr :for={row <- @active_timers} id={"scout-timer-#{row.id}"}>
-          <td class="font-mono whitespace-nowrap">{countdown(row.timer_expires_at, @now)}</td>
+          <td class={["font-mono whitespace-nowrap", urgency(row.timer_expires_at, @now)]}>
+            {countdown(row.timer_expires_at, @now)}
+          </td>
           <td class="whitespace-nowrap">{at(row.timer_expires_at)}</td>
           <td>
-            {row.structure_name || row.structure_id}
+            <button
+              phx-click="show_structure"
+              phx-value-id={row.structure_id}
+              class="link link-hover text-left"
+            >
+              {row.structure_name || row.structure_id}
+            </button>
             <span :if={row.group_name} class="badge badge-ghost badge-sm ml-1">
               {row.group_name}
             </span>
           </td>
-          <td>{system(row)}</td>
+          <td>
+            <button phx-click="filter_system" phx-value-id={row.solar_system_id} class="link link-hover">
+              {system(row, @systems)}
+            </button>
+            <span :if={system_class(row, @systems)} class="badge badge-ghost badge-sm ml-1">
+              {system_class(row, @systems)}
+            </span>
+          </td>
           <td>{row.owner_name || "—"}</td>
-          <td>{row.state_label || "—"}</td>
+          <td>
+            {row.state_label || "—"}
+            <span :if={row.vulnerable} class="badge badge-error badge-sm ml-1">vulnerable</span>
+          </td>
+          <td class="font-mono whitespace-nowrap text-gray-400">{hp(row)}</td>
           <td class="whitespace-nowrap text-gray-400">{at(row.observed_at)}</td>
         </tr>
         <tr :if={@active_timers == []}>
-          <td colspan="7" class="text-gray-500">No structure timers running.</td>
+          <td colspan="8" class="text-gray-500">No structure timers running.</td>
         </tr>
       </tbody>
     </table>
 
     <h2 class="text-lg font-semibold mb-2">Last seen</h2>
     <p class="mb-3 text-gray-400 text-sm">
-      The most recent observation of each structure seen in this window.
+      The most recent observation of each structure seen in this window. Click a structure
+      for its full history.
     </p>
 
     <table class="table w-full" id="scout-structures">
@@ -95,37 +158,71 @@
           <th>Owner</th>
           <th>Power</th>
           <th>State</th>
+          <th>HP S/A/H</th>
           <th>Comes out</th>
+          <th>Reported on</th>
         </tr>
       </thead>
       <tbody>
         <tr :for={row <- @structures} id={"scout-structure-#{row.id}"}>
           <td class="whitespace-nowrap">{at(row.observed_at)}</td>
           <td>
-            {row.structure_name || row.structure_id}
+            <button
+              phx-click="show_structure"
+              phx-value-id={row.structure_id}
+              class="link link-hover text-left"
+            >
+              {row.structure_name || row.structure_id}
+            </button>
             <span :if={row.group_name} class="badge badge-ghost badge-sm ml-1">
               {row.group_name}
             </span>
           </td>
-          <td>{system(row)}</td>
+          <td>
+            <button phx-click="filter_system" phx-value-id={row.solar_system_id} class="link link-hover">
+              {system(row, @systems)}
+            </button>
+            <span :if={security(row.system_truesec)} class="text-gray-500 ml-1 font-mono text-xs">
+              {security(row.system_truesec)}
+            </span>
+          </td>
           <td>{row.owner_name || "—"}</td>
           <td>{row.upkeep_label || "—"}</td>
           <td>
             {row.state_label || "—"}
             <span :if={row.unanchoring} class="badge badge-error badge-sm ml-1">unanchoring</span>
             <span :if={row.anchoring} class="badge badge-warning badge-sm ml-1">anchoring</span>
+            <span :if={row.vulnerable} class="badge badge-error badge-sm ml-1">vulnerable</span>
           </td>
+          <td class="font-mono whitespace-nowrap text-gray-400">{hp(row)}</td>
           <td class="font-mono whitespace-nowrap">
             <span :if={is_nil(row.timer_expires_at)} class="text-gray-600">—</span>
-            <span :if={row.timer_expires_at}>
+            <span :if={row.timer_expires_at} class={urgency(row.timer_expires_at, @now)}>
               {countdown(row.timer_expires_at, @now)}
               <span class="text-gray-500 ml-2">{at(row.timer_expires_at)}</span>
             </span>
           </td>
+          <td class="text-gray-500 text-xs">
+            <.link
+              :if={@map_slugs[row.map_id]}
+              navigate={~p"/#{@map_slugs[row.map_id]}"}
+              class="link link-hover"
+            >
+              {@map_slugs[row.map_id]}
+            </.link>
+            <span :if={is_nil(@map_slugs[row.map_id])}>—</span>
+          </td>
         </tr>
         <tr :if={@structures == []}>
-          <td colspan="7" class="text-gray-500">
-            No structures reported in this window.
+          <td colspan="9" class="text-gray-500">
+            <span :if={@totals && @totals.structures == 0}>
+              No structure has ever been reported — no scanner client has posted to
+              <code>/api/maps/:map/scout/structures</code>
+              yet.
+            </span>
+            <span :if={is_nil(@totals) || @totals.structures > 0}>
+              No structures match this window and filter.
+            </span>
           </td>
         </tr>
       </tbody>
@@ -133,6 +230,46 @@
   </div>
 
   <div :if={@tab == :spawns}>
+    <h2 class="text-lg font-semibold mb-2">Hotspots</h2>
+    <p class="mb-3 text-gray-400 text-sm">
+      Every spawn in the window grouped by where it spawned, most frequent first.
+    </p>
+
+    <table class="table w-full mb-10" id="scout-hotspots">
+      <thead>
+        <tr>
+          <th>Seen</th>
+          <th>Spawn</th>
+          <th>System</th>
+          <th>Location</th>
+          <th>Value</th>
+          <th>Last</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr
+          :for={row <- @hotspots}
+          id={"scout-hotspot-#{row.solar_system_id}-#{:erlang.phash2({row.location_name, row.spawn_name})}"}
+        >
+          <td class="font-mono">{row.sightings}×</td>
+          <td>{row.spawn_name}</td>
+          <td>
+            <button phx-click="filter_system" phx-value-id={row.solar_system_id} class="link link-hover">
+              {system(row, @systems)}
+            </button>
+          </td>
+          <td class="text-gray-400">{row.location_name}</td>
+          <td class="font-mono whitespace-nowrap">{isk(row.isk_value)}</td>
+          <td class="whitespace-nowrap text-gray-400">{at(row.last_seen)}</td>
+        </tr>
+        <tr :if={@hotspots == []}>
+          <td colspan="6" class="text-gray-500">Nothing to group in this window.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2 class="text-lg font-semibold mb-2">Log</h2>
+
     <table class="table w-full" id="scout-spawns">
       <thead>
         <tr>
@@ -142,6 +279,8 @@
           <th>System</th>
           <th>Location</th>
           <th>Local</th>
+          <th>DT+</th>
+          <th>Outcome</th>
           <th>Value</th>
         </tr>
       </thead>
@@ -153,18 +292,114 @@
             <span :if={row.spawn_category} class="badge badge-ghost badge-sm">
               {row.spawn_category}
             </span>
+            <span :if={row.anomaly_type} class="text-gray-500 text-xs ml-1">
+              {row.anomaly_type}
+            </span>
           </td>
-          <td>{system(row)}</td>
-          <td class="text-gray-400">{row.location_name}</td>
+          <td>
+            <button phx-click="filter_system" phx-value-id={row.solar_system_id} class="link link-hover">
+              {system(row, @systems)}
+            </button>
+            <span :if={security(row.system_truesec)} class="text-gray-500 ml-1 font-mono text-xs">
+              {security(row.system_truesec)}
+            </span>
+          </td>
+          <td class="text-gray-400">
+            {row.location_name}
+            <span :if={row.location_type} class="text-gray-600 text-xs ml-1">
+              {row.location_type}
+            </span>
+          </td>
           <td class="font-mono">{row.players_in_local}</td>
+          <td class="font-mono text-gray-500">
+            {if row.minutes_since_downtime, do: "#{row.minutes_since_downtime}m", else: "—"}
+          </td>
+          <td class="text-gray-400">
+            {row.outcome || row.action_taken || "—"}
+          </td>
           <td class="font-mono whitespace-nowrap">{isk(row.isk_value)}</td>
         </tr>
         <tr :if={@spawns == []}>
-          <td colspan="7" class="text-gray-500">
-            No spawns reported in this window.
+          <td colspan="9" class="text-gray-500">
+            <span :if={@totals && @totals.spawns == 0}>
+              No spawn has ever been reported — no scanner client has posted to
+              <code>/api/maps/:map/scout/spawns</code>
+              yet.
+            </span>
+            <span :if={is_nil(@totals) || @totals.spawns > 0}>
+              No spawns match this window and filter.
+            </span>
           </td>
         </tr>
       </tbody>
     </table>
+  </div>
+
+  <div :if={@more?} class="mt-4 flex items-center gap-3" id="scout-more">
+    <button phx-click="load_more" class="btn btn-sm">Load more</button>
+    <span class="text-gray-500 text-sm">
+      Showing the first {@limit} rows — narrow the window or search to see the rest.
+    </span>
+  </div>
+
+  <div :if={@detail} class="modal modal-open" id="scout-structure-detail">
+    <div class="modal-box max-w-5xl bg-neutral-900">
+      <div class="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <h3 class="text-lg font-semibold">
+            {(List.first(@detail.rows) || %{}) |> Map.get(:structure_name) ||
+              @detail.structure_id}
+          </h3>
+          <p class="text-gray-400 text-sm">
+            Every observation of structure {@detail.structure_id}, newest first.
+          </p>
+        </div>
+        <button phx-click="close_structure" class="btn btn-sm btn-ghost">Close</button>
+      </div>
+
+      <table class="table table-sm w-full">
+        <thead>
+          <tr>
+            <th>Seen</th>
+            <th>Event</th>
+            <th>System</th>
+            <th>Owner</th>
+            <th>Power</th>
+            <th>State</th>
+            <th>HP S/A/H</th>
+            <th>Timer</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={row <- @detail.rows} id={"scout-history-#{row.id}"}>
+            <td class="whitespace-nowrap">{at(row.observed_at)}</td>
+            <td>
+              <span class={[
+                "badge badge-sm",
+                row.event == :change && "badge-warning",
+                row.event == :seen && "badge-ghost"
+              ]}>
+                {row.event}
+              </span>
+            </td>
+            <td>{system(row, @systems)}</td>
+            <td>{row.owner_name || "—"}</td>
+            <td>{row.upkeep_label || "—"}</td>
+            <td>
+              {row.state_label || "—"}
+              <span :if={row.vulnerable} class="badge badge-error badge-sm ml-1">vulnerable</span>
+            </td>
+            <td class="font-mono whitespace-nowrap text-gray-400">{hp(row)}</td>
+            <td class="font-mono whitespace-nowrap">
+              <span :if={is_nil(row.timer_expires_at)} class="text-gray-600">—</span>
+              <span :if={row.timer_expires_at}>{at(row.timer_expires_at)}</span>
+            </td>
+          </tr>
+          <tr :if={@detail.rows == []}>
+            <td colspan="8" class="text-gray-500">No history for this structure.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </main>

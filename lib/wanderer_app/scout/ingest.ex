@@ -35,6 +35,12 @@ defmodule WandererApp.Scout.Ingest do
   A batch is processed row by row and reports per-row failures rather
   than rejecting the whole payload: one malformed line in a tailed file
   must not cost the other 199.
+
+  A batch that stored anything broadcasts `{:scout_intel_ingested,
+  :spawns | :structures}` on the `"scout_intel"` topic, which is what
+  makes `WandererAppWeb.ScoutIntelLive` show a freshly reinforced
+  structure without a reload. Fire-and-forget: nothing about the ingest
+  depends on a subscriber existing.
   """
 
   require Logger
@@ -63,7 +69,7 @@ defmodule WandererApp.Scout.Ingest do
   """
   @spec ingest_spawns([map()], Ecto.UUID.t() | nil) :: {:ok, result()} | {:error, term()}
   def ingest_spawns(rows, map_id) when is_list(rows) do
-    ingest(rows, map_id, &spawn_attrs/2, &ScoutSpawnSighting.upsert/2)
+    ingest(rows, map_id, &spawn_attrs/2, &ScoutSpawnSighting.upsert/2, :spawns)
   end
 
   def ingest_spawns(_rows, _map_id), do: {:error, :rows_must_be_a_list}
@@ -74,7 +80,7 @@ defmodule WandererApp.Scout.Ingest do
   """
   @spec ingest_structures([map()], Ecto.UUID.t() | nil) :: {:ok, result()} | {:error, term()}
   def ingest_structures(rows, map_id) when is_list(rows) do
-    ingest(rows, map_id, &structure_attrs/2, &ScoutStructureSighting.upsert/2)
+    ingest(rows, map_id, &structure_attrs/2, &ScoutStructureSighting.upsert/2, :structures)
   end
 
   def ingest_structures(_rows, _map_id), do: {:error, :rows_must_be_a_list}
@@ -83,10 +89,10 @@ defmodule WandererApp.Scout.Ingest do
   # Batch driver
   # ---------------------------------------------------------------------
 
-  defp ingest(rows, _map_id, _build, _write) when length(rows) > @max_batch,
+  defp ingest(rows, _map_id, _build, _write, _kind) when length(rows) > @max_batch,
     do: {:error, {:batch_too_large, @max_batch}}
 
-  defp ingest(rows, map_id, build, write) do
+  defp ingest(rows, map_id, build, write, kind) do
     {stored, failed, errors} =
       rows
       |> Enum.with_index()
@@ -100,6 +106,8 @@ defmodule WandererApp.Scout.Ingest do
         end
       end)
 
+    if stored > 0, do: announce(kind)
+
     {:ok,
      %{
        received: length(rows),
@@ -107,6 +115,14 @@ defmodule WandererApp.Scout.Ingest do
        failed: failed,
        errors: errors |> Enum.reverse() |> Enum.take(@max_reported_errors)
      }}
+  end
+
+  # An open page refreshes the affected table; the payload is only the
+  # kind, because the page re-reads under its own filters anyway.
+  defp announce(kind) do
+    Phoenix.PubSub.broadcast(WandererApp.PubSub, "scout_intel", {:scout_intel_ingested, kind})
+  catch
+    _, _ -> :ok
   end
 
   defp store_row(row, _index, map_id, build, write) when is_map(row) do

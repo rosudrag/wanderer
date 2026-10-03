@@ -91,6 +91,33 @@ defmodule WandererApp.Api.ScoutSpawnSighting do
       filter expr(observed_at >= ^arg(:since))
       prepare build(sort: [observed_at: :desc])
     end
+
+    # The page's read. Optional filters, nil meaning "no filter", so the
+    # unfiltered table is the same action with no arguments set. The text
+    # match runs in Postgres for the same reason as the structure one:
+    # the caller's `limit` is the only thing keeping a 90-day window off
+    # the heap, and filtering in Elixir would defeat it.
+    read :search do
+      argument :since, :utc_datetime, allow_nil?: false
+      argument :system_id, :integer
+      argument :q, :string
+
+      filter expr(
+               observed_at >= ^arg(:since) and
+                 (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
+                 (is_nil(^arg(:q)) or
+                    fragment(
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      spawn_name,
+                      location_name,
+                      solar_system_name,
+                      spawn_category,
+                      ^arg(:q)
+                    ))
+             )
+
+      prepare build(sort: [observed_at: :desc])
+    end
   end
 
   attributes do

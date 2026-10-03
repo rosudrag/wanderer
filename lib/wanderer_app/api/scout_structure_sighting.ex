@@ -71,6 +71,7 @@ defmodule WandererApp.Api.ScoutStructureSighting do
 
     define(:recent, action: :recent, args: [:since])
     define(:active_timers, action: :active_timers, args: [:now])
+    define(:history, action: :history, args: [:structure_id])
   end
 
   actions do
@@ -116,11 +117,67 @@ defmodule WandererApp.Api.ScoutStructureSighting do
       prepare build(sort: [observed_at: :desc])
     end
 
+    # The page's read. Both filters are optional and nil means "no
+    # filter", so this one action also serves the unfiltered table. The
+    # text match is a single ILIKE over the four strings a reader would
+    # actually type; it runs in Postgres because the alternative is
+    # loading a 90-day window into the BEAM to filter it there, which is
+    # what the caller's `limit` exists to prevent.
+    read :search do
+      argument :since, :utc_datetime, allow_nil?: false
+      argument :system_id, :integer
+      argument :q, :string
+
+      filter expr(
+               observed_at >= ^arg(:since) and
+                 (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
+                 (is_nil(^arg(:q)) or
+                    fragment(
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      structure_name,
+                      owner_name,
+                      solar_system_name,
+                      group_name,
+                      ^arg(:q)
+                    ))
+             )
+
+      prepare build(sort: [observed_at: :desc])
+    end
+
+    # Every observation of one structure, newest first: the drill-down.
+    # This log is append-only precisely so this query means something —
+    # the difference between two rows is the intel.
+    read :history do
+      argument :structure_id, :integer, allow_nil?: false
+      filter expr(structure_id == ^arg(:structure_id))
+      prepare build(sort: [observed_at: :desc])
+    end
+
     # Structures whose reinforcement timer has not run out yet — the one
     # query that is genuinely time-critical rather than historical.
+    # Carries the same optional filters so a search narrows this table
+    # too; `since` deliberately does not apply, a running timer is
+    # running however old the sighting that found it.
     read :active_timers do
       argument :now, :utc_datetime, allow_nil?: false
-      filter expr(not is_nil(timer_expires_at) and timer_expires_at > ^arg(:now))
+      argument :system_id, :integer
+      argument :q, :string
+
+      filter expr(
+               not is_nil(timer_expires_at) and timer_expires_at > ^arg(:now) and
+                 (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
+                 (is_nil(^arg(:q)) or
+                    fragment(
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      structure_name,
+                      owner_name,
+                      solar_system_name,
+                      group_name,
+                      ^arg(:q)
+                    ))
+             )
+
       prepare build(sort: [timer_expires_at: :asc])
     end
   end

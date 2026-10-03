@@ -597,6 +597,10 @@ defmodule WandererAppWeb.Router do
       live "/", ScoutIntelLive, :index
       live "/access", ScoutAccessLive, :index
     end
+
+    # Not a LiveView, so the live_session's auth gate does not cover it:
+    # ScoutExportController re-checks both the login and the permission.
+    get "/export.csv", ScoutExportController, :export
   end
 
   #
