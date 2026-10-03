@@ -95,7 +95,7 @@
           <th>Owner</th>
           <th>Power</th>
           <th>State</th>
-          <th>S / A / H</th>
+          <th>Comes out</th>
         </tr>
       </thead>
       <tbody>
@@ -116,7 +116,11 @@
             <span :if={row.anchoring} class="badge badge-warning badge-sm ml-1">anchoring</span>
           </td>
           <td class="font-mono whitespace-nowrap">
-            {row.shield_pct || 0}/{row.armor_pct || 0}/{row.hull_pct || 0}
+            <span :if={is_nil(row.timer_expires_at)} class="text-gray-600">—</span>
+            <span :if={row.timer_expires_at}>
+              {countdown(row.timer_expires_at, @now)}
+              <span class="text-gray-500 ml-2">{at(row.timer_expires_at)}</span>
+            </span>
           </td>
         </tr>
         <tr :if={@structures == []}>
