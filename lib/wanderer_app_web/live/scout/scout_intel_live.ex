@@ -92,7 +92,6 @@ defmodule WandererAppWeb.ScoutIntelLive do
          limit: @page,
          detail: nil,
          systems: %{},
-         map_slugs: %{},
          can_manage_access?: ScoutAccess.superadmin?(socket.assigns.current_user.id)
        )
        |> load()}
@@ -219,7 +218,6 @@ defmodule WandererAppWeb.ScoutIntelLive do
       hotspots: []
     )
     |> assign_systems([timers, structures])
-    |> assign_map_slugs([timers, structures])
   end
 
   defp load_tab(socket, :spawns, since, _now, filters, limit) do
@@ -238,7 +236,6 @@ defmodule WandererAppWeb.ScoutIntelLive do
       structures: []
     )
     |> assign_systems([spawns, hotspots])
-    |> assign_map_slugs([spawns])
   end
 
   # Asks for one row past the page so the UI can say "there are more"
@@ -286,30 +283,6 @@ defmodule WandererAppWeb.ScoutIntelLive do
       |> Map.new(&{&1, CachedInfo.get_system_static_info!(&1)})
 
     assign(socket, systems: Map.merge(known, resolved))
-  end
-
-  # `map_id` is provenance: which map's API key authenticated the post.
-  # There is no system deep-link upstream, so the most a row can offer is
-  # the map that reported it.
-  defp assign_map_slugs(socket, row_lists) do
-    known = socket.assigns.map_slugs
-
-    resolved =
-      row_lists
-      |> Enum.concat()
-      |> Enum.map(&Map.get(&1, :map_id))
-      |> Enum.uniq()
-      |> Enum.reject(&(is_nil(&1) or Map.has_key?(known, &1)))
-      |> Map.new(&{&1, slug(&1)})
-
-    assign(socket, map_slugs: Map.merge(known, resolved))
-  end
-
-  defp slug(map_id) do
-    case WandererApp.Api.Map.by_id(map_id, authorize?: false) do
-      {:ok, %{slug: slug}} -> slug
-      _ -> nil
-    end
   end
 
   defp search_term(q) do
@@ -416,16 +389,6 @@ defmodule WandererAppWeb.ScoutIntelLive do
   def security(nil), do: nil
   def security(value) when is_float(value), do: :erlang.float_to_binary(value, decimals: 1)
   def security(_), do: nil
-
-  @doc false
-  def hp(row) do
-    [row.shield_pct, row.armor_pct, row.hull_pct]
-    |> Enum.map(fn
-      nil -> "–"
-      value -> to_string(value)
-    end)
-    |> Enum.join("/")
-  end
 
   @doc false
   def export_path(assigns) do

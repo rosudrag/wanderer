@@ -99,7 +99,6 @@
           <th>System</th>
           <th>Owner</th>
           <th>State</th>
-          <th>HP S/A/H</th>
           <th>Seen</th>
         </tr>
       </thead>
@@ -134,11 +133,10 @@
             {row.state_label || "—"}
             <span :if={row.vulnerable} class="badge badge-error badge-sm ml-1">vulnerable</span>
           </td>
-          <td class="font-mono whitespace-nowrap text-gray-400">{hp(row)}</td>
           <td class="whitespace-nowrap text-gray-400">{at(row.observed_at)}</td>
         </tr>
         <tr :if={@active_timers == []}>
-          <td colspan="8" class="text-gray-500">No structure timers running.</td>
+          <td colspan="7" class="text-gray-500">No structure timers running.</td>
         </tr>
       </tbody>
     </table>
@@ -158,9 +156,7 @@
           <th>Owner</th>
           <th>Power</th>
           <th>State</th>
-          <th>HP S/A/H</th>
           <th>Comes out</th>
-          <th>Reported on</th>
         </tr>
       </thead>
       <tbody>
@@ -194,7 +190,6 @@
             <span :if={row.anchoring} class="badge badge-warning badge-sm ml-1">anchoring</span>
             <span :if={row.vulnerable} class="badge badge-error badge-sm ml-1">vulnerable</span>
           </td>
-          <td class="font-mono whitespace-nowrap text-gray-400">{hp(row)}</td>
           <td class="font-mono whitespace-nowrap">
             <span :if={is_nil(row.timer_expires_at)} class="text-gray-600">—</span>
             <span :if={row.timer_expires_at} class={urgency(row.timer_expires_at, @now)}>
@@ -202,19 +197,9 @@
               <span class="text-gray-500 ml-2">{at(row.timer_expires_at)}</span>
             </span>
           </td>
-          <td class="text-gray-500 text-xs">
-            <.link
-              :if={@map_slugs[row.map_id]}
-              navigate={~p"/#{@map_slugs[row.map_id]}"}
-              class="link link-hover"
-            >
-              {@map_slugs[row.map_id]}
-            </.link>
-            <span :if={is_nil(@map_slugs[row.map_id])}>—</span>
-          </td>
         </tr>
         <tr :if={@structures == []}>
-          <td colspan="9" class="text-gray-500">
+          <td colspan="7" class="text-gray-500">
             <span :if={@totals && @totals.structures == 0}>
               No structure has ever been reported — no scanner client has posted to
               <code>/api/maps/:map/scout/structures</code>
@@ -366,7 +351,6 @@
             <th>Owner</th>
             <th>Power</th>
             <th>State</th>
-            <th>HP S/A/H</th>
             <th>Timer</th>
           </tr>
         </thead>
@@ -389,14 +373,13 @@
               {row.state_label || "—"}
               <span :if={row.vulnerable} class="badge badge-error badge-sm ml-1">vulnerable</span>
             </td>
-            <td class="font-mono whitespace-nowrap text-gray-400">{hp(row)}</td>
             <td class="font-mono whitespace-nowrap">
               <span :if={is_nil(row.timer_expires_at)} class="text-gray-600">—</span>
               <span :if={row.timer_expires_at}>{at(row.timer_expires_at)}</span>
             </td>
           </tr>
           <tr :if={@detail.rows == []}>
-            <td colspan="8" class="text-gray-500">No history for this structure.</td>
+            <td colspan="7" class="text-gray-500">No history for this structure.</td>
           </tr>
         </tbody>
       </table>
