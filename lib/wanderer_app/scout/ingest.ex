@@ -9,12 +9,17 @@ defmodule WandererApp.Scout.Ingest do
   `Config/Logs/structures.tsv`). That shapes every decision here:
 
     * **Field names are the TSV's, not ours.** A row may arrive with the
-      raw column names (`utc_timestamp`, `character`, `system_id`) or the
-      resource's own (`observed_at`, `character_name`,
-      `solar_system_id`); both are accepted, so the client never has to
-      maintain a translation table. `structures.tsv`'s `type_name`
-      column is really the player-set structure name — accepted under
-      that name, stored as `structure_name`.
+      raw column names (`utc_timestamp`, `system_id`) or the resource's
+      own (`observed_at`, `solar_system_id`); both are accepted, so the
+      client never has to maintain a translation table.
+      `structures.tsv`'s `type_name` column is really the player-set
+      structure name — accepted under that name, stored as
+      `structure_name`.
+
+    * **The observing character is dropped, not stored.** Both scout
+      resources deliberately carry no submitter attribution, so a
+      `character` / `character_name` key in an incoming row is ignored
+      rather than rejected — an older client keeps working unchanged.
 
     * **Every value may arrive as a string.** LavishScript has no JSON
       types; `${Entity.IsStructureVulnerable}` stringifies to `"TRUE"`,
@@ -123,12 +128,10 @@ defmodule WandererApp.Scout.Ingest do
 
   defp spawn_attrs(row, map_id) do
     with {:ok, observed_at} <- required_time(row, ["utc_timestamp", "observed_at", "timestamp"]),
-         {:ok, character} <- required_string(row, ["character", "character_name"]),
          {:ok, system_id} <- required_int(row, ["system_id", "solar_system_id"]) do
       {:ok,
        %{
          observed_at: observed_at,
-         character_name: character,
          solar_system_id: system_id,
          solar_system_name: string(row, ["system_name", "solar_system_name"]),
          system_truesec: float(row, ["system_truesec"]),
@@ -152,7 +155,6 @@ defmodule WandererApp.Scout.Ingest do
 
   defp structure_attrs(row, map_id) do
     with {:ok, observed_at} <- required_time(row, ["utc_timestamp", "observed_at", "timestamp"]),
-         {:ok, character} <- required_string(row, ["character", "character_name"]),
          {:ok, system_id} <- required_int(row, ["system_id", "solar_system_id"]),
          {:ok, structure_id} <- required_int(row, ["structure_id"]),
          {:ok, event} <- event(row) do
@@ -161,7 +163,6 @@ defmodule WandererApp.Scout.Ingest do
       {:ok,
        %{
          observed_at: observed_at,
-         character_name: character,
          event: event,
          solar_system_id: system_id,
          solar_system_name: string(row, ["system_name", "solar_system_name"]),
@@ -228,13 +229,6 @@ defmodule WandererApp.Scout.Ingest do
   defp required_time(row, keys) do
     case time(row, keys) do
       nil -> {:error, "missing or unparseable #{hd(keys)}"}
-      value -> {:ok, value}
-    end
-  end
-
-  defp required_string(row, keys) do
-    case string(row, keys) do
-      nil -> {:error, "missing #{hd(keys)}"}
       value -> {:ok, value}
     end
   end

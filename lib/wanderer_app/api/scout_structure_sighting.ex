@@ -35,6 +35,15 @@ defmodule WandererApp.Api.ScoutStructureSighting do
   meaning "no timer". Stored as-is, but also resolved to an absolute
   `timer_expires_at` at ingest — a relative countdown is useless in a log
   read hours later, and an absolute instant is what the page sorts on.
+
+  ## No submitter attribution
+
+  The observing character is deliberately NOT stored — same rule as
+  `WandererApp.Api.ScoutSpawnSighting`. The row says what the structure
+  was doing, not who was parked next to it. Dropped at ingest, so an
+  older client may keep sending `character` with no effect. The identity
+  never contained it (`structure_id + observed_at + event`), so dedupe is
+  unchanged.
   """
 
   use Ash.Resource,
@@ -67,7 +76,6 @@ defmodule WandererApp.Api.ScoutStructureSighting do
   actions do
     default_accept [
       :observed_at,
-      :character_name,
       :event,
       :solar_system_id,
       :solar_system_name,
@@ -121,10 +129,6 @@ defmodule WandererApp.Api.ScoutStructureSighting do
     uuid_primary_key :id
 
     attribute :observed_at, :utc_datetime do
-      allow_nil? false
-    end
-
-    attribute :character_name, :string do
       allow_nil? false
     end
 

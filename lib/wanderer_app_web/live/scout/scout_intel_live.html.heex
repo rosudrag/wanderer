@@ -96,7 +96,6 @@
           <th>Power</th>
           <th>State</th>
           <th>S / A / H</th>
-          <th>By</th>
         </tr>
       </thead>
       <tbody>
@@ -119,10 +118,9 @@
           <td class="font-mono whitespace-nowrap">
             {row.shield_pct || 0}/{row.armor_pct || 0}/{row.hull_pct || 0}
           </td>
-          <td class="text-gray-400">{row.character_name}</td>
         </tr>
         <tr :if={@structures == []}>
-          <td colspan="8" class="text-gray-500">
+          <td colspan="7" class="text-gray-500">
             No structures reported in this window.
           </td>
         </tr>
@@ -141,7 +139,6 @@
           <th>Location</th>
           <th>Local</th>
           <th>Value</th>
-          <th>By</th>
         </tr>
       </thead>
       <tbody>
@@ -157,10 +154,9 @@
           <td class="text-gray-400">{row.location_name}</td>
           <td class="font-mono">{row.players_in_local}</td>
           <td class="font-mono whitespace-nowrap">{isk(row.isk_value)}</td>
-          <td class="text-gray-400">{row.character_name}</td>
         </tr>
         <tr :if={@spawns == []}>
-          <td colspan="8" class="text-gray-500">
+          <td colspan="7" class="text-gray-500">
             No spawns reported in this window.
           </td>
         </tr>

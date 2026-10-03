@@ -19,6 +19,17 @@ defmodule WandererApp.Api.ScoutSpawnSighting do
   replayed row updates itself instead of duplicating. Every component of
   that identity is `allow_nil? false` — in Postgres `NULL <> NULL`, so a
   nullable identity column silently disables the constraint.
+
+  ## No submitter attribution
+
+  The observing character is deliberately NOT stored. This log answers
+  "what spawned where, when, and what was it worth"; a name on every row
+  only adds a per-pilot activity trail for anyone with scout access to
+  read. The field is dropped at ingest, so an older client may keep
+  sending it with no effect. Consequence worth knowing: the name is also
+  out of `:uniq_sighting`, so two pilots reporting the same spawn at the
+  same second in the same place now upsert onto ONE row — which is the
+  honest count of the event anyway.
   """
 
   use Ash.Resource,
@@ -49,7 +60,6 @@ defmodule WandererApp.Api.ScoutSpawnSighting do
   actions do
     default_accept [
       :observed_at,
-      :character_name,
       :solar_system_id,
       :solar_system_name,
       :system_truesec,
@@ -90,10 +100,6 @@ defmodule WandererApp.Api.ScoutSpawnSighting do
     # column: the log is shared by clients in different timezones, so the
     # local one is not comparable across rows.
     attribute :observed_at, :utc_datetime do
-      allow_nil? false
-    end
-
-    attribute :character_name, :string do
       allow_nil? false
     end
 
@@ -143,7 +149,6 @@ defmodule WandererApp.Api.ScoutSpawnSighting do
 
   identities do
     identity :uniq_sighting, [
-      :character_name,
       :observed_at,
       :solar_system_id,
       :location_name,

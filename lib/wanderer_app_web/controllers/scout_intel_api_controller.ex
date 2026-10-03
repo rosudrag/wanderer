@@ -36,8 +36,9 @@ defmodule WandererAppWeb.ScoutIntelAPIController do
     type: :object,
     description: """
     One line of `special_spawns.tsv`. Column names are accepted as-is;
-    the resource's own names (`observed_at`, `character_name`,
-    `solar_system_id`) work too. Values may be strings: they are coerced.
+    the resource's own names (`observed_at`, `solar_system_id`) work too.
+    Values may be strings: they are coerced. A `character` column is
+    accepted and IGNORED -- the log stores no submitter attribution.
     """,
     properties: %{
       utc_timestamp: %OpenApiSpex.Schema{
@@ -46,7 +47,6 @@ defmodule WandererAppWeb.ScoutIntelAPIController do
           "UTC observation time, \"YYYY-MM-DD HH:MM:SS\" or ISO8601. Required. " <>
             "The local `timestamp` column is used only as a fallback."
       },
-      character: %OpenApiSpex.Schema{type: :string, description: "Observing character. Required."},
       system_id: %OpenApiSpex.Schema{type: :integer, description: "Solar system ID. Required."},
       system_name: %OpenApiSpex.Schema{type: :string},
       system_truesec: %OpenApiSpex.Schema{type: :number},
@@ -62,10 +62,9 @@ defmodule WandererAppWeb.ScoutIntelAPIController do
       minutes_since_downtime: %OpenApiSpex.Schema{type: :integer},
       isk_value: %OpenApiSpex.Schema{type: :number}
     },
-    required: [:utc_timestamp, :character, :system_id],
+    required: [:utc_timestamp, :system_id],
     example: %{
       utc_timestamp: "2026-09-29 10:12:41",
-      character: "Dracliras Loot Goblin",
       system_id: 30_002_698,
       system_name: "Aliette",
       system_truesec: 0.37128,
@@ -96,7 +95,6 @@ defmodule WandererAppWeb.ScoutIntelAPIController do
     """,
     properties: %{
       utc_timestamp: %OpenApiSpex.Schema{type: :string, description: "Required."},
-      character: %OpenApiSpex.Schema{type: :string, description: "Required."},
       event: %OpenApiSpex.Schema{type: :string, enum: ["SEEN", "CHANGE"]},
       system_id: %OpenApiSpex.Schema{type: :integer, description: "Required."},
       system_name: %OpenApiSpex.Schema{type: :string},
@@ -127,10 +125,9 @@ defmodule WandererAppWeb.ScoutIntelAPIController do
       hull_pct: %OpenApiSpex.Schema{type: :integer},
       distance_m: %OpenApiSpex.Schema{type: :integer}
     },
-    required: [:utc_timestamp, :character, :system_id, :structure_id],
+    required: [:utc_timestamp, :system_id, :structure_id],
     example: %{
       utc_timestamp: "2026-09-27 17:38:15",
-      character: "Quillestra Acvestra",
       event: "CHANGE",
       system_id: 30_002_099,
       system_name: "Egmar",
@@ -193,9 +190,10 @@ defmodule WandererAppWeb.ScoutIntelAPIController do
     summary: "Append scouted special-spawn observations to the scout log",
     description: """
     Takes rows of eveknob's `special_spawns.tsv`. Idempotent: rows are
-    upserted on (character, observed_at, system, location, spawn), so a
-    client that restarts and re-posts the tail of its file creates no
-    duplicates.
+    upserted on (observed_at, system, location, spawn), so a client that
+    restarts and re-posts the tail of its file creates no duplicates.
+    Two pilots reporting the same spawn at the same second collapse onto
+    one row -- the log carries no submitter attribution.
 
     One malformed row does not reject the batch; it is reported in
     `errors` and the rest are stored.

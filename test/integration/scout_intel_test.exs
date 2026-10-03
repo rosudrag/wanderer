@@ -108,6 +108,7 @@ defmodule WandererApp.ScoutIntelTest do
       assert row.system_truesec == 0.25287
       assert row.distance_m == 225_354
       assert row.observed_at == ~U[2026-09-27 17:38:15Z]
+      refute Map.has_key?(row, :character_name)
     end
 
     test "a relative timer becomes an absolute expiry" do
@@ -173,6 +174,18 @@ defmodule WandererApp.ScoutIntelTest do
 
       assert {:ok, stored} = ScoutSpawnSighting.read()
       assert length(stored) == 2
+    end
+
+    test "two pilots reporting one spawn store one row, and the reporter is not kept" do
+      # The rows differ ONLY by who saw it. Before attribution was dropped
+      # these were two distinct identities and produced two rows.
+      assert {:ok, %{stored: 1}} = Ingest.ingest_spawns([spawn_row()], nil)
+
+      assert {:ok, %{stored: 1, failed: 0}} =
+               Ingest.ingest_spawns([spawn_row(%{"character" => "Someone Else"})], nil)
+
+      assert {:ok, [row]} = ScoutSpawnSighting.read()
+      refute Map.has_key?(row, :character_name)
     end
 
     test "the same structure observed again later is a new row, not an overwrite" do
