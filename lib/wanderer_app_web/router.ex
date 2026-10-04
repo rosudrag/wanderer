@@ -223,6 +223,14 @@ defmodule WandererAppWeb.Router do
     plug WandererAppWeb.Plugs.CheckScoutIntelDisabled
   end
 
+  # CHEWY PATCH: scout coverage ingest. See
+  # WandererAppWeb.Plugs.CheckScoutCoverageDisabled and
+  # WandererApp.Scout.Coverage. Own pipeline (not :api_scout_intel) so the
+  # two features can be flagged independently.
+  pipeline :api_scout_coverage do
+    plug WandererAppWeb.Plugs.CheckScoutCoverageDisabled
+  end
+
   # CHEWY PATCH: same flag, browser side (the /scout pages). Separate from
   # :api_scout_intel only because the two are piped after different base
   # pipelines.
@@ -375,6 +383,19 @@ defmodule WandererAppWeb.Router do
 
     post "/scout/spawns", ScoutIntelAPIController, :spawns
     post "/scout/structures", ScoutIntelAPIController, :structures
+  end
+
+  # CHEWY PATCH: scout coverage ingest (requires WANDERER_SCOUT_COVERAGE=true).
+  # Own scope, deliberately NOT folded into the scout-intel scope above: the
+  # two flags gate independently, and widening that scope would mean this
+  # route goes live (or dark) by accident whenever someone flips
+  # WANDERER_SCOUT_INTEL. Rides :api_map so the bot authenticates with the
+  # map public_api_key it already holds; coverage is not map-scoped, the map
+  # is recorded as provenance only. See WandererApp.Api.ScoutSystemCoverage.
+  scope "/api/maps/:map_identifier", WandererAppWeb do
+    pipe_through [:api, :api_map, :api_scout_coverage]
+
+    post "/scout/coverage", ScoutCoverageAPIController, :coverage
   end
 
   #

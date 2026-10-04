@@ -112,6 +112,11 @@ scout_intel_enabled =
   |> get_var_from_path_or_env("WANDERER_SCOUT_INTEL", "false")
   |> String.to_existing_atom()
 
+scout_coverage_enabled =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_SCOUT_COVERAGE", "false")
+  |> String.to_existing_atom()
+
 map_subscription_characters_limit =
   config_dir
   |> get_int_from_path_or_env("WANDERER_MAP_SUBSCRIPTION_CHARACTERS_LIMIT", 10_000)
@@ -317,6 +322,9 @@ config :wanderer_app,
   # CHEWY PATCH: scout intel log (faction spawns + structure timers), see
   # WandererApp.Env.scout_intel_enabled?/0 and WandererApp.Scout.Ingest.
   scout_intel_enabled: scout_intel_enabled,
+  # CHEWY PATCH: scout coverage ledger, see
+  # WandererApp.Env.scout_coverage_enabled?/0 and WandererApp.Scout.Coverage.
+  scout_coverage_enabled: scout_coverage_enabled,
   # CHEWY PATCH: DEV-ONLY authentication bypass token, see dev_auth_token above.
   dev_auth_token: dev_auth_token,
   # CHEWY PATCH: private ChewyTech branding, see WandererApp.Branding.

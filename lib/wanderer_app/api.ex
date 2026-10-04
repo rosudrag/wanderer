@@ -57,5 +57,7 @@ defmodule WandererApp.Api do
     # CHEWY PATCH: scout intel log. See WandererApp.Scout.Ingest.
     resource WandererApp.Api.ScoutSpawnSighting
     resource WandererApp.Api.ScoutStructureSighting
+    # CHEWY PATCH: scout coverage ledger. See WandererApp.Scout.Coverage.
+    resource WandererApp.Api.ScoutSystemCoverage
   end
 end

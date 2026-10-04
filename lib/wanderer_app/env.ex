@@ -115,6 +115,12 @@ defmodule WandererApp.Env do
   # WandererApp.Scout.Ingest and WandererAppWeb.Plugs.CheckScoutIntelDisabled.
   def scout_intel_enabled?(), do: get_key(:scout_intel_enabled, false)
 
+  # CHEWY PATCH: scout coverage ledger ("looked at system S to depth K at
+  # time T, even if nothing found") master switch. See
+  # WandererApp.Scout.Coverage and
+  # WandererAppWeb.Plugs.CheckScoutCoverageDisabled.
+  def scout_coverage_enabled?(), do: get_key(:scout_coverage_enabled, false)
+
   def admins(), do: get_key(:admins, [])
   def admin_username(), do: get_key(:admin_username)
   def admin_password(), do: get_key(:admin_password)
