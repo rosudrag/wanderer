@@ -41,7 +41,8 @@ defmodule WandererAppWeb.ScoutExportController do
   @structure_columns ~w(last_confirmed_at first_seen_at presence solar_system_id
                         structure_id type_id structure_name group_name owner_id owner_name
                         alliance_id upkeep_state structure_state status
-                        vulnerable anchoring unanchoring timer_seconds timer_expires_at
+                        vulnerable anchoring unanchoring unanchoring_since
+                        timer_seconds timer_expires_at
                         shield_pct armor_pct hull_pct pos_x pos_y pos_z
                         nearest_celestial nearest_celestial_m missing_count missing_since
                         archived_at)a

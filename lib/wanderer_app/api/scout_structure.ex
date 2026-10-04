@@ -118,6 +118,7 @@ defmodule WandererApp.Api.ScoutStructure do
       :vulnerable,
       :anchoring,
       :unanchoring,
+      :unanchoring_since,
       :timer_seconds,
       :timer_expires_at,
       :shield_pct,
@@ -402,6 +403,15 @@ defmodule WandererApp.Api.ScoutStructure do
     attribute :vulnerable, :boolean
     attribute :anchoring, :boolean
     attribute :unanchoring, :boolean
+
+    # CHEWY PATCH: the first sweep that saw this structure in the
+    # unanchoring family, cleared the moment it leaves it. Written only
+    # by `WandererApp.Scout.Snapshot` via
+    # `WandererApp.Scout.Unanchor.transition/4`; the Unanchoring board's
+    # "Predicted max out" column is this plus the fixed 7-day
+    # decommission. A decommission carries no wire timer, so without
+    # this column that board has no deadline at all.
+    attribute :unanchoring_since, :utc_datetime
 
     attribute :timer_seconds, :integer
     attribute :timer_expires_at, :utc_datetime

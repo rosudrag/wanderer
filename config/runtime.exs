@@ -122,6 +122,11 @@ scout_presence_enabled =
   |> get_var_from_path_or_env("WANDERER_SCOUT_PRESENCE", "false")
   |> String.to_existing_atom()
 
+scout_planner_enabled =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_SCOUT_PLANNER", "false")
+  |> String.to_existing_atom()
+
 map_subscription_characters_limit =
   config_dir
   |> get_int_from_path_or_env("WANDERER_MAP_SUBSCRIPTION_CHARACTERS_LIMIT", 10_000)
@@ -333,6 +338,9 @@ config :wanderer_app,
   # CHEWY PATCH: scout presence feed (structure snapshot diff), see
   # WandererApp.Env.scout_presence_enabled?/0 and WandererApp.Scout.Snapshot.
   scout_presence_enabled: scout_presence_enabled,
+  # CHEWY PATCH: scout refresh-queue ranking + plan endpoint, see
+  # WandererApp.Env.scout_planner_enabled?/0 and WandererApp.Scout.Planner.
+  scout_planner_enabled: scout_planner_enabled,
   # CHEWY PATCH: DEV-ONLY authentication bypass token, see dev_auth_token above.
   dev_auth_token: dev_auth_token,
   # CHEWY PATCH: private ChewyTech branding, see WandererApp.Branding.

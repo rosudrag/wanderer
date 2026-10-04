@@ -44,7 +44,7 @@ defmodule WandererApp.Scout.Snapshot do
   require Logger
 
   alias WandererApp.Api.{ScoutStructure, ScoutStructureEvent}
-  alias WandererApp.Scout.Status
+  alias WandererApp.Scout.{Status, Unanchor}
 
   # Mirrors WandererApp.Scout.Merge's own tolerance and reasoning: a
   # relative `timer_seconds` is re-read every sweep and drifts by the gap
@@ -612,6 +612,7 @@ defmodule WandererApp.Scout.Snapshot do
         |> Map.put(:first_seen_at, blob.observed_at)
         |> Map.put(:last_confirmed_at, blob.observed_at)
         |> Map.put(:map_id, map_id)
+        |> Map.merge(Unanchor.transition(nil, structure.status, nil, blob.observed_at))
 
       case ScoutStructure.create(attrs, authorize?: false) do
         {:ok, _record} ->
@@ -639,6 +640,14 @@ defmodule WandererApp.Scout.Snapshot do
           |> Map.put(:missing_since, nil)
           |> Map.put(:presence, :seen)
           |> Map.put(:map_id, map_id)
+          |> Map.merge(
+            Unanchor.transition(
+              known.status,
+              structure.status,
+              known.unanchoring_since,
+              blob.observed_at
+            )
+          )
 
         case update(known, attrs) do
           {:ok, _record} ->
@@ -714,6 +723,7 @@ defmodule WandererApp.Scout.Snapshot do
           |> Map.put(:missing_count, 0)
           |> Map.put(:missing_since, nil)
           |> Map.put(:presence, :seen)
+          |> Map.merge(unchanged_unanchor_attrs(known, structure, blob.observed_at))
 
         case update(known, attrs) do
           {:ok, _record} ->
@@ -726,6 +736,24 @@ defmodule WandererApp.Scout.Snapshot do
       end
     end)
   end
+
+  # A `steady_ids` confirmation carries no status (`structure` is nil),
+  # and this path never touches `status`, so it never touches the
+  # anchor derived from it either. A full `structures[]` match does:
+  # the status is equal by construction, so the only write this can
+  # produce is the heal — a row that is unanchoring with no anchor
+  # stored (a backfilled one) gets this sweep as its anchor, which is
+  # the earliest sighting the feed can still prove.
+  defp unchanged_unanchor_attrs(_known, nil, _observed_at), do: %{}
+
+  defp unchanged_unanchor_attrs(known, structure, observed_at),
+    do:
+      Unanchor.transition(
+        known.status,
+        structure.status,
+        known.unanchoring_since,
+        observed_at
+      )
 
   defp apply_missing(missing, blob, map_id) do
     {missing_count, gone_count, skipped} =

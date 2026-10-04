@@ -67,6 +67,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
   alias WandererApp.Scout.Alerts
   alias WandererApp.Scout.Space
   alias WandererApp.Scout.Stats
+  alias WandererApp.Scout.Unanchor
 
   @windows [{"24 hours", 1}, {"7 days", 7}, {"30 days", 30}, {"90 days", 90}]
   @default_days 7
@@ -499,7 +500,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
       structures: by_recent(structures),
       anchoring_structures: by_recent(anchoring_structures),
       abandoned_structures: by_recent(abandoned_structures),
-      unanchoring_structures: by_deadline(unanchoring_structures),
+      unanchoring_structures: by_predicted_out(unanchoring_structures),
       archived_structures: by_archived(archived_structures),
       more?: more_structures?,
       spawns: [],
@@ -667,6 +668,21 @@ defmodule WandererAppWeb.ScoutIntelLive do
       case row.timer_expires_at do
         nil -> {1, 0}
         expires_at -> {0, DateTime.to_unix(expires_at)}
+      end
+    end)
+  end
+
+  # The Unanchoring board's own order. These rows carry no
+  # `timer_expires_at` -- a decommission has no wire timer -- so
+  # `by_deadline/1` degenerated to "every row is a 1" and left them in
+  # storage order. The predicted 7-day window is the only deadline this
+  # board has, so it is the one it sorts on; rows without an anchor
+  # (orbitals, a row whose run started before the backfill) sit last.
+  defp by_predicted_out(rows) do
+    Enum.sort_by(rows, fn row ->
+      case Unanchor.predicted_max_at(row) do
+        nil -> {1, 0}
+        at -> {0, DateTime.to_unix(at)}
       end
     end)
   end

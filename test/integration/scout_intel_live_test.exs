@@ -459,6 +459,47 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert unanchoring =~ "Unanchoring"
     end
 
+    test "the unanchoring board shows the predicted 7-day bound, not a wire timer",
+         %{conn: conn} do
+      # A decommission reports no countdown: timer_expires_at stays nil
+      # and the deadline is derived from when we first saw it unanchoring.
+      structure(%{
+        structure_id: 1_000_000_000_067,
+        structure_name: "Two Days In Astrahus",
+        group_name: "Citadel",
+        status: "Unanchoring",
+        unanchoring_since:
+          DateTime.utc_now() |> DateTime.add(-2, :day) |> DateTime.truncate(:second)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      unanchoring = view |> element("#scout-unanchoring") |> render()
+
+      # 7 days from two days ago: five days left, bounded, never exact.
+      assert unanchoring =~ ~r/≤\s*(5d 0h|4d 2\dh)/
+    end
+
+    test "an orbital gets no prediction: it unanchors in minutes, not days",
+         %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_068,
+        structure_name: "Jita IV - Moon 4 Customs Office",
+        group_name: "Orbital Infrastructure",
+        status: "Unanchoring",
+        unanchoring_since:
+          DateTime.utc_now() |> DateTime.add(-2, :day) |> DateTime.truncate(:second)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      unanchoring = view |> element("#scout-unanchoring") |> render()
+
+      assert unanchoring =~ "Jita IV - Moon 4 Customs Office"
+      refute unanchoring =~ "≤"
+      assert unanchoring =~ "Orbital: unanchors in minutes"
+    end
+
     test "both tables render an empty state when nothing matches", %{conn: conn} do
       structure(%{
         structure_id: 1_000_000_000_066,

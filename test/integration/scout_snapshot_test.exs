@@ -83,6 +83,10 @@ defmodule WandererApp.ScoutSnapshotTest do
     Enum.map(rows, & &1.kind)
   end
 
+  defp unanchoring(overrides \\ %{}) do
+    [structure_row(Map.merge(%{"status" => "Unanchoring", "unanchoring" => "true"}, overrides))]
+  end
+
   describe "a structure appearing and being confirmed" do
     test "the first blob creates current state and one appeared event" do
       assert {:ok, %{appeared: 1, changed: 0, missing: 0}} = Snapshot.ingest(nil, blob())
@@ -301,6 +305,71 @@ defmodule WandererApp.ScoutSnapshotTest do
                )
 
       assert stored!().presence == :missing
+    end
+  end
+
+  describe "when a decommission started -- the Unanchoring board's only deadline" do
+    test "the first sweep that sees it unanchoring is the anchor" do
+      {:ok, _} =
+        Snapshot.ingest(
+          nil,
+          blob(%{"observed_at" => to_string(minutes_ago(45)), "structures" => unanchoring()})
+        )
+
+      row = stored!()
+      assert row.unanchoring_since
+      assert_in_delta DateTime.diff(DateTime.utc_now(), row.unanchoring_since), 45 * 60, 60
+    end
+
+    test "a later sweep confirming the SAME run never pushes the anchor forward" do
+      {:ok, _} =
+        Snapshot.ingest(
+          nil,
+          blob(%{"observed_at" => to_string(minutes_ago(90)), "structures" => unanchoring()})
+        )
+
+      anchor = stored!().unanchoring_since
+
+      # Same status, something else moved: the `changed` path.
+      {:ok, %{changed: 1}} =
+        Snapshot.ingest(nil, blob(%{"structures" => unanchoring(%{"shield_pct" => "40"})}))
+
+      assert stored!().unanchoring_since == anchor
+
+      # And the `unchanged` path.
+      {:ok, _} =
+        Snapshot.ingest(nil, blob(%{"structures" => unanchoring(%{"shield_pct" => "40"})}))
+
+      assert stored!().unanchoring_since == anchor
+    end
+
+    test "leaving the family clears it, and a restart anchors on the restart" do
+      {:ok, _} =
+        Snapshot.ingest(
+          nil,
+          blob(%{"observed_at" => to_string(minutes_ago(90)), "structures" => unanchoring()})
+        )
+
+      first = stored!().unanchoring_since
+
+      # Cancelled: EVE restarts the full 7 days, so the old anchor must
+      # not survive the gap.
+      {:ok, _} =
+        Snapshot.ingest(
+          nil,
+          blob(%{
+            "observed_at" => to_string(minutes_ago(60)),
+            "structures" => [structure_row(%{"status" => "FullPower", "upkeep_state" => "1"})]
+          })
+        )
+
+      refute stored!().unanchoring_since
+
+      {:ok, _} = Snapshot.ingest(nil, blob(%{"structures" => unanchoring()}))
+
+      restarted = stored!().unanchoring_since
+      assert restarted
+      assert DateTime.compare(restarted, first) == :gt
     end
   end
 

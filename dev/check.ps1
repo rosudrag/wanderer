@@ -97,6 +97,40 @@ function Record([string]$name, [bool]$ok, [double]$elapsed, [string]$status) {
 }
 
 # ---------------------------------------------------------------------------
+# `_build/<env>/lib/wanderer_app/priv` must be a real DIRECTORY on this box,
+# never the symlink mix prefers.
+#
+# `Mix.Utils.symlink_or_copy/2` compares the stored link target against the
+# path it would write; Windows stores backslashes where mix passed forward
+# slashes, so the comparison NEVER matches and mix tries to replace the link
+# on every start. Replacing it means `File.rm`, which Erlang refuses for a
+# directory symlink -- hence
+#   ** (Mix) Cannot remove symlink ".../priv" due to reason: not owner"
+# on the second and every later invocation. (Most Windows boxes never see
+# this: without the create-symlink privilege mix falls back to copying. This
+# one has developer mode on, so it gets the symlink and the bug.)
+#
+# A real directory takes mix's OTHER branch: `read_link` answers `:einval`,
+# `File.ln_s` fails, and it copies with an mtime/size `on_conflict` -- which
+# is correct, incremental, and cannot raise. ~14 MB once per env, then only
+# changed files. Phoenix's code reloader calls the same function on the FIRST
+# REQUEST of a booted server, which is why -Boot/-Routes answered 500 on every
+# probed route until this existed; clearing the link from PowerShell could not
+# reach that call.
+# ---------------------------------------------------------------------------
+function Repair-PrivDir {
+    foreach ($envName in @("dev", "test")) {
+        $privDir = Join-Path $RepoRoot "_build\$envName\lib\wanderer_app\priv"
+        if (-not (Test-Path $privDir)) { continue }
+        $item = Get-Item $privDir -Force
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            cmd /c "rmdir `"$privDir`"" 2>&1 | Out-Null
+            Copy-Item (Join-Path $RepoRoot "priv") $privDir -Recurse -Force
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Boot helpers, shared by -Boot and -Routes. `mix phx.server` sets
 # `server: true` itself, which is exactly what makes it start the
 # `npm run watch` esbuild watcher configured in config/dev.exs's
@@ -130,6 +164,8 @@ function Start-Boot([hashtable]$EnvOverrides, [string]$LogName) {
     $log = Join-Path $LogsDir "$LogName.log"
     $errLog = Join-Path $LogsDir "$LogName.err"
     Remove-Item $log, $errLog -ErrorAction SilentlyContinue
+
+    Repair-PrivDir
 
     $proc = Start-Process -FilePath "mix.bat" `
         -ArgumentList @("run", "--no-start", "dev/boot.exs") `
@@ -199,6 +235,7 @@ if ($Compile -or $All) {
     $t0 = Get-Date
     $log = Join-Path $LogsDir "compile.log"
     Push-Location $RepoRoot
+    Repair-PrivDir
     # --force is essential: it re-runs the full compile graph every time,
     # which is what catches the compile-time struct-dependency deadlock
     # documented in lib/wanderer_app/api/policies/map_scoped.ex:31-56 (a
@@ -254,6 +291,7 @@ if ($Format -or $All) {
     } else {
         $log = Join-Path $LogsDir "format.log"
         Push-Location $RepoRoot
+        Repair-PrivDir
         mix format --check-formatted $changed *> $log
         $ok = ($LASTEXITCODE -eq 0)
         Pop-Location
@@ -274,8 +312,10 @@ if ($Db -or $All) {
     $t0 = Get-Date
     $log = Join-Path $LogsDir "db.log"
     Push-Location $RepoRoot
+    Repair-PrivDir
     mix ecto.create --quiet *> $log
     $createOk = ($LASTEXITCODE -eq 0)
+    Repair-PrivDir
     mix ecto.migrate --quiet *>> $log
     $migrateOk = ($LASTEXITCODE -eq 0)
     Pop-Location
@@ -291,6 +331,7 @@ if ($Seed -or $All) {
     $t0 = Get-Date
     $log = Join-Path $LogsDir "seed.log"
     Push-Location $RepoRoot
+    Repair-PrivDir
     mix run dev/seed_identity.exs *> $log
     $ok = ($LASTEXITCODE -eq 0)
     Pop-Location
@@ -327,6 +368,7 @@ if ($Test -or $All) {
     # DBConnection.ConnectionPool, raising immediately.
     $prevMixEnv = $Env:MIX_ENV
     $Env:MIX_ENV = "test"
+    Repair-PrivDir
     # Through `cmd /c`, with the paths already joined into ONE string.
     # `mix test $testPaths` (array variable -> native command) silently
     # drops every argument but the last when the command is a .bat, which

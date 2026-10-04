@@ -15,7 +15,8 @@ defmodule WandererAppWeb.Nav do
     CorpIdentityLive,
     GroupMapGrantsLive,
     ScoutIntelLive,
-    ScoutAccessLive
+    ScoutAccessLive,
+    ScoutRefreshLive
   }
 
   def on_mount(_scope, _params, _session, socket) do
@@ -118,6 +119,9 @@ defmodule WandererAppWeb.Nav do
 
         {ScoutAccessLive, _} ->
           :scout_access
+
+        {ScoutRefreshLive, _} ->
+          :scout_refresh
 
         {_, _} ->
           nil

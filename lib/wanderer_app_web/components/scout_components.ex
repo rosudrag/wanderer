@@ -32,7 +32,7 @@ defmodule WandererAppWeb.ScoutComponents do
 
   use Phoenix.Component
 
-  alias WandererApp.Scout.Status
+  alias WandererApp.Scout.{Status, Unanchor}
 
   # A faction spawn seen within this long is probably still sitting in
   # that belt. Mirrored by `ScoutIntelLive`'s read, which is what makes
@@ -502,6 +502,46 @@ defmodule WandererAppWeb.ScoutComponents do
     """
   end
 
+  attr :row, :map, required: true
+  attr :now, :any, required: true
+
+  @doc """
+  CHEWY PATCH: the Unanchoring board's deadline. A decommission carries
+  no wire timer — `timer_expires_at` is nil on every row of that board,
+  which is why the "Comes out" countdown it used to render was a column
+  of em dashes — so this renders the one bound the mechanic gives:
+  first sighting of the run plus the fixed 7-day window, i.e. the
+  LATEST the hull can still be there. `≤` is load-bearing: the real
+  completion is at or before it. See `WandererApp.Scout.Unanchor`.
+  """
+  def predicted_out_cell(assigns) do
+    assigns = assign(assigns, :predicted_at, Unanchor.predicted_max_at(assigns.row))
+
+    ~H"""
+    <div
+      :if={is_nil(@predicted_at)}
+      class="text-gray-600"
+      title={
+        if Unanchor.orbital?(@row),
+          do: "Orbital: unanchors in minutes, not the 7-day Upwell decommission",
+          else: "No sighting of the start of this unanchor yet"
+      }
+    >
+      —
+    </div>
+    <div
+      :if={@predicted_at}
+      class="whitespace-nowrap"
+      title="Latest it can still be in space: first sighting of this unanchor + the fixed 7-day decommission"
+    >
+      <span class={["font-mono font-medium tabular-nums", urgency(@predicted_at, @now)]}>
+        ≤ {countdown(@predicted_at, @now)}
+      </span>
+      <div class="text-[11px] text-gray-500 font-mono">{at(@predicted_at)}</div>
+    </div>
+    """
+  end
+
   attr :at, :any, default: nil
   attr :now, :any, required: true
   attr :tone, :boolean, default: false
@@ -522,6 +562,147 @@ defmodule WandererAppWeb.ScoutComponents do
       </span>
       <div class="text-[11px] text-gray-500 font-mono">{at(@at)}</div>
     </div>
+    """
+  end
+
+  attr :stop, :map, required: true
+
+  @doc """
+  CHEWY PATCH (scout refresh): the class/security cell for a ranked
+  stop from `WandererApp.Scout.Planner.rank/1`. Mirrors `sys/1`'s rule
+  -- a w-space/Pochven class title OR a k-space security status, never
+  both -- but reads straight off the stop map the planner already
+  enriched, rather than a `systems` resolution map: there is no second
+  lookup to keep in sync here.
+  """
+  def stop_class(assigns) do
+    ~H"""
+    <div class="flex items-center gap-1.5 whitespace-nowrap">
+      <span
+        :if={@stop.class_title}
+        class="badge badge-xs border-0 bg-violet-500/15 text-violet-300 font-mono"
+      >
+        {@stop.class_title}
+      </span>
+      <span
+        :if={is_nil(@stop.class_title) and security(@stop.security)}
+        class={["font-mono text-[11px]", security_class(@stop.security)]}
+        title="Security status"
+      >
+        {security(@stop.security)}
+      </span>
+      <span :if={is_nil(@stop.class_title) and is_nil(security(@stop.security))} class="text-gray-600">
+        —
+      </span>
+    </div>
+    """
+  end
+
+  attr :space, :atom, required: true
+
+  @doc "A static space-type badge -- `space_chip/1`'s tone, without the click."
+  def space_badge(assigns) do
+    ~H"""
+    <span class={["badge badge-xs border font-mono", space_tone(@space)]}>
+      {@space}
+    </span>
+    """
+  end
+
+  attr :reason, :atom, required: true
+
+  @doc """
+  Why a stop ranked where it did, reduced to one word (design doc
+  section 5): `:unseen` is the loudest tier -- a system that has never
+  produced a coverage row of the requested kind -- down to `:fresh`,
+  which recedes the same way `status_badge_class/1` mutes the steady
+  tier on the intel log.
+  """
+  def reason_badge(assigns) do
+    ~H"""
+    <span class={["badge badge-sm border-0", reason_class(@reason)]}>
+      {@reason}
+    </span>
+    """
+  end
+
+  defp reason_class(:unseen), do: "bg-error/20 text-error"
+  defp reason_class(:frontier), do: "bg-violet-500/20 text-violet-300"
+  defp reason_class(:stale), do: "bg-warning/20 text-warning"
+  defp reason_class(:fresh), do: "bg-success/15 text-success"
+  defp reason_class(_), do: "bg-neutral-800 text-gray-400"
+
+  attr :coverage, :map, required: true
+  attr :kind, :atom, required: true
+  attr :now, :any, required: true
+
+  @coverage_kinds [:visit, :anoms, :sigs, :grid]
+
+  @doc """
+  The coverage ladder itself (design doc section 2): one age per kind,
+  on one row, with the kind the operator asked for picked out. A stop
+  ranked on `sigs` staleness may still be `grid`-fresh from yesterday's
+  tour, and that is worth seeing without re-querying four tables.
+  """
+  def coverage_ladder(assigns) do
+    assigns = assign(assigns, :kinds, @coverage_kinds)
+
+    ~H"""
+    <div class="flex items-center gap-2 whitespace-nowrap font-mono text-[11px]">
+      <span
+        :for={k <- @kinds}
+        class={if k == @kind, do: "text-gray-100 font-semibold", else: "text-gray-500"}
+        title={"#{k}: #{at(Map.get(@coverage, k))}"}
+      >
+        {k}:{ago(Map.get(@coverage, k), @now)}
+      </span>
+    </div>
+    """
+  end
+
+  attr :terms, :map, required: true
+
+  @doc """
+  The score breakdown (design doc section 5): `score = need*W_need +
+  frontier*W_frontier + value*W_value - jumps*W_distance -
+  claimed*W_claimed`. Section 8's whole gate for the refresh page is
+  that a human can read why a system ranked where it did, so every
+  weighted term renders, not just the final number.
+  """
+  def terms_hint(assigns) do
+    ~H"""
+    <span
+      class="font-mono text-[11px] text-gray-500 whitespace-nowrap"
+      title="need + frontier + value - distance - claimed = score"
+    >
+      need {score_fmt(@terms.need)} · frontier {score_fmt(@terms.frontier)} · value {score_fmt(
+        @terms.value
+      )} · distance {score_fmt(@terms.distance)} · claimed {score_fmt(@terms.claimed)}
+    </span>
+    """
+  end
+
+  attr :stop, :map, required: true
+
+  @doc """
+  "Mark stale" (design doc sections 8-9): destroys the stored coverage
+  row for this system + the selected kind outright, the reader's
+  "re-scout this now" override. Rendered only when there IS a row to
+  destroy -- `age_s < 0` means the planner already read this system as
+  unseen for this kind, and the button would destroy nothing.
+  """
+  def stale_cell(assigns) do
+    ~H"""
+    <button
+      :if={@stop.age_s >= 0}
+      phx-click="mark_stale"
+      phx-value-id={@stop.solar_system_id}
+      class="btn btn-ghost btn-xs text-gray-600 hover:text-error"
+      title="Clear this system's coverage row for the selected kind"
+    >
+      mark stale
+    </button>
+    <span :if={@stop.age_s < 0} class="text-gray-700">—</span>
     """
   end
 
@@ -740,4 +921,23 @@ defmodule WandererAppWeb.ScoutComponents do
   end
 
   def security_class(_), do: "text-gray-500"
+
+  @doc false
+  # The ranked-stop score, to two decimals -- `terms_hint/1`'s per-term
+  # formatter and the refresh table's Score column share this rather
+  # than each rolling their own float_to_binary call.
+  def score_fmt(value) when is_number(value),
+    do: :erlang.float_to_binary(value * 1.0, decimals: 2)
+
+  def score_fmt(_value), do: "0.00"
+
+  @doc false
+  # `WandererApp.Scout.Planner.rank/1`'s `{:error, reason}` branch, read
+  # by a human rather than logged -- the refresh page's whole empty
+  # state when the planner cannot answer.
+  def plan_error_message(reason) when is_atom(reason) do
+    "Could not build a plan: " <> (reason |> to_string() |> String.replace("_", " ")) <> "."
+  end
+
+  def plan_error_message(_reason), do: "Could not build a plan."
 end

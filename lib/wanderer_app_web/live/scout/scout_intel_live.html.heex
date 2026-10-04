@@ -69,6 +69,16 @@
       >
         Spawns
       </button>
+
+      <.link
+        :if={WandererApp.Env.scout_planner_enabled?()}
+        navigate={~p"/scout/refresh"}
+        role="tab"
+        id="scout-tab-refresh"
+        class="tab"
+      >
+        Refresh
+      </.link>
     </div>
 
     <form phx-change="select_window">
@@ -316,11 +326,12 @@
       title="Unanchoring"
       count={length(@unanchoring_structures)}
       tone={if @unanchoring_structures != [], do: :warn, else: :neutral}
+      hint="a decommission reports no timer; the deadline is the fixed 7-day window from the first sweep that saw it"
     >
       <.grid id="scout-unanchoring">
         <thead>
           <tr>
-            <th class="w-28">Comes out</th>
+            <th class="w-36">Predicted max out</th>
             <th>Structure</th>
             <th>System</th>
             <th>Owner</th>
@@ -332,7 +343,7 @@
         </thead>
         <tbody>
           <tr :for={row <- @unanchoring_structures} id={"scout-unanchoring-#{row.id}"}>
-            <td><.countdown_cell expires_at={row.timer_expires_at} now={@now} /></td>
+            <td><.predicted_out_cell row={row} now={@now} /></td>
             <td>
               <.subject
                 name={row.structure_name || to_string(row.structure_id)}

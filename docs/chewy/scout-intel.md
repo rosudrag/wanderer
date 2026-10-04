@@ -236,7 +236,7 @@ top of `:search`:
 - **Anchoring** — no fitting, no services, a live vulnerability window: the
   cheapest kills in the game.
 - **Unanchoring** — a structure being pulled out of the ground: a one-shot
-  opportunity with a hard deadline.
+  opportunity with a hard deadline nobody reports. See "Predicted max out".
 - **Abandoned** — asset safety off (`Abandoned`) or unfuelled (`NoFuel`).
   Neither carries a timer, so neither can appear in the timer table, and
   before this board both were visible only as one muted row somewhere in the
@@ -244,6 +244,63 @@ top of `:search`:
 
 Every one of them honours the search / system filter / window except
 `:unanchored`, which deliberately does not — see below.
+
+## Predicted max out — the Unanchoring board's deadline
+
+`WandererApp.Scout.Unanchor` owns it; `ScoutComponents.predicted_out_cell/1`
+renders it.
+
+The board's first column used to be **Comes out**, a `countdown_cell/1` over
+`timer_expires_at`, and it could never show anything but an em dash: a
+decommission reports no countdown on the wire. `timer_seconds` carries
+reinforcement timers only, so that column was structurally empty and the
+board — the one whose whole point is a deadline — had no deadline at all.
+Worse, `by_deadline/1` sorted it on that nil, i.e. not at all.
+
+The mechanic supplies what the wire does not. Decommissioning an Upwell
+structure takes a **fixed 7 days**, and cancelling it restarts the full 7
+([CCP support][decom]), so the only unknown is when the owner started. The
+feed bounds that from one side: `unanchoring_since` on
+`WandererApp.Api.ScoutStructure` is the first sweep that saw the structure
+in `Status.unanchoring_family/0`. Therefore
+
+```
+predicted max out = unanchoring_since + 7 days
+```
+
+is the **latest** the hull can still be in space — the true completion is at
+or before it, never after, because an unanchor may have been running for
+days before a scout first flew past but cannot have started after we saw it.
+That is why the cell renders `≤ 3d 4h` and the column says *max*: it is a
+bound, not a timer, and the error direction is the safe one (you may arrive
+early, never too late).
+
+Three rules keep the bound honest, all in `Unanchor.transition/4` and
+applied by `Scout.Snapshot` on the appeared / changed / unchanged paths:
+
+- A status leaving the family **clears** the anchor. A cancelled
+  decommission restarts the 7 days, so a surviving anchor would
+  under-predict — the one error direction that makes the column dangerous.
+- A later sweep confirming the **same** run never moves the anchor forward;
+  the anchor is the first sighting of that run.
+- A row that is unanchoring with no anchor stored (a backfilled one) takes
+  the current sweep, the earliest start the feed can still prove.
+
+Orbitals are **excluded rather than predicted**: a customs office gantry
+unanchors in seconds and a POCO in minutes, a different mechanic entirely,
+so `predicted_max_at/1` returns nil for any `group_name` matching
+`orbital|customs` and the cell stays an em dash with a title saying why. An
+unknown or absent group is treated as Upwell — that is what the
+overwhelming majority of rows are.
+
+The board sorts on this (`by_predicted_out/1` in `scout_intel_live.ex`,
+soonest first, anchorless rows last), and `unanchoring_since` is a stored
+column, so it is in the CSV export like every other one. The backfill
+migration (`20261004185858`) seeds existing runs from the event log: the
+LATEST `status_after = 'Unanchoring'` transition per structure, falling back
+to `last_changed_at` — both upper bounds on the real start.
+
+[decom]: https://support.eveonline.com/hc/en-us/articles/208289335-Upwell-Structure-Deployment-and-Unanchoring
 
 ## The unanchored alert
 

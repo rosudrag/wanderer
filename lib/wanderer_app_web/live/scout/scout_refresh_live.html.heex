@@ -1,0 +1,248 @@
+<main class="w-full h-full p-4 pl-20 pb-20 overflow-auto text-gray-200">
+  <%!-- CHEWY PATCH: this page's own sticky-filter key -- distinct from
+        `scout_filters` (ScoutIntelLive) so the two tabs never clobber
+        each other's saved state. --%>
+  <div
+    id="scout-refresh-filter-store"
+    phx-hook="LocalStorageSetting"
+    data-key="scout_refresh_filters"
+    class="hidden"
+  >
+  </div>
+
+  <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-3">
+    <h1 class="text-xl font-semibold tracking-tight">Scout Refresh Queue</h1>
+
+    <span
+      :if={@generated_at}
+      class="text-[11px] text-gray-500 whitespace-nowrap"
+      title="When this ranking was computed — it is not re-queried on a timer"
+    >
+      generated <span class="text-gray-300">{ago(@generated_at, @now)}</span> · times UTC
+    </span>
+
+    <div class="ml-auto flex items-center gap-2">
+      <button phx-click="refresh" class="btn btn-sm btn-ghost">Refresh</button>
+    </div>
+  </div>
+
+  <div class="flex flex-wrap items-end gap-2 mb-4 p-2 rounded-lg border border-neutral-800 bg-neutral-900/30">
+    <div class="relative">
+      <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">
+        Origin system
+      </label>
+      <form phx-change="search_origin" phx-submit="search_origin">
+        <input
+          type="text"
+          name="q"
+          id="scout-refresh-origin-q"
+          value={@origin_q}
+          phx-debounce="300"
+          autocomplete="off"
+          placeholder="Search by name…"
+          class="input input-sm input-bordered bg-neutral-950/60 w-48"
+        />
+      </form>
+      <div
+        :if={@origin_matches != []}
+        class="absolute z-10 mt-1 w-64 rounded-lg border border-neutral-700 bg-neutral-900 shadow-lg max-h-64 overflow-auto"
+      >
+        <button
+          :for={m <- @origin_matches}
+          type="button"
+          phx-click="select_origin"
+          phx-value-id={m.solar_system_id}
+          phx-value-name={m.solar_system_name}
+          class="block w-full text-left px-3 py-1.5 text-sm hover:bg-neutral-800"
+        >
+          {m.solar_system_name}
+          <span class="text-[11px] text-gray-500">{m.region_name}</span>
+        </button>
+      </div>
+    </div>
+
+    <button
+      :if={@origin_id}
+      phx-click="clear_origin"
+      id="scout-refresh-origin-clear"
+      class="btn btn-sm btn-outline btn-warning gap-1"
+      title="Clear the origin"
+    >
+      {@origin_name || @origin_id} ✕
+    </button>
+
+    <div>
+      <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Kind</label>
+      <form phx-change="select_kind">
+        <select
+          name="kind"
+          class="select select-sm select-bordered bg-neutral-950/60 w-28 py-0"
+          title="Coverage ladder kind — visit/anoms/sigs/grid, design doc section 2"
+        >
+          <option
+            :for={k <- ~w(visit anoms sigs grid)}
+            value={k}
+            selected={k == to_string(@kind)}
+          >
+            {String.capitalize(k)}
+          </option>
+        </select>
+      </form>
+    </div>
+
+    <div>
+      <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Limit</label>
+      <form phx-change="select_limit">
+        <select name="limit" class="select select-sm select-bordered bg-neutral-950/60 w-24 py-0">
+          <option :for={n <- [10, 25, 50, 100]} value={n} selected={n == @limit}>
+            {n} stops
+          </option>
+        </select>
+      </form>
+    </div>
+
+    <div>
+      <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">
+        Max jumps
+      </label>
+      <form phx-change="update_max_jumps">
+        <input
+          type="number"
+          name="max_jumps"
+          min="1"
+          max="40"
+          value={@max_jumps}
+          title="Hard cap 40"
+          class="input input-sm input-bordered bg-neutral-950/60 w-20"
+        />
+      </form>
+    </div>
+
+    <div>
+      <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">
+        Regions
+      </label>
+      <form phx-change="update_regions">
+        <input
+          type="text"
+          name="regions"
+          value={@regions_q}
+          phx-debounce="300"
+          autocomplete="off"
+          placeholder="ids, comma-separated"
+          title="Region ids narrowing the scope — empty means no narrowing"
+          class="input input-sm input-bordered bg-neutral-950/60 w-40"
+        />
+      </form>
+    </div>
+
+    <div class="join" id="scout-refresh-security">
+      <.space_chip :for={{key, label} <- @security_types} key={key} label={label} selected={key in @security} />
+    </div>
+
+    <button
+      :if={length(@security) < length(@security_types)}
+      phx-click="reset_space"
+      id="scout-refresh-security-reset"
+      class="btn btn-sm btn-ghost text-gray-400"
+    >
+      All space ✕
+    </button>
+  </div>
+
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+    <.stat label="Candidates in scope" value={to_string(@candidates)} />
+    <.stat
+      label="Stops shown"
+      value={to_string(length(@stops))}
+      hint={"of #{@limit} requested"}
+    />
+    <.stat
+      label="Unseen"
+      value={to_string(count_reason(@stops, :unseen))}
+      tone={if count_reason(@stops, :unseen) > 0, do: :urgent, else: :neutral}
+    />
+    <.stat label="Frontier" value={to_string(count_reason(@stops, :frontier))} />
+  </div>
+
+  <div :if={@route_ids != ""} class="flex items-center gap-2 mb-3">
+    <input
+      type="text"
+      readonly
+      id="scout-refresh-route"
+      value={@route_ids}
+      onclick="this.select()"
+      title="Gate-leg stops in GET /scout/plan's own nearest-neighbour order -- byte-for-byte the list the bot flies"
+      class="input input-sm input-bordered bg-neutral-950/60 w-96 font-mono text-xs"
+    />
+    <button
+      type="button"
+      phx-hook="CopyToClipboard"
+      id="scout-refresh-copy-route"
+      data-url={@route_ids}
+      class="btn btn-sm btn-ghost"
+    >
+      Copy route
+    </button>
+  </div>
+
+  <.panel
+    id="scout-refresh-table-panel"
+    title="Refresh queue"
+    count={length(@stops)}
+    hint={if @origin_id, do: "sorted by score, " <> to_string(@kind) <> " coverage", else: nil}
+  >
+    <.grid id="scout-refresh-table">
+      <thead>
+        <tr>
+          <th>System</th>
+          <th>Region</th>
+          <th>Class / Sec</th>
+          <th>Coverage</th>
+          <th>Score</th>
+          <th>Reason</th>
+          <th class="text-right">Jumps</th>
+          <th>Leg</th>
+          <th>Why</th>
+          <th class="w-24"></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr :for={stop <- @stops} id={"scout-refresh-#{stop.solar_system_id}"}>
+          <td>
+            <div class="flex items-center gap-1.5 whitespace-nowrap">
+              <button
+                phx-click="select_origin"
+                phx-value-id={stop.solar_system_id}
+                phx-value-name={stop.name}
+                class="link link-hover decoration-dotted underline-offset-2"
+                title="Use as the new origin"
+              >
+                {stop.name}
+              </button>
+              <.space_badge space={stop.space} />
+            </div>
+          </td>
+          <td class="text-xs text-gray-400">{stop.region_name || "—"}</td>
+          <td><.stop_class stop={stop} /></td>
+          <td><.coverage_ladder coverage={stop.coverage} kind={@kind} now={@now} /></td>
+          <td class="font-mono tabular-nums">{score_fmt(stop.score)}</td>
+          <td><.reason_badge reason={stop.reason} /></td>
+          <td class="text-right tabular-nums">{stop.jumps}</td>
+          <td class="text-xs text-gray-400">{stop.leg}</td>
+          <td><.terms_hint terms={stop.terms} /></td>
+          <td><.stale_cell stop={stop} /></td>
+        </tr>
+        <.empty :if={@stops == [] and is_nil(@origin_id)} cols={10}>
+          Search for an origin system to begin.
+        </.empty>
+        <.empty :if={@stops == [] and @origin_id and @plan_error} cols={10}>
+          {plan_error_message(@plan_error)}
+        </.empty>
+        <.empty :if={@stops == [] and @origin_id and is_nil(@plan_error)} cols={10}>
+          Nothing in scope needs scouting right now.
+        </.empty>
+      </tbody>
+    </.grid>
+  </.panel>
+</main>

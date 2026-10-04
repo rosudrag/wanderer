@@ -240,6 +240,15 @@ defmodule WandererAppWeb.Router do
     plug WandererAppWeb.Plugs.CheckScoutPresenceDisabled
   end
 
+  # CHEWY PATCH: scout plan endpoint (ranking + route). See
+  # WandererAppWeb.Plugs.CheckScoutPlannerDisabled and
+  # WandererApp.Scout.Planner. Own pipeline, same reasoning as the
+  # coverage/presence pipelines above: independent flag, independent
+  # route.
+  pipeline :api_scout_planner do
+    plug WandererAppWeb.Plugs.CheckScoutPlannerDisabled
+  end
+
   # CHEWY PATCH: same flag, browser side (the /scout pages). Separate from
   # :api_scout_intel only because the two are piped after different base
   # pipelines.
@@ -417,6 +426,17 @@ defmodule WandererAppWeb.Router do
     pipe_through [:api, :api_map, :api_scout_presence]
 
     post "/scout/structures/snapshot", ScoutSnapshotAPIController, :snapshot
+  end
+
+  # CHEWY PATCH: scout plan endpoint (requires WANDERER_SCOUT_PLANNER=true).
+  # Rides :api_map so the bot authenticates with the map public_api_key it
+  # already holds -- the :map_identifier in the path is authentication, not
+  # scope (docs/design/wanderer-scout-planner.md section 7); origin and
+  # scope decide which systems are ranked. See WandererApp.Scout.Planner.
+  scope "/api/maps/:map_identifier", WandererAppWeb do
+    pipe_through [:api, :api_map, :api_scout_planner]
+
+    get "/scout/plan", ScoutPlanAPIController, :plan
   end
 
   #
@@ -638,6 +658,7 @@ defmodule WandererAppWeb.Router do
       ] do
       live "/", ScoutIntelLive, :index
       live "/access", ScoutAccessLive, :index
+      live "/refresh", ScoutRefreshLive, :index
     end
 
     # Not a LiveView, so the live_session's auth gate does not cover it:

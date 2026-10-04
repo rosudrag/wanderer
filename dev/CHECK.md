@@ -343,6 +343,27 @@ upstream merge. `check.ps1` adds the entry itself on first run if missing.
 
 ## Traps
 
+### 0. `priv` symlink: `Repair-PrivDir`, and why `-Boot`/`-Routes` are red
+
+Mix re-links `_build/<env>/lib/wanderer_app/priv` on every start and then
+cannot remove the link it made (`Cannot remove symlink ... not owner` --
+Erlang refuses to delete a directory symlink; only `cmd /c rmdir` does).
+`Repair-PrivDir` replaces it with a real directory before every mix
+invocation, which takes mix's copy branch instead and cannot raise. That
+is what makes `-Compile`, `-Format`, `-Db`, `-Seed` and `-Test` runnable
+here; they reported five environmental `FAIL`s before it existed.
+
+`-Boot` and `-Routes` are still red on this box, and NOT because of the
+code under test: the booted server's Phoenix code reloader calls the same
+mix function on every request, re-creates the link inside the running VM
+where no PowerShell-side repair can reach it, and answers `500` to every
+probe -- `/corp` included, which nothing has touched. Read a 500 on those
+two steps as "the harness, again", confirm with
+`grep "Cannot remove symlink" dev/.check-scratch/logs/boot.log`, and prove
+a route contract with an `IntegrationConnCase` test instead
+(`test/integration/scout_plan_api_test.exs` flips the feature flag and
+asserts 404-vs-200 plus the response body).
+
 ### 1. CRLF Line Endings / `mix format`
 
 See `-Format` above. This Windows checkout carries CRLF
