@@ -543,6 +543,108 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
     end
   end
 
+  # The only write on this page. The rule worth pinning is not "the row
+  # disappears" -- it is WHICH clock un-hides it again: a sweep
+  # re-confirming the same hull every few minutes must not resurrect a
+  # finding a human already judged, and a real state change must.
+  describe "archiving a structure" do
+    test "takes it off the boards and the banner, but not out of the log", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_300,
+        structure_name: "Archive Me Astrahus",
+        status: "Unanchored"
+      })
+
+      {:ok, view, html} = live(conn, ~p"/scout")
+      assert html =~ "scout-unanchored-alert"
+      assert view |> element("#scout-unanchored") |> render() =~ "Archive Me Astrahus"
+
+      archived = render_click(view, "archive_structure", %{"id" => "1000000000300"})
+
+      refute archived =~ "scout-unanchored-alert"
+      refute view |> element("#scout-unanchored") |> render() =~ "Archive Me Astrahus"
+
+      # Not a delete: it moves to the board that undoes it, and the
+      # ingest log still knows about it.
+      assert view |> element("#scout-archived") |> render() =~ "Archive Me Astrahus"
+      assert view |> element("#scout-structures") |> render() =~ "Archive Me Astrahus"
+    end
+
+    test "being re-confirmed unchanged does not bring it back", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_301,
+        structure_name: "Still Not There",
+        status: "Unanchored",
+        observed_at: ago(30)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+      render_click(view, "archive_structure", %{"id" => "1000000000301"})
+
+      # The sweep sees it again and moves `last_confirmed_at` only --
+      # exactly what `WandererApp.Scout.Snapshot`'s `unchanged` branch
+      # writes.
+      structure(%{
+        structure_id: 1_000_000_000_301,
+        structure_name: "Still Not There",
+        status: "Unanchored",
+        observed_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+      refute render_click(view, "refresh", %{}) =~ "scout-unanchored-alert"
+      refute view |> element("#scout-unanchored") |> render() =~ "Still Not There"
+    end
+
+    test "an actual state change brings it back", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_302,
+        structure_name: "Changed Astrahus",
+        status: "Unanchored",
+        observed_at: ago(30)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+      render_click(view, "archive_structure", %{"id" => "1000000000302"})
+      refute view |> element("#scout-unanchored") |> render() =~ "Changed Astrahus"
+
+      # `last_changed_at` is only ever moved by a `:changed` diff. A
+      # second LATER than the archive, not the same one: the predicate
+      # is `last_changed_at > archived_at`, so a change recorded in the
+      # same second as the click loses the tie to the human — which is
+      # the behaviour wanted, and a tie is a test artifact anyway (real
+      # sweeps are minutes apart).
+      later = DateTime.utc_now() |> DateTime.add(5, :second) |> DateTime.truncate(:second)
+
+      structure(%{
+        structure_id: 1_000_000_000_302,
+        structure_name: "Changed Astrahus",
+        status: "Unanchored",
+        last_changed_at: later,
+        observed_at: later
+      })
+
+      assert render_click(view, "refresh", %{}) =~ "scout-unanchored-alert"
+      assert view |> element("#scout-unanchored") |> render() =~ "Changed Astrahus"
+    end
+
+    test "restore puts it back immediately", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_303,
+        structure_name: "Undo Astrahus",
+        status: "Unanchored"
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+      render_click(view, "archive_structure", %{"id" => "1000000000303"})
+      refute view |> element("#scout-unanchored") |> render() =~ "Undo Astrahus"
+
+      restored = render_click(view, "restore_structure", %{"id" => "1000000000303"})
+
+      assert restored =~ "scout-unanchored-alert"
+      assert view |> element("#scout-unanchored") |> render() =~ "Undo Astrahus"
+    end
+  end
+
   describe "sticky filters" do
     test "a saved window, search and space selection are restored on mount", %{conn: conn} do
       create_solar_system(%{solar_system_id: @hs_sys, system_class: 7, security: "0.9"})

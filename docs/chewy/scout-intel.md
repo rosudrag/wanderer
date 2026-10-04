@@ -268,6 +268,41 @@ Two filter rules, both deliberate and both tested:
   filters do. The search is tab vocabulary — on the spawns tab it is belt
   and spawn names — and an alert a search box can hide is not an alert.
 
+## Archiving a finding by hand
+
+The feed says what a bot saw; `archived_at` on `WandererApp.Api.ScoutStructure`
+is the one thing a *reader* can assert — "I flew there, it is not there, stop
+shouting at me". Every structure board carries a `✕` in its last column
+(`ScoutComponents.archive_cell/1` → `"archive_structure"`), and the row leaves
+every opportunity board, the red banner, the summary card and the sidebar
+badge at once.
+
+It is **not** a delete and not a presence:
+
+- the row stays in the ingest log, in the drill-down, and in the CSV export
+  (which gained an `archived_at` column);
+- it appears on its own **Archived** board — rendered only when non-empty,
+  deliberately NOT bounded by the window selector, since an archive that aged
+  out of the window would be impossible to undo from the page — with a `↺`
+  that restores it (`"restore_structure"`);
+- `presence` is untouched. The two are orthogonal: `presence` is derived
+  from the diff, `archived_at` is a human's judgement about it.
+
+**The expiry rule is `last_changed_at`, not `last_confirmed_at`**, and that
+is the whole design. A sweep re-confirming the same unanchored hull every few
+minutes moves `last_confirmed_at` constantly; if that un-hid the row, the
+button would be useless in exactly the case it exists for. An actual state
+change (status, owner, timer, …) moves `last_changed_at`, and that is new
+information, so the finding comes straight back. One `:archived` expr
+calculation holds the predicate —
+`archived_at is not null and (last_changed_at is null or last_changed_at <= archived_at)`
+— and every board filters `archived == false` next to its `presence == :seen`.
+A tie goes to the human: a change recorded in the same second as the click
+stays archived.
+
+`:search` (the ingest log) again shows everything, archived included: it is
+the "what do we know" table, not a target list.
+
 ## Timers
 
 `timer_seconds` is a countdown **relative to the observation**, with `-1`

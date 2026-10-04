@@ -253,6 +253,50 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
   def handle_event("refresh", _params, socket), do: {:noreply, load(socket)}
 
+  # The one write this page has. An archive is a reader's judgement --
+  # "I flew there, it is not there" -- and it suppresses the row only
+  # until the feed reports an actual CHANGE to that structure; see the
+  # `:archived` calculation on `WandererApp.Api.ScoutStructure`. It is
+  # not a delete: the row stays in the ingest log, in its own board, and
+  # in the CSV export.
+  def handle_event("archive_structure", %{"id" => id}, socket) do
+    with {structure_id, ""} <- Integer.parse(to_string(id)),
+         {:ok, row} <- ScoutStructure.by_structure_id(structure_id, authorize?: false),
+         {:ok, _archived} <-
+           ScoutStructure.archive(row, socket.assigns.current_user.id, authorize?: false) do
+      {:noreply, socket |> announce() |> load()}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("restore_structure", %{"id" => id}, socket) do
+    with {structure_id, ""} <- Integer.parse(to_string(id)),
+         {:ok, row} <- ScoutStructure.by_structure_id(structure_id, authorize?: false),
+         {:ok, _restored} <- ScoutStructure.restore(row, authorize?: false) do
+      {:noreply, socket |> announce() |> load()}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # An archive moves the sidebar badge, which is cached, and any OTHER
+  # open page, which is not this socket. `broadcast_from` rather than
+  # `broadcast`: this socket reloads in the handler above, and doing it
+  # twice is a wasted round of six queries.
+  defp announce(socket) do
+    Alerts.invalidate()
+
+    Phoenix.PubSub.broadcast_from(
+      WandererApp.PubSub,
+      self(),
+      "scout_intel",
+      {:scout_intel_ingested, :structures}
+    )
+
+    socket
+  end
+
   @impl true
   # No query: advance the clock and drop the timers that ran out while
   # the page sat open. New rows arrive by broadcast, not by polling.
@@ -441,6 +485,10 @@ defmodule WandererAppWeb.ScoutIntelLive do
     {unanchoring_structures, _more} =
       read(ScoutStructure, :unanchoring, Map.put(filters, :since, since), limit)
 
+    # Suppressed findings, and the only place to undo one. Deliberately
+    # not window-bounded -- see the `:archived` read action.
+    {archived_structures, _more} = read(ScoutStructure, :archived, filters, limit)
+
     # Every board is sorted here rather than trusted to come out of the
     # read in storage order. Each table gets the sort its question
     # implies -- deadline first where there is a deadline, most recently
@@ -452,6 +500,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
       anchoring_structures: by_recent(anchoring_structures),
       abandoned_structures: by_recent(abandoned_structures),
       unanchoring_structures: by_deadline(unanchoring_structures),
+      archived_structures: by_archived(archived_structures),
       more?: more_structures?,
       spawns: [],
       hotspots: [],
@@ -462,7 +511,8 @@ defmodule WandererAppWeb.ScoutIntelLive do
       structures,
       anchoring_structures,
       abandoned_structures,
-      unanchoring_structures
+      unanchoring_structures,
+      archived_structures
     ])
   end
 
@@ -506,6 +556,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
       anchoring_structures: [],
       abandoned_structures: [],
       unanchoring_structures: [],
+      archived_structures: [],
       fresh_spawns: fresh_spawns
     )
     |> assign_systems([spawns, hotspots, fresh_spawns])
@@ -619,6 +670,10 @@ defmodule WandererAppWeb.ScoutIntelLive do
       end
     end)
   end
+
+  # Most recently archived first: the board is read as "what did we just
+  # take off the page", so the undo is always at the top.
+  defp by_archived(rows), do: Enum.sort_by(rows, & &1.archived_at, {:desc, DateTime})
 
   # -------------------------------------------------------------------
   # Summary strip

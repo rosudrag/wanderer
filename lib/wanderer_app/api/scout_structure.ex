@@ -37,6 +37,21 @@ defmodule WandererApp.Api.ScoutStructure do
   `:search` alone shows every presence, because it is the "what do we
   know" table, not a target list.
 
+  ## Manual archive: `archived_at`
+
+  Presence is derived from what the client reports; `archived_at` is the
+  one thing a READER can assert -- "I flew there, it is not there, stop
+  shouting at me". It is not a delete: the row, its history and the CSV
+  export keep it.
+
+  An archive expires on its own, and the rule is `last_changed_at`, NOT
+  `last_confirmed_at`: a sweep re-confirming the SAME unanchored hull
+  every ten minutes must not resurrect a finding a human already
+  judged, but an actual state change (status, owner, timer, ...) is new
+  information and brings it straight back. That is the `:archived`
+  calculation, and every opportunity board filters `archived == false`
+  next to its `presence == :seen`. `:search` again shows everything.
+
   ## No `solar_system_name` / `system_truesec`
 
   Unlike `ScoutStructureSighting`, this resource does not carry a
@@ -81,6 +96,10 @@ defmodule WandererApp.Api.ScoutStructure do
     define(:unanchoring, action: :unanchoring, args: [:since])
     define(:active_timers, action: :active_timers, args: [:now])
     define(:search, action: :search, args: [:since])
+    define(:archived, action: :archived)
+
+    define(:archive, action: :archive, args: [:user_id])
+    define(:restore, action: :restore)
   end
 
   actions do
@@ -129,6 +148,7 @@ defmodule WandererApp.Api.ScoutStructure do
       get? true
       argument :structure_id, :integer, allow_nil?: false
       filter expr(structure_id == ^arg(:structure_id))
+      prepare build(load: [:archived])
     end
 
     # Cheapest-kill board: no fitting, no services online yet, a live
@@ -141,6 +161,7 @@ defmodule WandererApp.Api.ScoutStructure do
 
       filter expr(
                presence == :seen and
+                 archived == false and
                  last_confirmed_at >= ^arg(:since) and
                  status in ^WandererApp.Scout.Status.anchoring_family() and
                  (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
@@ -155,7 +176,7 @@ defmodule WandererApp.Api.ScoutStructure do
                     ))
              )
 
-      prepare build(sort: [last_confirmed_at: :desc])
+      prepare build(sort: [last_confirmed_at: :desc], load: [:archived])
     end
 
     # Nothing to shoot and nothing to wait for: asset safety off
@@ -172,6 +193,7 @@ defmodule WandererApp.Api.ScoutStructure do
 
       filter expr(
                presence == :seen and
+                 archived == false and
                  last_confirmed_at >= ^arg(:since) and
                  status in ^WandererApp.Scout.Status.dead_family() and
                  (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
@@ -186,7 +208,7 @@ defmodule WandererApp.Api.ScoutStructure do
                     ))
              )
 
-      prepare build(sort: [last_confirmed_at: :desc])
+      prepare build(sort: [last_confirmed_at: :desc], load: [:archived])
     end
 
     # The alert board: `status == "Unanchored"` -- sitting in space fully
@@ -200,6 +222,7 @@ defmodule WandererApp.Api.ScoutStructure do
 
       filter expr(
                presence == :seen and
+                 archived == false and
                  last_confirmed_at >= ^arg(:since) and
                  status in ^WandererApp.Scout.Status.unanchored_family() and
                  (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
@@ -214,7 +237,7 @@ defmodule WandererApp.Api.ScoutStructure do
                     ))
              )
 
-      prepare build(sort: [last_confirmed_at: :desc])
+      prepare build(sort: [last_confirmed_at: :desc], load: [:archived])
     end
 
     # Being pulled out of the ground: a one-shot opportunity with a hard
@@ -228,6 +251,7 @@ defmodule WandererApp.Api.ScoutStructure do
 
       filter expr(
                presence == :seen and
+                 archived == false and
                  last_confirmed_at >= ^arg(:since) and
                  status in ^WandererApp.Scout.Status.unanchoring_family() and
                  (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
@@ -242,7 +266,7 @@ defmodule WandererApp.Api.ScoutStructure do
                     ))
              )
 
-      prepare build(sort: [last_confirmed_at: :desc])
+      prepare build(sort: [last_confirmed_at: :desc], load: [:archived])
     end
 
     # The one genuinely time-critical board. `since` deliberately does
@@ -257,6 +281,7 @@ defmodule WandererApp.Api.ScoutStructure do
 
       filter expr(
                presence == :seen and
+                 archived == false and
                  not is_nil(timer_expires_at) and timer_expires_at > ^arg(:now) and
                  (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
                  (is_nil(^arg(:q)) or
@@ -270,7 +295,7 @@ defmodule WandererApp.Api.ScoutStructure do
                     ))
              )
 
-      prepare build(sort: [timer_expires_at: :asc])
+      prepare build(sort: [timer_expires_at: :asc], load: [:archived])
     end
 
     # "What do we know" -- every presence, including cleared/missing/gone.
@@ -295,7 +320,53 @@ defmodule WandererApp.Api.ScoutStructure do
                     ))
              )
 
-      prepare build(sort: [last_confirmed_at: :desc])
+      prepare build(sort: [last_confirmed_at: :desc], load: [:archived])
+    end
+
+    # What a reader archived and the feed has not contradicted since --
+    # the restore list, and the only place an archived structure is
+    # listed as such. No `since` argument on purpose: an archive is a
+    # standing judgement, so hiding it behind the window selector would
+    # make it unrecoverable from the UI the moment it aged out.
+    read :archived do
+      argument :system_id, :integer
+      argument :q, :string
+
+      filter expr(
+               archived == true and
+                 (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
+                 (is_nil(^arg(:q)) or
+                    fragment(
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      structure_name,
+                      owner_name,
+                      group_name,
+                      nearest_celestial,
+                      ^arg(:q)
+                    ))
+             )
+
+      prepare build(sort: [archived_at: :desc], load: [:archived])
+    end
+
+    # Not atomic: both changes are plain attribute writes, but the
+    # actor-supplied argument keeps Ash from proving that, and a bulk
+    # path for a one-row button is not worth the ceremony.
+    update :archive do
+      require_atomic? false
+      accept []
+      argument :user_id, :uuid
+
+      change set_attribute(:archived_at, &DateTime.utc_now/0)
+      change set_attribute(:archived_by_user_id, arg(:user_id))
+    end
+
+    update :restore do
+      require_atomic? false
+      accept []
+
+      change set_attribute(:archived_at, nil)
+      change set_attribute(:archived_by_user_id, nil)
     end
   end
 
@@ -382,10 +453,27 @@ defmodule WandererApp.Api.ScoutStructure do
     # to nil by any positive sighting.
     attribute :missing_since, :utc_datetime
 
+    # Set by a reader, never by the feed. See @moduledoc: suppression
+    # lasts until `last_changed_at` moves past this.
+    attribute :archived_at, :utc_datetime
+    attribute :archived_by_user_id, :uuid
+
     attribute :map_id, :uuid
 
     create_timestamp(:inserted_at)
     update_timestamp(:updated_at)
+  end
+
+  calculations do
+    # The suppression predicate, defined ONCE and inlined into every
+    # board's filter by AshPostgres. `last_changed_at` nil means nothing
+    # has ever changed about this structure, so the archive stands.
+    calculate :archived,
+              :boolean,
+              expr(
+                not is_nil(archived_at) and
+                  (is_nil(last_changed_at) or last_changed_at <= archived_at)
+              )
   end
 
   identities do

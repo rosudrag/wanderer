@@ -441,6 +441,50 @@ defmodule WandererAppWeb.ScoutComponents do
   defp presence_badge_class(:seen), do: "bg-success/15 text-success"
   defp presence_badge_class(_other), do: "bg-neutral-800 text-gray-500"
 
+  attr :row, :map, required: true
+
+  @doc """
+  CHEWY PATCH: the archive button every structure board carries in its
+  last column — the one control on this page that writes.
+
+  Archiving is how a reader says "I flew there, it is not there": the row
+  leaves every opportunity board, the red banner and the sidebar badge,
+  and lands on the Archived board, which is where it is undone. The
+  suppression is NOT permanent and NOT a delete — see the `:archived`
+  calculation on `WandererApp.Api.ScoutStructure`.
+
+  Rendered from `row.archived`, the loaded calculation, so the button and
+  the SQL that hid the row can never disagree about what archived means.
+  """
+  def archive_cell(assigns) do
+    ~H"""
+    <button
+      :if={!archived?(@row)}
+      phx-click="archive_structure"
+      phx-value-id={@row.structure_id}
+      class="btn btn-ghost btn-xs text-gray-600 hover:text-error"
+      title="Archive — take this off the boards until its state changes"
+    >
+      ✕
+    </button>
+    <button
+      :if={archived?(@row)}
+      phx-click="restore_structure"
+      phx-value-id={@row.structure_id}
+      class="btn btn-ghost btn-xs text-gray-500 hover:text-warning"
+      title="Restore — put this back on the boards"
+    >
+      ↺
+    </button>
+    """
+  end
+
+  # Exact match on `true`: an unloaded Ash calculation is an
+  # `%Ash.NotLoaded{}` struct, which is truthy, and would otherwise draw
+  # the restore button on every live row.
+  defp archived?(%{archived: true}), do: true
+  defp archived?(_row), do: false
+
   attr :expires_at, :any, default: nil
   attr :now, :any, required: true
   attr :absolute, :boolean, default: true

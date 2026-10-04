@@ -43,7 +43,8 @@ defmodule WandererAppWeb.ScoutExportController do
                         alliance_id upkeep_state structure_state status
                         vulnerable anchoring unanchoring timer_seconds timer_expires_at
                         shield_pct armor_pct hull_pct pos_x pos_y pos_z
-                        nearest_celestial nearest_celestial_m missing_count missing_since)a
+                        nearest_celestial nearest_celestial_m missing_count missing_since
+                        archived_at)a
 
   @spawn_columns ~w(observed_at solar_system_id solar_system_name system_truesec location_type
                     location_name spawn_name spawn_category anomaly_type players_in_local

@@ -202,6 +202,7 @@
             <th>Status</th>
             <th>Where</th>
             <th class="w-32">Seen</th>
+            <th class="w-10"></th>
           </tr>
         </thead>
         <tbody>
@@ -220,8 +221,9 @@
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
             <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@unanchored_structures == []} cols={6}>
+          <.empty :if={@unanchored_structures == []} cols={7}>
             Nothing is sitting unanchored.
           </.empty>
         </tbody>
@@ -243,6 +245,7 @@
             <th>Owner</th>
             <th>Status</th>
             <th class="w-32">Seen</th>
+            <th class="w-10"></th>
           </tr>
         </thead>
         <tbody>
@@ -261,8 +264,9 @@
             <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@active_timers == []} cols={6}>No structure timer is running.</.empty>
+          <.empty :if={@active_timers == []} cols={7}>No structure timer is running.</.empty>
         </tbody>
       </.grid>
     </.panel>
@@ -281,6 +285,7 @@
             <th>Status</th>
             <th>Where</th>
             <th class="w-32">Seen</th>
+            <th class="w-10"></th>
           </tr>
         </thead>
         <tbody>
@@ -298,8 +303,9 @@
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
             <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@anchoring_structures == []} cols={6}>
+          <.empty :if={@anchoring_structures == []} cols={7}>
             Nothing anchoring right now.
           </.empty>
         </tbody>
@@ -321,6 +327,7 @@
             <th>Status</th>
             <th>Where</th>
             <th class="w-32">Seen</th>
+            <th class="w-10"></th>
           </tr>
         </thead>
         <tbody>
@@ -339,8 +346,9 @@
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
             <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@unanchoring_structures == []} cols={7}>
+          <.empty :if={@unanchoring_structures == []} cols={8}>
             Nothing unanchoring right now.
           </.empty>
         </tbody>
@@ -362,6 +370,7 @@
             <th>Status</th>
             <th>Where</th>
             <th class="w-32">Seen</th>
+            <th class="w-10"></th>
           </tr>
         </thead>
         <tbody>
@@ -380,10 +389,59 @@
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
             <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@abandoned_structures == []} cols={6}>
+          <.empty :if={@abandoned_structures == []} cols={7}>
             Nothing abandoned or unfuelled in this window.
           </.empty>
+        </tbody>
+      </.grid>
+    </.panel>
+
+    <%!-- CHEWY PATCH: what a reader took off the boards by hand. Only
+          rendered when there is something to undo, and deliberately not
+          bounded by the window selector -- an archive that aged out of
+          the window would be unrecoverable from this page. --%>
+    <.panel
+      :if={@archived_structures != []}
+      title="Archived"
+      count={length(@archived_structures)}
+      hint="hidden from the boards until the feed reports a change; ignores the window"
+    >
+      <.grid id="scout-archived">
+        <thead>
+          <tr>
+            <th>Structure</th>
+            <th>System</th>
+            <th>Owner</th>
+            <th>Status</th>
+            <th class="w-32">Archived</th>
+            <th class="w-32">Seen</th>
+            <th class="w-10"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            :for={row <- @archived_structures}
+            id={"scout-archived-#{row.id}"}
+            class="opacity-60"
+          >
+            <td>
+              <.subject
+                name={row.structure_name || to_string(row.structure_id)}
+                badge={row.group_name}
+                meta={nearest_celestial_label(row)}
+                click="show_structure"
+                phx-value-id={row.structure_id}
+              />
+            </td>
+            <td><.sys row={row} systems={@systems} /></td>
+            <td class="text-gray-300">{row.owner_name || "—"}</td>
+            <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            <td><.seen at={row.archived_at} now={@now} /></td>
+            <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            <td><.archive_cell row={row} /></td>
+          </tr>
         </tbody>
       </.grid>
     </.panel>
@@ -403,6 +461,7 @@
             <th>Status</th>
             <th class="w-28">Comes out</th>
             <th class="w-32">Seen</th>
+            <th class="w-10"></th>
           </tr>
         </thead>
         <tbody>
@@ -421,8 +480,9 @@
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
             <td><.countdown_cell expires_at={row.timer_expires_at} now={@now} /></td>
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@structures == []} cols={6}>
+          <.empty :if={@structures == []} cols={7}>
             <span :if={@totals && @totals.structures == 0}>
               No structure has ever been reported — no scanner client has posted to
               <code class="text-gray-400">/api/maps/:map/scout/structures</code>
@@ -658,7 +718,9 @@
                 {Enum.join(row.changed_fields || [], ", ")}
               </td>
             </tr>
-            <.empty :if={@detail.rows == []} cols={5}>Nothing has happened to this structure yet.</.empty>
+            <.empty :if={@detail.rows == []} cols={5}>
+              Nothing has happened to this structure yet.
+            </.empty>
           </tbody>
         </.grid>
       </div>

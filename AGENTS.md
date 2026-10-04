@@ -100,6 +100,17 @@ every structure board's `DISTINCT ON` orders only to pick the surviving row per 
 armor / hull is stored, exported and merge-significant but NOT rendered — a percentage triple read
 hours later is not actionable.
 
+**A reader can archive a structure, and the expiry clock is `last_changed_at`.** `✕` on any
+structure board (`ScoutComponents.archive_cell/1`) sets `archived_at` on the current-state row; every
+opportunity board, the red banner and the sidebar badge filter `archived == false` through one expr
+calculation on `WandererApp.Api.ScoutStructure`, and the row moves to its own window-independent
+**Archived** board, where `↺` undoes it. It is never a delete — the ingest log, the drill-down and
+the CSV export keep it, and `presence` is untouched. The clock is the point: a sweep re-confirming
+the same hull moves `last_confirmed_at` every few minutes, so keying suppression on THAT would make
+the button useless in the one case it exists for; only a real state change (`last_changed_at`)
+brings a finding back. Any new board added to this page must carry the same filter, or an archived
+structure reappears on it alone.
+
 **`/scout`'s filters are sticky, in localStorage, with no new JavaScript.** Tab, window, search and
 space ride upstream's generic `LocalStorageSetting` hook (`ls_restore_<key>` on mount,
 `ls_update_<key>` on change) through a hidden `#scout-filter-store` div. Server-side storage was
