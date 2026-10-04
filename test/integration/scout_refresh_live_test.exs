@@ -45,6 +45,24 @@ defmodule WandererAppWeb.ScoutRefreshLiveTest do
     assert html =~ "Search for an origin system to begin."
   end
 
+  # The controls that make a route happen only exist once there IS a
+  # route: picking the pilot and pushing it are meaningless with no plan,
+  # and the page shipped once with neither control at all.
+  test "choosing an origin reveals the pilot picker and the Set route button", %{conn: conn} do
+    WandererApp.Cache.delete("scout:planner:adjacency")
+    put_system(990_300_001, "Refreshalpha")
+    put_system(990_300_002, "Refreshbravo")
+    put_jump(990_300_001, 990_300_002)
+
+    {:ok, live, _html} = live(conn, ~p"/scout/refresh")
+
+    html = render_click(live, "select_origin", %{"id" => "990300001", "name" => "Refreshalpha"})
+
+    assert html =~ "Set route"
+    assert html =~ "Refresh Reader"
+    assert html =~ "990300002"
+  end
+
   test "each scout page links to the other", %{conn: conn} do
     {:ok, _live, intel_html} = live(conn, ~p"/scout")
     assert intel_html =~ ~s(href="/scout/refresh")
@@ -60,5 +78,34 @@ defmodule WandererAppWeb.ScoutRefreshLiveTest do
 
     {:ok, _live, intel_html} = live(conn, ~p"/scout")
     refute intel_html =~ ~s(href="/scout/refresh")
+  end
+
+  defp put_system(solar_system_id, name) do
+    {:ok, _system} =
+      WandererApp.Api.MapSolarSystem
+      |> Ash.Changeset.for_create(:create, %{
+        solar_system_id: solar_system_id,
+        solar_system_name: name,
+        solar_system_name_lc: String.downcase(name),
+        region_id: 1,
+        region_name: "Refresh Region",
+        constellation_id: 1,
+        constellation_name: "Refresh Constellation",
+        system_class: 7,
+        security: "0.9"
+      })
+      |> Ash.create(authorize?: false)
+  end
+
+  defp put_jump(from_id, to_id) do
+    for {from, to} <- [{from_id, to_id}, {to_id, from_id}] do
+      {:ok, _jump} =
+        WandererApp.Api.MapSolarSystemJumps
+        |> Ash.Changeset.for_create(:create, %{
+          from_solar_system_id: from,
+          to_solar_system_id: to
+        })
+        |> Ash.create(authorize?: false)
+    end
   end
 end

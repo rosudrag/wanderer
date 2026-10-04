@@ -95,11 +95,7 @@
           class="select select-sm select-bordered bg-neutral-950/60 w-28 py-0"
           title="Coverage ladder kind — visit/anoms/sigs/grid, design doc section 2"
         >
-          <option
-            :for={k <- ~w(visit anoms sigs grid)}
-            value={k}
-            selected={k == to_string(@kind)}
-          >
+          <option :for={k <- ~w(visit anoms sigs grid)} value={k} selected={k == to_string(@kind)}>
             {String.capitalize(k)}
           </option>
         </select>
@@ -153,7 +149,12 @@
     </div>
 
     <div class="join" id="scout-refresh-security">
-      <.space_chip :for={{key, label} <- @security_types} key={key} label={label} selected={key in @security} />
+      <.space_chip
+        :for={{key, label} <- @security_types}
+        key={key}
+        label={label}
+        selected={key in @security}
+      />
     </div>
 
     <button
@@ -168,11 +169,7 @@
 
   <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
     <.stat label="Candidates in scope" value={to_string(@candidates)} />
-    <.stat
-      label="Stops shown"
-      value={to_string(length(@stops))}
-      hint={"of #{@limit} requested"}
-    />
+    <.stat label="Stops shown" value={to_string(length(@stops))} hint={"of #{@limit} requested"} />
     <.stat
       label="Unseen"
       value={to_string(count_reason(@stops, :unseen))}
@@ -200,6 +197,39 @@
     >
       Copy route
     </button>
+
+    <%!-- Setting the route is ESI-only: the game client can take a single
+          destination, not an ordered list, so this goes out with ONE
+          character's token and the page has to name whose. --%>
+    <form phx-change="select_character" class="flex items-center gap-2 ml-2">
+      <select
+        name="character_eve_id"
+        id="scout-refresh-character"
+        title="Whose autopilot this route is written to, through ESI"
+        class="select select-sm select-bordered bg-neutral-950/60 py-0"
+      >
+        <option
+          :for={character <- @characters}
+          value={character.eve_id}
+          selected={character.eve_id == @character_eve_id}
+        >
+          {character.name}
+        </option>
+      </select>
+    </form>
+    <button
+      type="button"
+      phx-click="set_route"
+      id="scout-refresh-set-route"
+      disabled={@characters == []}
+      title="Replaces this character's in-game route with the stops above, in order"
+      class="btn btn-sm btn-primary"
+    >
+      Set route
+    </button>
+    <span :if={@characters == []} class="text-[11px] text-gray-500">
+      No tracked character on this account to set a route on.
+    </span>
   </div>
 
   <.panel
@@ -255,7 +285,10 @@
         <%!-- `@origin_id` is an integer or nil, never a boolean, and `and`
               raises BadBooleanError on anything else -- which crashed the
               whole page on first render. --%>
-        <.empty :if={@stops == [] and not is_nil(@origin_id) and not is_nil(@plan_error)} cols={10}>
+        <.empty
+          :if={@stops == [] and not is_nil(@origin_id) and not is_nil(@plan_error)}
+          cols={10}
+        >
           {plan_error_message(@plan_error)}
         </.empty>
         <.empty :if={@stops == [] and not is_nil(@origin_id) and is_nil(@plan_error)} cols={10}>

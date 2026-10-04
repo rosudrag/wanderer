@@ -47,7 +47,7 @@ defmodule WandererAppWeb.ScoutRefreshLive do
 
   alias WandererApp.Api.{MapSolarSystem, ScoutSystemCoverage}
   alias WandererApp.Identity.ScoutAccess
-  alias WandererApp.Scout.{Planner, Space}
+  alias WandererApp.Scout.{Planner, PlanWaypoints, Space}
 
   @kinds ~w(visit anoms sigs grid)
   @default_kind :sigs
@@ -77,6 +77,14 @@ defmodule WandererAppWeb.ScoutRefreshLive do
          |> push_navigate(to: ~p"/scout")}
 
       true ->
+        # The pilots this user could push a route onto. A route is set
+        # through ESI with ONE character's token (a multi-stop route
+        # cannot be set from the game client at all), so the page has to
+        # name which pilot -- there is no sensible default beyond "the
+        # first one you own", and the choice is sticky like every other
+        # control here.
+        characters = socket.assigns.current_user.characters || []
+
         {:ok,
          socket
          |> assign(
@@ -93,6 +101,8 @@ defmodule WandererAppWeb.ScoutRefreshLive do
            regions: [],
            security: @default_security,
            security_types: Enum.reject(Space.types(), fn {key, _label} -> key == :other end),
+           characters: characters,
+           character_eve_id: characters |> List.first() |> character_eve_id(),
            now: DateTime.utc_now(),
            result: nil,
            stops: [],
@@ -103,6 +113,9 @@ defmodule WandererAppWeb.ScoutRefreshLive do
          |> load()}
     end
   end
+
+  defp character_eve_id(nil), do: nil
+  defp character_eve_id(%{eve_id: eve_id}), do: eve_id
 
   # -------------------------------------------------------------------
   # Origin search -- `MapSolarSystem.find_by_name/1`, the same
@@ -220,7 +233,49 @@ defmodule WandererAppWeb.ScoutRefreshLive do
 
   def handle_event("refresh", _params, socket), do: {:noreply, load(socket)}
 
-  # The one write this page has: destroys the stored coverage row for
+  def handle_event("select_character", %{"character_eve_id" => eve_id}, socket) do
+    # Validated against the user's OWN characters, not trusted from the
+    # form: this id decides whose autopilot gets rewritten.
+    if Enum.any?(socket.assigns.characters, &(&1.eve_id == eve_id)) do
+      {:noreply, assign(socket, character_eve_id: eve_id)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # The second write this page has, and the loud one: it replaces what a
+  # pilot's client shows. A multi-stop route cannot be set from the game
+  # client at all -- only ESI writes an ordered waypoint list -- so this
+  # goes out with that character's own token
+  # (`WandererApp.Scout.PlanWaypoints`, design section 6 mode A).
+  #
+  # The pushed count is reported, never assumed: the push halts on the
+  # first ESI refusal rather than skipping a stop, so a short route is a
+  # PREFIX of the plan and the flash has to say so.
+  def handle_event("set_route", _params, socket) do
+    %{plan_stops: plan_stops, character_eve_id: character_eve_id} = socket.assigns
+
+    case PlanWaypoints.push(plan_stops, character_eve_id) do
+      {:ok, pushed} ->
+        gate_count = Enum.count(plan_stops, &(&1.leg == :gate))
+        name = character_name(socket.assigns.characters, character_eve_id)
+
+        {:noreply, put_flash(socket, :info, push_message(length(pushed), gate_count, name))}
+
+      {:error, :no_gate_stops} ->
+        {:noreply, put_flash(socket, :error, "This plan has no gate-reachable stops to fly.")}
+
+      {:error, :unknown_character} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Pick a character this instance tracks before setting a route."
+         )}
+    end
+  end
+
+  # The page's other write, and the quiet one: destroys the stored coverage row for
   # this system + the SELECTED kind, the reader's "re-scout this now"
   # override (design doc section 9, "operator wants a system re-done
   # now"). Not a soft archive like the intel log's structure board --
@@ -342,6 +397,20 @@ defmodule WandererAppWeb.ScoutRefreshLive do
   # Helpers
   # -------------------------------------------------------------------
 
+  defp character_name(characters, eve_id) do
+    case Enum.find(characters, &(&1.eve_id == eve_id)) do
+      nil -> "that character"
+      character -> character.name
+    end
+  end
+
+  defp push_message(pushed, pushed, name),
+    do: "Route set on #{name}: #{pushed} #{plural(pushed, "waypoint", "waypoints")}."
+
+  defp push_message(pushed, gate_count, name),
+    do:
+      "ESI accepted only #{pushed} of #{gate_count} stops -- #{name}'s route is the first part of this plan, not all of it."
+
   defp parse_region_ids(text) do
     text
     |> String.split(",", trim: true)
@@ -397,23 +466,19 @@ defmodule WandererAppWeb.ScoutRefreshLive do
     socket = assign(socket, now: DateTime.utc_now())
 
     if socket.assigns.origin_id do
-      opts = [
-        origin: socket.assigns.origin_id,
-        kind: socket.assigns.kind,
-        limit: socket.assigns.limit,
-        max_jumps: socket.assigns.max_jumps,
-        regions: socket.assigns.regions,
-        security: socket.assigns.security
-      ]
+      opts = plan_opts(socket)
 
       case Planner.rank(opts) do
         {:ok, result} ->
+          plan_stops = plan_stops(opts)
+
           assign(socket,
             result: result,
             stops: result.stops,
             candidates: result.candidates,
             generated_at: result.generated_at,
-            route_ids: plan_route_ids(opts),
+            plan_stops: plan_stops,
+            route_ids: route_ids(plan_stops),
             plan_error: nil
           )
 
@@ -423,6 +488,7 @@ defmodule WandererAppWeb.ScoutRefreshLive do
             stops: [],
             candidates: 0,
             generated_at: nil,
+            plan_stops: [],
             route_ids: "",
             plan_error: reason
           )
@@ -433,20 +499,33 @@ defmodule WandererAppWeb.ScoutRefreshLive do
         stops: [],
         candidates: 0,
         generated_at: nil,
+        plan_stops: [],
         route_ids: "",
         plan_error: nil
       )
     end
   end
 
-  # The copy box's content: whatever `GET /scout/plan` would return for
-  # the same scope, so the two can never disagree. A plan failure here is
-  # not a page failure -- the ranking table above still rendered, and an
-  # empty box is the honest answer.
-  defp plan_route_ids(opts) do
+  defp plan_opts(socket) do
+    [
+      origin: socket.assigns.origin_id,
+      kind: socket.assigns.kind,
+      limit: socket.assigns.limit,
+      max_jumps: socket.assigns.max_jumps,
+      regions: socket.assigns.regions,
+      security: socket.assigns.security
+    ]
+  end
+
+  # The copy box and the "Set route" button both read this: whatever
+  # `GET /scout/plan` would return for the same scope, so a human's
+  # pasted list, the pushed route and the bot's own plan are the same
+  # thing. A plan failure here is not a page failure -- the ranking table
+  # above still rendered, and an empty box is the honest answer.
+  defp plan_stops(opts) do
     case Planner.plan(opts) do
-      {:ok, %{stops: stops}} -> route_ids(stops)
-      {:error, _reason} -> ""
+      {:ok, %{stops: stops}} -> stops
+      {:error, _reason} -> []
     end
   end
 end
