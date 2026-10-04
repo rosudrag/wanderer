@@ -52,11 +52,14 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
   require Ash.Query
 
+  # The page's whole vocabulary -- `panel/1`, `stat/1`, the cells, and
+  # the formatters they render with. The template calls them unqualified.
+  import WandererAppWeb.ScoutComponents
+
   alias WandererApp.Api.{ScoutSpawnSighting, ScoutStructureSighting}
   alias WandererApp.CachedInfo
   alias WandererApp.Identity.ScoutAccess
   alias WandererApp.Scout.Space
-  alias WandererApp.Scout.Status
   alias WandererApp.Scout.Stats
 
   @windows [{"24 hours", 1}, {"7 days", 7}, {"30 days", 30}, {"90 days", 90}]
@@ -412,200 +415,68 @@ defmodule WandererAppWeb.ScoutIntelLive do
   defp fresh?(%{observed_at: at}, now), do: DateTime.diff(now, at, :second) < @fresh_seconds
 
   # -------------------------------------------------------------------
-  # Rendering helpers
+  # Summary strip
+  #
+  # Counted from the rows the page already holds, never re-queried: the
+  # strip answers "is anything happening right now" before the reader
+  # starts scanning tables, and a count worth a second query would not
+  # be worth that. Everything else that used to live below here --
+  # countdowns, badges, system names -- moved to
+  # `WandererAppWeb.ScoutComponents`, with the cells that render it.
   # -------------------------------------------------------------------
 
   @doc false
-  # "2d 4h", "3h 12m", "45s" -- a reinforcement timer is read at a glance
-  # or not at all, so never more than two units.
-  def countdown(nil, _now), do: "—"
-
-  def countdown(expires_at, now) do
-    case DateTime.diff(expires_at, now, :second) do
-      seconds when seconds <= 0 -> "out"
-      seconds -> format_countdown(seconds)
-    end
-  end
-
-  defp format_countdown(seconds) do
-    days = div(seconds, 86_400)
-    hours = div(rem(seconds, 86_400), 3600)
-    minutes = div(rem(seconds, 3600), 60)
-
-    cond do
-      days > 0 -> "#{days}d #{hours}h"
-      hours > 0 -> "#{hours}h #{minutes}m"
-      minutes > 0 -> "#{minutes}m"
-      true -> "#{seconds}s"
-    end
+  # Under an hour is a fleet forming now -- the one number on this page
+  # worth colouring a card for.
+  def urgent_timers(timers, now) do
+    Enum.count(timers, fn row ->
+      case row.timer_expires_at do
+        nil -> false
+        expires_at -> DateTime.diff(expires_at, now, :second) in 1..3_599
+      end
+    end)
   end
 
   @doc false
-  # Urgency is the whole point of the timer table: under an hour is a
-  # fleet forming now, under six is one forming today.
-  def urgency(nil, _now), do: "text-gray-500"
+  def timer_hint([], _now), do: "nothing running"
 
-  def urgency(expires_at, now) do
-    case DateTime.diff(expires_at, now, :second) do
-      seconds when seconds <= 0 -> "text-gray-500 line-through"
-      seconds when seconds < 3_600 -> "text-error font-semibold"
-      seconds when seconds < 21_600 -> "text-warning"
-      _ -> "text-gray-200"
+  def timer_hint(timers, now) do
+    case urgent_timers(timers, now) do
+      0 -> "none inside the hour"
+      count -> "#{count} inside the hour"
     end
   end
 
   @doc false
-  # The fresh list's analogue of urgency/2: how much to trust that a
-  # spawn seen this long ago is still sitting where it was reported.
-  def freshness(nil, _now), do: "text-gray-500"
+  # "250+" when the read came back full: the strip never claims the
+  # window held exactly one page of rows.
+  def count_label(rows, true), do: "#{length(rows)}+"
+  def count_label(rows, _more?), do: to_string(length(rows))
 
-  def freshness(observed_at, now) do
-    case DateTime.diff(now, observed_at, :second) do
-      seconds when seconds < 1_800 -> "text-success font-semibold"
-      seconds when seconds < 5_400 -> "text-warning"
-      _ -> "text-gray-200"
+  @doc false
+  # The window as the selector spells it, so the cards and the toolbar
+  # never disagree about what "in the window" means.
+  def window_label(days, windows) do
+    case List.keyfind(windows, days, 1) do
+      {label, _days} -> label
+      nil -> "#{days} days"
     end
   end
 
   @doc false
-  # Section copy derives from @fresh_seconds so the two never drift.
-  def fresh_window_label, do: "#{div(@fresh_seconds, 3600)} hours"
+  # The richest sighting in the window. `nil` renders as "—" through
+  # `isk/1`, which is also what an empty window gives.
+  def richest([]), do: nil
 
-  @doc false
-  def at(nil), do: "—"
-  def at(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M")
-
-  @doc false
-  # "4m ago" answers "is the bot alive"; an absolute timestamp does not.
-  def ago(nil, _now), do: "never"
-
-  def ago(datetime, now) do
-    case DateTime.diff(now, datetime, :second) do
-      seconds when seconds < 60 -> "just now"
-      seconds -> format_countdown(seconds) <> " ago"
+  def richest(spawns) do
+    spawns
+    |> Enum.map(& &1.isk_value)
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      values -> Enum.max_by(values, &Decimal.to_float/1)
     end
   end
-
-  @doc false
-  # Millions, because every value in this log is one: "412.5M".
-  def isk(nil), do: "—"
-
-  def isk(value) do
-    millions = value |> Decimal.div(1_000_000) |> Decimal.round(1) |> Decimal.to_float()
-    "#{millions}M"
-  end
-
-  @doc false
-  # The closest static-map body to the STRUCTURE (not the observer),
-  # rendered as a dim second line under the structure name. `distance_m`
-  # is the observer's range and goes stale the moment the session ends;
-  # this is permanent, which is the point of showing it at all. Accepts
-  # any struct/map carrying the two fields -- `List.first/1` on an empty
-  # history list hands back `nil`, and an unrelated row (a spawn, a
-  # hotspot) simply has neither key.
-  def nearest_celestial_label(row) do
-    row = row || %{}
-
-    case Map.get(row, :nearest_celestial) do
-      nil -> nil
-      "" -> nil
-      name -> format_celestial(name, Map.get(row, :nearest_celestial_m))
-    end
-  end
-
-  defp format_celestial(name, meters) when is_integer(meters) and meters >= 1000,
-    do: "#{name} — #{Float.round(meters / 1000, 1)} km"
-
-  defp format_celestial(name, meters) when is_integer(meters), do: "#{name} — #{meters} m"
-  defp format_celestial(name, _meters), do: name
-
-  @doc false
-  # One badge, coloured by status family (`WandererApp.Scout.Status`)
-  # rather than by the raw string, so every status in the same tier
-  # reads the same at a glance. The ONE place this mapping lives --
-  # every table on this page calls through here instead of re-deriving
-  # it inline.
-  #
-  #   * Abandoned / NoFuel -- the opportunity tier: asset safety is off
-  #     or nobody is paying the fuel bill.
-  #   * ArmorReinforced / HullReinforced / ShieldReinforced -- the
-  #     timer tier: a clock is running.
-  #   * ArmorVulnerable / HullVulnerable -- the live-fight tier:
-  #     shootable right now.
-  #   * the ANCHORING family -- the free-kill tier: no fitting, no
-  #     services, a live vulnerability window.
-  #   * Unanchoring -- its own tier: a one-shot deadline.
-  #   * STEADY -- muted: nothing to do here.
-  def status_badge_class(nil), do: "badge-ghost"
-
-  def status_badge_class(status) do
-    cond do
-      status in Status.dead_family() -> "badge-error"
-      status in Status.vulnerable_family() -> "badge-error"
-      status in Status.unanchoring_family() -> "badge-error"
-      status in Status.reinforced_family() -> "badge-warning"
-      status in Status.anchoring_family() -> "badge-warning"
-      status in Status.steady_family() -> "badge-ghost"
-      true -> "badge-ghost"
-    end
-  end
-
-  @doc false
-  # "72% / 54% / 100%": shield, armor, hull, in that order. "—" for
-  # whichever the client has not reported (a POCO carries no hull_pct).
-  def hp_label(row) do
-    [row.shield_pct, row.armor_pct, row.hull_pct]
-    |> Enum.map(&pct_label/1)
-    |> Enum.join(" / ")
-  end
-
-  defp pct_label(nil), do: "—"
-  defp pct_label(value), do: "#{value}%"
-
-  @doc false
-  # The resolved nearest celestial if the client has one, else the raw
-  # observer-relative distance -- one fallback a caller can render
-  # without checking both fields itself.
-  def distance_or_celestial(row) do
-    case nearest_celestial_label(row) do
-      nil -> format_distance(Map.get(row, :distance_m))
-      label -> label
-    end
-  end
-
-  defp format_distance(nil), do: "—"
-
-  defp format_distance(meters) when is_integer(meters) and meters >= 1000,
-    do: "#{Float.round(meters / 1000, 1)} km"
-
-  defp format_distance(meters) when is_integer(meters), do: "#{meters} m"
-  defp format_distance(_meters), do: "—"
-
-  @doc false
-  # The client logs the raw system ID as the name when it has not
-  # resolved the real one yet; `systems` is this page's own resolution,
-  # and the stored string is the fallback.
-  def system(row, systems) do
-    case Map.get(systems, row.solar_system_id) do
-      %{solar_system_name: name} when is_binary(name) and name != "" -> name
-      _ -> row.solar_system_name || to_string(row.solar_system_id)
-    end
-  end
-
-  @doc false
-  def system_class(row, systems) do
-    case Map.get(systems, row.solar_system_id) do
-      %{class_title: title} when is_binary(title) and title != "" -> title
-      _ -> nil
-    end
-  end
-
-  @doc false
-  # Truesec as EVE shows it: two decimals, rounded toward zero so a
-  # 0.049 system reads 0.0 rather than 0.1.
-  def security(nil), do: nil
-  def security(value) when is_float(value), do: :erlang.float_to_binary(value, decimals: 1)
-  def security(_), do: nil
 
   @doc false
   def export_path(assigns) do

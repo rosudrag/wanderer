@@ -67,6 +67,18 @@ page. It is affordable only because `ScoutAccess.can_view_cached?/1` answers fro
 and grant/revoke invalidate the entry; the page's own `mount/3` still calls the uncached `can_view?/1`,
 so a stale cache can cost a wrong icon but never a wrong page. Copy that pattern or don't gate at all.
 
+**`/scout`'s markup is a component vocabulary, not nine hand-written tables.**
+`components/scout_components.ex` owns the page's panels, summary cards, cells and formatters, and
+both scout LiveViews `import` it; the templates are markup and the LiveViews are reads. It exists
+because the inline version drifted — a truesec in one table and not the next, two of four tables
+showing the nearest celestial, three spellings of "nothing here". Three rendering traps it also
+pins down: daisyUI `select-sm` (`line-height: 2rem`) plus `@tailwindcss/forms` (`padding: .5rem`)
+clips a select's own text until `py-0`; `.modal:not(dialog:not(.modal-open))` outranks a
+`bg-black/70` utility, so a dimmed backdrop needs `!bg-black/70`; and the sidebar's icons must stay
+distinct — `scout_nav.ex` shipped `hero-viewfinder-circle-solid`, which is already the Map entry's
+glyph. Add to that module rather than styling a new table inline. See `docs/chewy/scout-intel.md`
+§"How it is rendered".
+
 ## Testing the map without an EVE account
 
 `dev/README.md` is the command sequence: a throwaway compose stack on `127.0.0.1:4100`, `/dev/login?token=…`,

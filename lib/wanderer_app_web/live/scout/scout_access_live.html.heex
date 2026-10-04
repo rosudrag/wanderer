@@ -1,62 +1,64 @@
 <main class="w-full h-full p-4 pl-20 pb-20 overflow-auto text-gray-200">
-  <h1 class="text-2xl font-semibold mb-2">Scout Log Access</h1>
-  <p class="mb-2 text-gray-400">
-    Grants the <code>scout_intel_view</code>
-    permission, which is what
-    <.link navigate={~p"/scout"} class="link">the scout log</.link>
-    checks. Only you can change this page: it is restricted to the user owning
-    <span class="text-gray-200">{@superadmin_character}</span>
-    (<code>WANDERER_BOOTSTRAP_ADMIN_CHARACTER</code>), not to corp admins.
-  </p>
-  <p class="mb-6 text-gray-400">
-    You can always read the log yourself without appearing in this list.
-  </p>
-
-  <form phx-submit="grant" class="flex flex-wrap items-end gap-2 mb-8" id="scout-access-form">
-    <div>
-      <label class="block text-xs text-gray-400 mb-1">EVE character name</label>
-      <input
-        type="text"
-        name="character_name"
-        id="scout-access-character"
-        class="input input-sm input-bordered w-80"
-        placeholder="Exact character name"
-        autocomplete="off"
-      />
+  <div class="max-w-3xl">
+    <div class="flex flex-wrap items-center gap-3 mb-3">
+      <h1 class="text-xl font-semibold tracking-tight">Scout Log Access</h1>
+      <.link navigate={~p"/scout"} class="btn btn-sm btn-ghost ml-auto">Back to the log</.link>
     </div>
-    <button type="submit" class="btn btn-sm btn-primary" id="scout-access-submit">
-      Grant access
-    </button>
-  </form>
 
-  <table class="table w-full" id="scout-access-members">
-    <thead>
-      <tr>
-        <th>User</th>
-        <th>Granted</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr :for={member <- @members} id={"scout-access-#{member.user_id}"}>
-        <td>{member.user_name || member.user_id}</td>
-        <td>{Calendar.strftime(member.granted_at, "%Y-%m-%d %H:%M")}</td>
-        <td>
-          <button
-            phx-click="revoke"
-            phx-value-user_id={member.user_id}
-            class="btn btn-xs btn-error"
-            data-confirm="Revoke this user's access to the scout log?"
-          >
-            Revoke
-          </button>
-        </td>
-      </tr>
-      <tr :if={@members == []}>
-        <td colspan="3" class="text-gray-500">
-          Nobody else has been granted access.
-        </td>
-      </tr>
-    </tbody>
-  </table>
+    <p class="text-sm text-gray-400 mb-5">
+      Grants <code class="text-gray-300">scout_intel_view</code>, the permission
+      <.link navigate={~p"/scout"} class="link">the scout log</.link>
+      checks. Only
+      <span class="text-gray-200">{@superadmin_character}</span>
+      (<code class="text-gray-300">WANDERER_BOOTSTRAP_ADMIN_CHARACTER</code>) can change this page
+      — a corp admin cannot. You read the log yourself without appearing in the list below.
+    </p>
+
+    <.panel title="Grant access" hint="Exact EVE character name; the grant lands on their account.">
+      <form phx-submit="grant" class="flex flex-wrap items-center gap-2 p-3" id="scout-access-form">
+        <input
+          type="text"
+          name="character_name"
+          id="scout-access-character"
+          class="input input-sm input-bordered bg-neutral-950/60 w-80"
+          placeholder="Character name"
+          autocomplete="off"
+        />
+        <button type="submit" class="btn btn-sm btn-primary" id="scout-access-submit">
+          Grant access
+        </button>
+      </form>
+    </.panel>
+
+    <.panel title="Has access" count={length(@members)}>
+      <.grid id="scout-access-members">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th class="w-40">Granted</th>
+            <th class="w-24"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={member <- @members} id={"scout-access-#{member.user_id}"}>
+            <td class="font-medium">{member.user_name || member.user_id}</td>
+            <td class="font-mono text-xs text-gray-400">
+              {Calendar.strftime(member.granted_at, "%Y-%m-%d %H:%M")}
+            </td>
+            <td class="text-right">
+              <button
+                phx-click="revoke"
+                phx-value-user_id={member.user_id}
+                class="btn btn-xs btn-ghost text-error"
+                data-confirm="Revoke this user's access to the scout log?"
+              >
+                Revoke
+              </button>
+            </td>
+          </tr>
+          <.empty :if={@members == []} cols={3}>Nobody else has been granted access.</.empty>
+        </tbody>
+      </.grid>
+    </.panel>
+  </div>
 </main>

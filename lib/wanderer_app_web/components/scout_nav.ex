@@ -26,18 +26,23 @@ defmodule WandererAppWeb.ScoutNav do
 
   def scout_nav_links(assigns) do
     ~H"""
-    <div :if={@show_scout? and @show_sidebar}>
-      <.link
-        navigate={~p"/scout"}
-        class={[
-          "flex-1 w-full h-14 block text-gray-400 hover:text-white p-3 tooltip tooltip-right",
-          @active_tab in [:scout, :scout_access] && "text-white"
-        ]}
-        data-tip="Scout Log"
-      >
-        <.icon name="hero-viewfinder-circle-solid" class="w-6 h-6" />
-      </.link>
-    </div>
+    <li :if={@show_scout? and @show_sidebar} class="flex-1 w-full">
+      <div class="tooltip tooltip-right" data-tip="Scout Log">
+        <.link
+          navigate={~p"/scout"}
+          class={[
+            "h-full w-full text-gray-400 hover:text-white block p-3",
+            @active_tab in [:scout, :scout_access] &&
+              "border-r-4 text-white border-r-orange-400"
+          ]}
+          aria-current={if @active_tab in [:scout, :scout_access], do: "true", else: "false"}
+        >
+          <%!-- Not `hero-viewfinder-circle-solid`: that is the Map entry's
+                icon, two rows up, and the sidebar had the same glyph twice. --%>
+          <.icon name="hero-eye-solid" class="w-6 h-6" />
+        </.link>
+      </div>
+    </li>
     """
   end
 end

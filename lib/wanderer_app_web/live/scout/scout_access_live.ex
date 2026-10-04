@@ -17,6 +17,9 @@ defmodule WandererAppWeb.ScoutAccessLive do
 
   use WandererAppWeb, :live_view
 
+  # Same panel/table vocabulary as the log page it guards.
+  import WandererAppWeb.ScoutComponents
+
   alias WandererApp.Identity.ScoutAccess
 
   @impl true

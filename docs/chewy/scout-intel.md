@@ -287,6 +287,34 @@ every table on the tab, including the timer table and "Still out there" —
 `since` deliberately does not: a running timer is running however old the
 sighting that found it.
 
+### How it is rendered
+
+`WandererAppWeb.ScoutComponents` owns the page's vocabulary; the template is
+markup and the LiveView is reads. It exists because nine tables spelled the
+same five cells out inline and drifted: "Last seen" showed a truesec "Live
+timers" did not, two of the four structure tables showed the nearest celestial
+and two did not, and an empty table was a bare `<td>` in one place and a
+sentence in another.
+
+|Component|What it fixes|
+|---|---|
+|`panel/1`|A section is a bordered card with a title, a **row count**, and a one-line hint — not an `<h2>` over a paragraph of prose over a full-bleed table, which is what made the page read as a wall|
+|`stat/1`|The strip under the toolbar: timers running (and how many inside the hour), anchoring, unanchoring, rows in the window. Counted from the rows the page already holds — never a second query — and capped reads say `250+`, the same string the panel chip shows|
+|`sys/1`|Name, then **one** qualifier: the class title in w-space and Pochven, the security status everywhere else. `map_solar_system_v2` titles nullsec `0.0` and lowsec `L`, so showing both rendered `1DQ1-A 0.0 -0.4` and `J110145 C5 -1.0`. Falls back to the static map's `security` when the client logged no truesec|
+|`status/1`|Coloured by family, and **quiet** for the steady tier: when every row shouts, the reinforced one stops standing out|
+|`seen/1`, `countdown_cell/1`|Age first (what you act on), timestamp under it (what you paste in fleet chat)|
+|`empty/1`|One empty state, so every table says nothing the same way|
+
+Three fixes worth remembering because each was invisible until the page was
+rendered in a browser: daisyUI's `select-sm` sets `line-height: 2rem` while
+`@tailwindcss/forms` sets `padding: 0.5rem`, so the window selector clipped
+its own text until `py-0` (the same pair is live on every other `select-sm`
+in this app); `.modal:not(dialog:not(.modal-open))` outranks a `bg-black/70`
+utility, so dimming the backdrop needs `!bg-black/70`; and `ScoutNav` used
+`hero-viewfinder-circle-solid`, which is the Map entry's icon two rows above
+it — the sidebar carried the same glyph twice, and the entry never drew the
+orange active bar every upstream entry draws.
+
 ### The space filter
 
 Six chips — High, Low, Null, W-Space, Pochven, Other — all on by default,
@@ -368,6 +396,7 @@ stale cache may cost a wrong icon, never a wrong page.
 |Flag plug|`lib/wanderer_app_web/controllers/plugs/check_scout_intel_disabled.ex`|
 |Permission tier|`lib/wanderer_app/identity/scout_access.ex`|
 |Pages|`lib/wanderer_app_web/live/scout/scout_{intel,access}_live.ex`|
+|Panels, cells, formatters|`lib/wanderer_app_web/components/scout_components.ex`|
 |Sidebar entry|`lib/wanderer_app_web/components/scout_nav.ex`|
 |Tests|`test/integration/scout_intel_test.exs`|
 
