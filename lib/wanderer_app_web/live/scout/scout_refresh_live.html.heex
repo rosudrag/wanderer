@@ -10,6 +10,22 @@
   >
   </div>
 
+  <%!-- The same tab strip ScoutIntelLive renders, so this page is not a
+        dead end: its two siblings are separate LiveView STATE there
+        (`select_tab`), not routes, so they navigate to `/scout` and that
+        page's sticky filters restore whichever tab was last read. --%>
+  <div class="flex flex-wrap items-center gap-2 mb-4 p-2 rounded-lg border border-neutral-800 bg-neutral-900/30">
+    <div role="tablist" class="tabs tabs-boxed tabs-sm bg-neutral-950/60">
+      <.link navigate={~p"/scout"} role="tab" id="scout-refresh-tab-structures" class="tab">
+        Structures
+      </.link>
+      <.link navigate={~p"/scout"} role="tab" id="scout-refresh-tab-spawns" class="tab">
+        Spawns
+      </.link>
+      <span role="tab" id="scout-refresh-tab-refresh" class="tab tab-active">Refresh</span>
+    </div>
+  </div>
+
   <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-3">
     <h1 class="text-xl font-semibold tracking-tight">Scout Refresh Queue</h1>
 
@@ -236,10 +252,13 @@
         <.empty :if={@stops == [] and is_nil(@origin_id)} cols={10}>
           Search for an origin system to begin.
         </.empty>
-        <.empty :if={@stops == [] and @origin_id and @plan_error} cols={10}>
+        <%!-- `@origin_id` is an integer or nil, never a boolean, and `and`
+              raises BadBooleanError on anything else -- which crashed the
+              whole page on first render. --%>
+        <.empty :if={@stops == [] and not is_nil(@origin_id) and not is_nil(@plan_error)} cols={10}>
           {plan_error_message(@plan_error)}
         </.empty>
-        <.empty :if={@stops == [] and @origin_id and is_nil(@plan_error)} cols={10}>
+        <.empty :if={@stops == [] and not is_nil(@origin_id) and is_nil(@plan_error)} cols={10}>
           Nothing in scope needs scouting right now.
         </.empty>
       </tbody>
