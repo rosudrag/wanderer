@@ -804,28 +804,26 @@ defmodule WandererAppWeb.ScoutComponents do
   def plural(count, _singular, plural), do: "#{count} #{plural}"
 
   @doc false
-  # The closest static-map body to the STRUCTURE (not the observer),
-  # rendered as a dim second line under the structure name. `distance_m`
-  # is the observer's range and goes stale the moment the session ends;
-  # this is permanent, which is the point of showing it at all. Accepts
-  # any struct/map carrying the two fields -- `List.first/1` on an empty
-  # history list hands back `nil`, and an unrelated row (a spawn, a
-  # hotspot) simply has neither key.
+  # The closest static-map body to the STRUCTURE, by NAME only.
+  #
+  # Every metre this page used to print was noise. `distance_m` was the
+  # range from the character that happened to be in the system when the
+  # sweep ran -- it describes where a scout was parked, not where the
+  # structure is, and is meaningless the moment that session ends.
+  # `nearest_celestial_m` is real but unactionable: a reader wants "it
+  # is on moon 3", never "it is 12.4 km off moon 3". So the celestial
+  # renders as a bare name and both distances are gone from the UI
+  # (`nearest_celestial_m` is still stored, merged and exported).
+  #
+  # Accepts any struct/map carrying the field -- `List.first/1` on an
+  # empty history list hands back `nil`, and an unrelated row (a spawn,
+  # a hotspot) simply has no such key.
   def nearest_celestial_label(row) do
-    row = row || %{}
-
-    case Map.get(row, :nearest_celestial) do
-      nil -> nil
-      "" -> nil
-      name -> format_celestial(name, Map.get(row, :nearest_celestial_m))
+    case Map.get(row || %{}, :nearest_celestial) do
+      name when is_binary(name) and name != "" -> name
+      _ -> nil
     end
   end
-
-  defp format_celestial(name, meters) when is_integer(meters) and meters >= 1000,
-    do: "#{name} — #{Float.round(meters / 1000, 1)} km"
-
-  defp format_celestial(name, meters) when is_integer(meters), do: "#{name} — #{meters} m"
-  defp format_celestial(name, _meters), do: name
 
   @doc false
   # One badge, coloured by status family (`WandererApp.Scout.Status`)
@@ -864,23 +862,12 @@ defmodule WandererAppWeb.ScoutComponents do
   end
 
   @doc false
-  # The resolved nearest celestial if the client has one, else the raw
-  # observer-relative distance -- one fallback a caller can render
-  # without checking both fields itself.
-  def distance_or_celestial(row) do
-    case nearest_celestial_label(row) do
-      nil -> format_distance(Map.get(row, :distance_m))
-      label -> label
-    end
-  end
-
-  defp format_distance(nil), do: "—"
-
-  defp format_distance(meters) when is_integer(meters) and meters >= 1000,
-    do: "#{Float.round(meters / 1000, 1)} km"
-
-  defp format_distance(meters) when is_integer(meters), do: "#{meters} m"
-  defp format_distance(_meters), do: "—"
+  # The "Where" column: the nearest celestial's name, or nothing. There
+  # is deliberately no distance fallback any more -- the old one printed
+  # `distance_m`, the observing character's own range, which told a
+  # reader where a scout was sitting rather than anything about the
+  # target.
+  def where(row), do: nearest_celestial_label(row) || "—"
 
   @doc false
   # The client logs the raw system ID as the name when it has not

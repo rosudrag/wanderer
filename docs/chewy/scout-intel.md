@@ -494,6 +494,16 @@ re-report is news, but it is not rendered. A percentage triple read hours
 after the observation says nothing a fleet can act on — the status badge and
 the timer already carry the verdict.
 
+Two more are absent as of 1.103.4-chewy.65: **both distances**. `distance_m`
+is the range from whichever character happened to run the sweep — it locates
+the scout, not the structure, and is meaningless once that session ends — and
+`nearest_celestial_m` is real but unactionable: a reader acts on "it is on
+moon 4", never on "it is 12.5 km off moon 4". The `Where` column
+(`ScoutComponents.where/1`) is now the celestial's NAME or an em dash, with
+no distance fallback, and the duplicate copy of it under the structure name
+is gone from the tables that have a `Where` column. `nearest_celestial_m` is
+still stored, still merge-significant and still in the CSV export.
+
 Three fixes worth remembering because each was invisible until the page was
 rendered in a browser: daisyUI's `select-sm` sets `line-height: 2rem` while
 `@tailwindcss/forms` sets `padding: 0.5rem`, so the window selector clipped

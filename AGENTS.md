@@ -110,6 +110,12 @@ cleared the instant the status leaves the family — and renders `≤ first sigh
 bound, never a timer. Orbitals are excluded (minutes, not days). Keep the direction: a stale anchor
 that survived a cancel would under-predict, which is the only error that gets a fleet killed.
 
+**No distances anywhere on `/scout`.** `distance_m` was the observing character's own range — it
+located the scout, not the structure, and died with that session — and `nearest_celestial_m` is real
+but unactionable. The `Where` column is `ScoutComponents.where/1`: the nearest celestial's NAME or
+an em dash, no fallback, and no duplicate copy under the structure name on tables that have the
+column. Both metre fields stay stored, merge-significant and exported; only the UI dropped them.
+
 **A reader can archive a structure, and the expiry clock is `last_changed_at`.** `✕` on any
 structure board (`ScoutComponents.archive_cell/1`) sets `archived_at` on the current-state row; every
 opportunity board, the red banner and the sidebar badge filter `archived == false` through one expr

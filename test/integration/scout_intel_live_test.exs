@@ -500,6 +500,27 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert unanchoring =~ "Orbital: unanchors in minutes"
     end
 
+    test "the Where column names the celestial and prints no distance", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_069,
+        structure_name: "Moon Three Astrahus",
+        status: "Unanchoring",
+        nearest_celestial: "Jita IV - Moon 4",
+        nearest_celestial_m: 12_480,
+        unanchoring_since:
+          DateTime.utc_now() |> DateTime.add(-1, :day) |> DateTime.truncate(:second)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      unanchoring = view |> element("#scout-unanchoring") |> render()
+
+      assert unanchoring =~ "Jita IV - Moon 4"
+      # 12 480 m rendered as "12.5 km" before: a reader acts on the body,
+      # never on the offset from it.
+      refute unanchoring =~ "km"
+    end
+
     test "both tables render an empty state when nothing matches", %{conn: conn} do
       structure(%{
         structure_id: 1_000_000_000_066,

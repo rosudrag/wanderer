@@ -221,7 +221,6 @@
               <.subject
                 name={row.structure_name || to_string(row.structure_id)}
                 badge={row.group_name}
-                meta={nearest_celestial_label(row)}
                 click="show_structure"
                 phx-value-id={row.structure_id}
               />
@@ -229,7 +228,7 @@
             <td><.sys row={row} systems={@systems} /></td>
             <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
-            <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
+            <td class="text-xs text-gray-400">{where(row)}</td>
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
             <td><.archive_cell row={row} /></td>
           </tr>
@@ -311,7 +310,7 @@
             <td><.sys row={row} systems={@systems} /></td>
             <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
-            <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
+            <td class="text-xs text-gray-400">{where(row)}</td>
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
             <td><.archive_cell row={row} /></td>
           </tr>
@@ -355,7 +354,7 @@
             <td><.sys row={row} systems={@systems} /></td>
             <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
-            <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
+            <td class="text-xs text-gray-400">{where(row)}</td>
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
             <td><.archive_cell row={row} /></td>
           </tr>
@@ -390,7 +389,6 @@
               <.subject
                 name={row.structure_name || to_string(row.structure_id)}
                 badge={row.group_name}
-                meta={nearest_celestial_label(row)}
                 click="show_structure"
                 phx-value-id={row.structure_id}
               />
@@ -398,7 +396,7 @@
             <td><.sys row={row} systems={@systems} /></td>
             <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
-            <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
+            <td class="text-xs text-gray-400">{where(row)}</td>
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
             <td><.archive_cell row={row} /></td>
           </tr>
