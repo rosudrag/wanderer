@@ -320,6 +320,27 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert html =~ "No structure has ever been reported"
     end
 
+    # The header's "structures Nh ago" is the dead-client indicator, and
+    # it read the retired `scout_structure_sightings_v1` tape while the
+    # presence feed writes only `scout_structures_v1` — so a live client
+    # posting snapshots every minute rendered as "never". The assertion
+    # is on the clock the feed actually moves.
+    test "the header's freshness follows the presence feed", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/scout")
+      assert html =~ "never"
+
+      structure(%{
+        structure_id: 1_000_000_000_400,
+        structure_name: "Fresh Keepstar",
+        observed_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+      assert WandererApp.Scout.Stats.last_observed_at().structures
+
+      {:ok, _view, html} = live(conn, ~p"/scout")
+      refute html =~ "structures <span class=\"text-gray-300\">never</span>"
+    end
+
     test "a structure ingested while the page is open appears without a reload", %{conn: conn} do
       {:ok, view, html} = live(conn, ~p"/scout")
       refute html =~ "Pushed Keepstar"

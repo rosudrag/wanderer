@@ -30,7 +30,16 @@ defmodule WandererApp.Scout.Stats do
   alias WandererApp.Scout.Space
 
   @spawns "scout_spawn_sightings_v1"
-  @structures "scout_structure_sightings_v1"
+
+  # CURRENT STATE, not the retired sighting tape. The presence feed
+  # (`WandererApp.Scout.Snapshot`) writes `scout_structures_v1` and
+  # nothing else, so reading `scout_structure_sightings_v1` here froze
+  # the header's "structures Nh ago" at whenever the last client on the
+  # old per-row feed posted -- a dead-client indicator that reports a
+  # live client as dead. `last_confirmed_at` is this table's
+  # observation clock.
+  @structures "scout_structures_v1"
+  @structures_observed_at :last_confirmed_at
 
   # A hotspot list is read, not scrolled.
   @max_hotspots 100
@@ -43,7 +52,7 @@ defmodule WandererApp.Scout.Stats do
   def last_observed_at do
     %{
       spawns: max_observed_at(@spawns),
-      structures: max_observed_at(@structures)
+      structures: max_observed_at(@structures, @structures_observed_at)
     }
   end
 
@@ -123,8 +132,8 @@ defmodule WandererApp.Scout.Stats do
     )
   end
 
-  defp max_observed_at(table) do
-    from(s in table, select: max(s.observed_at))
+  defp max_observed_at(table, column \\ :observed_at) do
+    from(s in table, select: max(field(s, ^column)))
     |> Repo.one()
     |> to_utc()
   end
