@@ -65,6 +65,14 @@ defmodule WandererApp.Scout.Stats do
   Takes the same optional `:system_id` and `:q` filters as the
   `:search` read action, so the aggregate always describes the same rows
   the flat table below it is showing.
+
+  Besides the grouping columns and `sightings`/`last_seen`/`isk_value`,
+  each row also carries `first_seen` (earliest sighting in the group, same
+  UTC treatment as `last_seen`), and `spawn_category`/`location_type` —
+  pulled via `max/1` because, although neither is in the `GROUP BY`, both
+  are effectively constant per group, and `max/1` is the standard trick
+  for picking a representative value of a column that isn't part of the
+  grouping key.
   """
   @spec spawn_hotspots(DateTime.t(), keyword()) :: [map()]
   def spawn_hotspots(since, opts \\ []) do
@@ -80,13 +88,16 @@ defmodule WandererApp.Scout.Stats do
         spawn_name: s.spawn_name,
         sightings: count(s.id),
         last_seen: max(s.observed_at),
+        first_seen: min(s.observed_at),
+        spawn_category: max(s.spawn_category),
+        location_type: max(s.location_type),
         isk_value: sum(s.isk_value)
       }
     )
     |> hotspot_system(opts[:system_id])
     |> hotspot_search(opts[:q])
     |> Repo.all()
-    |> Enum.map(&%{&1 | last_seen: to_utc(&1.last_seen)})
+    |> Enum.map(&%{&1 | last_seen: to_utc(&1.last_seen), first_seen: to_utc(&1.first_seen)})
   end
 
   defp hotspot_system(query, nil), do: query

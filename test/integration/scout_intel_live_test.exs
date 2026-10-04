@@ -286,6 +286,115 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       widened = render_change(view, "select_window", %{"days" => "90"})
       assert widened =~ "Ancient Spawn"
     end
+
+    test "the fresh list folds to the newest sighting of each spawn", %{conn: conn} do
+      spawn_sighting(%{observed_at: ago(90), isk_value: Decimal.new("50000000")})
+      spawn_sighting(%{observed_at: ago(45), isk_value: Decimal.new("777000000")})
+
+      spawn_sighting(%{
+        observed_at: ago(45),
+        spawn_name: "True Sansha Mutant",
+        isk_value: Decimal.new("999000000")
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+      render_click(view, "select_tab", %{"tab" => "spawns"})
+
+      fresh = view |> element("#scout-fresh-spawns") |> render()
+
+      # One row for the repeated spawn, carrying the newer sighting's value...
+      assert fresh =~ "777.0M"
+      refute fresh =~ "50.0M"
+
+      # ...and a separate row for a different spawn in the same belt.
+      assert fresh =~ "True Sansha Mutant"
+      assert fresh =~ "999.0M"
+    end
+
+    test "the fresh list is bounded by three hours, not by the window selector", %{conn: conn} do
+      spawn_sighting(%{spawn_name: "Just Landed", observed_at: ago(60)})
+      spawn_sighting(%{spawn_name: "Hours Ago", observed_at: ago(301)})
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+      render_click(view, "select_tab", %{"tab" => "spawns"})
+
+      fresh = view |> element("#scout-fresh-spawns") |> render()
+      log = view |> element("#scout-spawns") |> render()
+
+      assert fresh =~ "Just Landed"
+      refute fresh =~ "Hours Ago"
+
+      # Still in the (default 7-day) window-bounded log below it.
+      assert log =~ "Hours Ago"
+    end
+
+    test "the tick ages a fresh spawn out with no query", %{conn: conn} do
+      # Mirrors the structures tab's expiring-timer test, scaled to the
+      # fresh list's 3-hour horizon instead of a timer's expiry: insert
+      # 1s inside the horizon, let 1.1s of real time pass, and the tick
+      # (no query) drops it exactly like an expired timer does.
+      edge = DateTime.utc_now() |> DateTime.add(-10_799, :second) |> DateTime.truncate(:second)
+      spawn_sighting(%{spawn_name: "Expiring Pop", observed_at: edge})
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+      render_click(view, "select_tab", %{"tab" => "spawns"})
+      assert view |> element("#scout-fresh-spawns") |> render() =~ "Expiring Pop"
+
+      Process.sleep(1_100)
+      send(view.pid, :tick)
+
+      # No reload, no query: the tick alone retires it.
+      refute view |> element("#scout-fresh-spawns") |> render() =~ "Expiring Pop"
+    end
+
+    test "a spawn's history opens with every sighting at that location, and no other spawn's",
+         %{conn: conn} do
+      spawn_sighting(%{observed_at: ago(300), isk_value: Decimal.new("10000000")})
+      spawn_sighting(%{observed_at: ago(10), isk_value: Decimal.new("20000000")})
+
+      spawn_sighting(%{
+        observed_at: ago(10),
+        spawn_name: "True Sansha Mutant",
+        isk_value: Decimal.new("30000000")
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+      render_click(view, "select_tab", %{"tab" => "spawns"})
+
+      render_click(view, "show_spawn", %{
+        "system" => to_string(@jita),
+        "location" => "Belt I - 1",
+        "spawn" => "Dark Blood Phantom"
+      })
+
+      # Scoped to the modal: the other spawn is legitimately on the page
+      # behind it, in the fresh list and the log.
+      detail = view |> element("#scout-spawn-detail") |> render()
+
+      # Both sightings of this spawn at this location, not just the latest.
+      assert detail =~ "10.0M"
+      assert detail =~ "20.0M"
+      # Not the other spawn logged in the same belt.
+      refute detail =~ "30.0M"
+    end
+
+    test "hotspots carry the category and the earliest sighting, not just the latest",
+         %{conn: conn} do
+      first_seen = ago(600)
+      last_seen = ago(30)
+
+      spawn_sighting(%{observed_at: first_seen, spawn_category: "faction"})
+      spawn_sighting(%{observed_at: last_seen, spawn_category: "faction"})
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+      render_click(view, "select_tab", %{"tab" => "spawns"})
+
+      hotspots = view |> element("#scout-hotspots") |> render()
+
+      assert hotspots =~ "faction"
+      assert hotspots =~ Calendar.strftime(first_seen, "%Y-%m-%d %H:%M")
+      assert hotspots =~ Calendar.strftime(last_seen, "%Y-%m-%d %H:%M")
+    end
   end
 
   describe "CSV export" do

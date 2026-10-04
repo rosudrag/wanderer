@@ -18,10 +18,16 @@ defmodule WandererAppWeb.ScoutIntelLive do
       the table is append-only precisely so that two rows an hour apart
       mean something.
 
-    * **Spawns** leads with hotspots (`GROUP BY` system + location +
-      spawn) over the flat reverse-chronological log. Faction spawns
-      repeat in the same belts, so the aggregate is the intel and the
-      log is the evidence.
+    * **Spawns** leads with a fresh list — the latest sighting per
+      system + location + spawn seen within the last few hours,
+      ticking and ageing out exactly like the structure timers below,
+      because a faction spawn reported recently is probably still
+      sitting in that belt. Below it, the hotspot aggregate (`GROUP BY`
+      system + location + spawn) over the flat reverse-chronological
+      log, and below that a per-spawn history on demand, keyed on
+      system + location + spawn name rather than an id — there is no
+      spawn id, the belt and the name ARE the identity, which is
+      exactly the `:uniq_sighting` identity the resource upserts on.
 
   Four things this page does that a plain table does not:
 
@@ -66,6 +72,11 @@ defmodule WandererAppWeb.ScoutIntelLive do
   # it costs no query.
   @tick :timer.seconds(30)
 
+  # A faction spawn seen within the last three hours is probably still
+  # sitting in that belt; older than that is history, which is what the
+  # window-bounded log below the fresh list is for.
+  @fresh_seconds 3 * 3_600
+
   @impl true
   def mount(_params, _session, socket) do
     # WANDERER_SCOUT_INTEL is enforced by the scope's pipeline
@@ -91,6 +102,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
          system_id: nil,
          limit: @page,
          detail: nil,
+         spawn_detail: nil,
          systems: %{},
          can_manage_access?: ScoutAccess.superadmin?(socket.assigns.current_user.id)
        )
@@ -104,7 +116,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
   def handle_event("select_tab", %{"tab" => tab}, socket) when tab in ~w(spawns structures) do
     {:noreply,
      socket
-     |> assign(tab: String.to_existing_atom(tab), limit: @page, detail: nil)
+     |> assign(tab: String.to_existing_atom(tab), limit: @page, detail: nil, spawn_detail: nil)
      |> load()}
   end
 
@@ -152,6 +164,29 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
   def handle_event("close_structure", _params, socket), do: {:noreply, assign(socket, detail: nil)}
 
+  def handle_event("show_spawn", %{"system" => sid, "location" => location, "spawn" => spawn}, socket) do
+    with {system_id, ""} <- Integer.parse(to_string(sid)),
+         {:ok, rows} <- ScoutSpawnSighting.history(system_id, location, spawn, authorize?: false) do
+      rows = Enum.take(rows, @history_rows)
+
+      {:noreply,
+       socket
+       |> assign(
+         spawn_detail: %{
+           solar_system_id: system_id,
+           location_name: location,
+           spawn_name: spawn,
+           rows: rows
+         }
+       )
+       |> assign_systems([rows])}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_spawn", _params, socket), do: {:noreply, assign(socket, spawn_detail: nil)}
+
   def handle_event("refresh", _params, socket), do: {:noreply, load(socket)}
 
   @impl true
@@ -164,7 +199,8 @@ defmodule WandererAppWeb.ScoutIntelLive do
     {:noreply,
      assign(socket,
        now: now,
-       active_timers: Enum.filter(socket.assigns.active_timers, &running?(&1, now))
+       active_timers: Enum.filter(socket.assigns.active_timers, &running?(&1, now)),
+       fresh_spawns: Enum.filter(socket.assigns.fresh_spawns, &fresh?(&1, now))
      )}
   end
 
@@ -215,17 +251,37 @@ defmodule WandererAppWeb.ScoutIntelLive do
       structures: structures,
       more?: more_structures?,
       spawns: [],
-      hotspots: []
+      hotspots: [],
+      fresh_spawns: []
     )
     |> assign_systems([timers, structures])
   end
 
-  defp load_tab(socket, :spawns, since, _now, filters, limit) do
+  defp load_tab(socket, :spawns, since, now, filters, limit) do
     {spawns, more?} =
       read(ScoutSpawnSighting, :search, Map.put(filters, :since, since), limit)
 
     hotspots =
       Stats.spawn_hotspots(since, system_id: filters.system_id, q: filters.q)
+
+    {fresh_spawns, _more} =
+      read(
+        ScoutSpawnSighting,
+        :search,
+        Map.put(filters, :since, DateTime.add(now, -@fresh_seconds, :second)),
+        limit,
+        fn query ->
+          # DISTINCT ON (solar_system_id, location_name, spawn_name)
+          # ORDER BY observed_at DESC: the latest row per spawn, folded
+          # by Postgres instead of by loading the window and folding it
+          # here -- same trick as the structures tab's fold.
+          query
+          |> Ash.Query.distinct([:solar_system_id, :location_name, :spawn_name])
+          |> Ash.Query.distinct_sort(observed_at: :desc)
+        end
+      )
+
+    fresh_spawns = Enum.filter(fresh_spawns, &fresh?(&1, now))
 
     socket
     |> assign(
@@ -233,9 +289,10 @@ defmodule WandererAppWeb.ScoutIntelLive do
       hotspots: hotspots,
       more?: more?,
       active_timers: [],
-      structures: []
+      structures: [],
+      fresh_spawns: fresh_spawns
     )
-    |> assign_systems([spawns, hotspots])
+    |> assign_systems([spawns, hotspots, fresh_spawns])
   end
 
   # Asks for one row past the page so the UI can say "there are more"
@@ -297,6 +354,10 @@ defmodule WandererAppWeb.ScoutIntelLive do
   defp running?(%{timer_expires_at: expires_at}, now),
     do: DateTime.compare(expires_at, now) == :gt
 
+  # observed_at is allow_nil?: false on scout_spawn_sighting, so a
+  # single clause covers every row that can actually reach here.
+  defp fresh?(%{observed_at: at}, now), do: DateTime.diff(now, at, :second) < @fresh_seconds
+
   # -------------------------------------------------------------------
   # Rendering helpers
   # -------------------------------------------------------------------
@@ -339,6 +400,23 @@ defmodule WandererAppWeb.ScoutIntelLive do
       _ -> "text-gray-200"
     end
   end
+
+  @doc false
+  # The fresh list's analogue of urgency/2: how much to trust that a
+  # spawn seen this long ago is still sitting where it was reported.
+  def freshness(nil, _now), do: "text-gray-500"
+
+  def freshness(observed_at, now) do
+    case DateTime.diff(now, observed_at, :second) do
+      seconds when seconds < 1_800 -> "text-success font-semibold"
+      seconds when seconds < 5_400 -> "text-warning"
+      _ -> "text-gray-200"
+    end
+  end
+
+  @doc false
+  # Section copy derives from @fresh_seconds so the two never drift.
+  def fresh_window_label, do: "#{div(@fresh_seconds, 3600)} hours"
 
   @doc false
   def at(nil), do: "—"

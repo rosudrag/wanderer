@@ -221,6 +221,76 @@
   </div>
 
   <div :if={@tab == :spawns}>
+    <h2 class="text-lg font-semibold mb-2">Still out there</h2>
+    <p class="mb-3 text-gray-400 text-sm">
+      The most recent sighting of each spawn seen in the last {fresh_window_label()} —
+      independent of the window selector above, because a spawn either is probably
+      still there or it is not.
+    </p>
+
+    <table class="table w-full mb-10" id="scout-fresh-spawns">
+      <thead>
+        <tr>
+          <th>Age</th>
+          <th>Spawn</th>
+          <th>System</th>
+          <th>Location</th>
+          <th>Local</th>
+          <th>Value</th>
+          <th>Seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr :for={row <- @fresh_spawns} id={"scout-fresh-spawn-#{row.id}"}>
+          <td class={["font-mono whitespace-nowrap", freshness(row.observed_at, @now)]}>
+            {ago(row.observed_at, @now)}
+          </td>
+          <td>
+            <button
+              phx-click="show_spawn"
+              phx-value-system={row.solar_system_id}
+              phx-value-location={row.location_name}
+              phx-value-spawn={row.spawn_name}
+              class="link link-hover text-left"
+            >
+              {row.spawn_name}
+            </button>
+            <span :if={row.spawn_category} class="badge badge-ghost badge-sm ml-1">
+              {row.spawn_category}
+            </span>
+            <div :if={row.anomaly_type} class="text-gray-500 text-xs">
+              {row.anomaly_type}
+            </div>
+          </td>
+          <td>
+            <button phx-click="filter_system" phx-value-id={row.solar_system_id} class="link link-hover">
+              {system(row, @systems)}
+            </button>
+            <span :if={system_class(row, @systems)} class="badge badge-ghost badge-sm ml-1">
+              {system_class(row, @systems)}
+            </span>
+            <span :if={security(row.system_truesec)} class="text-gray-500 ml-1 font-mono text-xs">
+              {security(row.system_truesec)}
+            </span>
+          </td>
+          <td class="text-gray-400">
+            {row.location_name}
+            <span :if={row.location_type} class="text-gray-600 text-xs ml-1">
+              {row.location_type}
+            </span>
+          </td>
+          <td class="font-mono">{row.players_in_local}</td>
+          <td class="font-mono whitespace-nowrap">{isk(row.isk_value)}</td>
+          <td class="whitespace-nowrap text-gray-400">{at(row.observed_at)}</td>
+        </tr>
+        <tr :if={@fresh_spawns == []}>
+          <td colspan="7" class="text-gray-500">
+            Nothing spawned in the last {fresh_window_label()}.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
     <h2 class="text-lg font-semibold mb-2">Hotspots</h2>
     <p class="mb-3 text-gray-400 text-sm">
       Every spawn in the window grouped by where it spawned, most frequent first.
@@ -234,6 +304,7 @@
           <th>System</th>
           <th>Location</th>
           <th>Value</th>
+          <th>First</th>
           <th>Last</th>
         </tr>
       </thead>
@@ -243,18 +314,37 @@
           id={"scout-hotspot-#{row.solar_system_id}-#{:erlang.phash2({row.location_name, row.spawn_name})}"}
         >
           <td class="font-mono">{row.sightings}×</td>
-          <td>{row.spawn_name}</td>
+          <td>
+            <button
+              phx-click="show_spawn"
+              phx-value-system={row.solar_system_id}
+              phx-value-location={row.location_name}
+              phx-value-spawn={row.spawn_name}
+              class="link link-hover text-left"
+            >
+              {row.spawn_name}
+            </button>
+            <span :if={row.spawn_category} class="badge badge-ghost badge-sm ml-1">
+              {row.spawn_category}
+            </span>
+          </td>
           <td>
             <button phx-click="filter_system" phx-value-id={row.solar_system_id} class="link link-hover">
               {system(row, @systems)}
             </button>
           </td>
-          <td class="text-gray-400">{row.location_name}</td>
+          <td class="text-gray-400">
+            {row.location_name}
+            <span :if={row.location_type} class="text-gray-600 text-xs ml-1">
+              {row.location_type}
+            </span>
+          </td>
           <td class="font-mono whitespace-nowrap">{isk(row.isk_value)}</td>
+          <td class="whitespace-nowrap text-gray-400">{at(row.first_seen)}</td>
           <td class="whitespace-nowrap text-gray-400">{at(row.last_seen)}</td>
         </tr>
         <tr :if={@hotspots == []}>
-          <td colspan="6" class="text-gray-500">Nothing to group in this window.</td>
+          <td colspan="7" class="text-gray-500">Nothing to group in this window.</td>
         </tr>
       </tbody>
     </table>
@@ -278,7 +368,17 @@
       <tbody>
         <tr :for={row <- @spawns} id={"scout-spawn-#{row.id}"}>
           <td class="whitespace-nowrap">{at(row.observed_at)}</td>
-          <td>{row.spawn_name}</td>
+          <td>
+            <button
+              phx-click="show_spawn"
+              phx-value-system={row.solar_system_id}
+              phx-value-location={row.location_name}
+              phx-value-spawn={row.spawn_name}
+              class="link link-hover text-left"
+            >
+              {row.spawn_name}
+            </button>
+          </td>
           <td>
             <span :if={row.spawn_category} class="badge badge-ghost badge-sm">
               {row.spawn_category}
@@ -291,6 +391,9 @@
             <button phx-click="filter_system" phx-value-id={row.solar_system_id} class="link link-hover">
               {system(row, @systems)}
             </button>
+            <span :if={system_class(row, @systems)} class="badge badge-ghost badge-sm ml-1">
+              {system_class(row, @systems)}
+            </span>
             <span :if={security(row.system_truesec)} class="text-gray-500 ml-1 font-mono text-xs">
               {security(row.system_truesec)}
             </span>
@@ -389,6 +492,51 @@
           </tr>
           <tr :if={@detail.rows == []}>
             <td colspan="7" class="text-gray-500">No history for this structure.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div :if={@spawn_detail} class="modal modal-open" id="scout-spawn-detail">
+    <div class="modal-box max-w-5xl bg-neutral-900">
+      <div class="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <h3 class="text-lg font-semibold">{@spawn_detail.spawn_name}</h3>
+          <p class="text-gray-400 text-sm">
+            Every sighting of {@spawn_detail.spawn_name} at {@spawn_detail.location_name} in
+            {system(Map.put(@spawn_detail, :solar_system_name, nil), @systems)}, newest first.
+          </p>
+        </div>
+        <button phx-click="close_spawn" class="btn btn-sm btn-ghost">Close</button>
+      </div>
+
+      <table class="table table-sm w-full">
+        <thead>
+          <tr>
+            <th>Seen</th>
+            <th>System</th>
+            <th>Location</th>
+            <th>Local</th>
+            <th>DT+</th>
+            <th>Outcome</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={row <- @spawn_detail.rows} id={"scout-spawn-history-#{row.id}"}>
+            <td class="whitespace-nowrap">{at(row.observed_at)}</td>
+            <td>{system(row, @systems)}</td>
+            <td class="text-gray-400">{row.location_name}</td>
+            <td class="font-mono">{row.players_in_local}</td>
+            <td class="font-mono text-gray-500">
+              {if row.minutes_since_downtime, do: "#{row.minutes_since_downtime}m", else: "—"}
+            </td>
+            <td class="text-gray-400">{row.outcome || row.action_taken || "—"}</td>
+            <td class="font-mono whitespace-nowrap">{isk(row.isk_value)}</td>
+          </tr>
+          <tr :if={@spawn_detail.rows == []}>
+            <td colspan="7" class="text-gray-500">No history for this spawn.</td>
           </tr>
         </tbody>
       </table>

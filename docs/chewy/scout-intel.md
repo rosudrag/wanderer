@@ -144,13 +144,27 @@ flag covers all of it.
 |Tab|What it leads with|
 |---|---|
 |Structures|Live reinforcement timers (soonest first, colour-coded: red under an hour, amber under six), then the latest observation **per structure** folded by Postgres `DISTINCT ON (structure_id)`, then that structure's full history on click|
-|Spawns|Hotspots — `GROUP BY` system + location + spawn with a count and an ISK sum — over the flat reverse-chronological log|
+|Spawns|"Still out there" — the latest sighting **per system + location + spawn name** within the last 3 hours, folded by Postgres `DISTINCT ON (solar_system_id, location_name, spawn_name)`, same trick as the structures tab's fold — then the hotspot aggregate (`GROUP BY` system + location + spawn, with a count, an ISK sum, `first_seen`/`last_seen`, and a representative `spawn_category`/`location_type` picked via `max/1`) over the flat reverse-chronological log, then every sighting of *that* spawn at *that* location on click|
 
-Five properties that are deliberate, not incidental:
+Seven properties that are deliberate, not incidental:
 
 - **It ticks.** `now` is re-assigned every 30s and timers that ran out drop
   out of the live table. No query: a 30s poll per open page would be a
   database round trip to display arithmetic.
+- **"Still out there" ticks too, the same way.** It is independent of the
+  window selector above it — a spawn seen 20 minutes ago inside a 24-hour
+  window and a spawn seen 20 minutes ago inside a 90-day window are the same
+  "still probably there" — and it ages out on the 30s `:tick` with no
+  query, exactly like an expired reinforcement timer: rows older than
+  `@fresh_seconds` (3 hours) are dropped from the already-loaded list
+  rather than re-queried.
+- **A spawn has no id.** `{solar_system_id, location_name, spawn_name}`
+  is its identity — the same triple `ScoutSpawnSighting`'s
+  `:uniq_sighting` upserts the ingest on — so both "Still out there" and
+  Hotspots drill down on click into every sighting of that spawn at that
+  location (`ScoutSpawnSighting.history/4`), passed as three values
+  rather than one id. This is the one asymmetry with structures, which
+  do carry a `structure_id` and drill down on that single value.
 - **It is pushed to.** `Ingest` broadcasts `{:scout_intel_ingested, :spawns |
   :structures}` on the `"scout_intel"` topic whenever a batch stored
   anything; the page reloads only the tab that kind affects.

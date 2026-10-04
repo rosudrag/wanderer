@@ -55,6 +55,7 @@ defmodule WandererApp.Api.ScoutSpawnSighting do
     define(:upsert, action: :upsert)
 
     define(:recent, action: :recent, args: [:since])
+    define(:history, action: :history, args: [:solar_system_id, :location_name, :spawn_name])
   end
 
   actions do
@@ -114,6 +115,24 @@ defmodule WandererApp.Api.ScoutSpawnSighting do
                       spawn_category,
                       ^arg(:q)
                     ))
+             )
+
+      prepare build(sort: [observed_at: :desc])
+    end
+
+    # Every observation of one spawn in one belt, newest first. This log is
+    # append-only precisely so that repeated sightings mean something — a
+    # Dark Blood Phantom logged three times in the same belt this week is
+    # the signal, and this is the read that shows the repeats.
+    read :history do
+      argument :solar_system_id, :integer, allow_nil?: false
+      argument :location_name, :string, allow_nil?: false
+      argument :spawn_name, :string, allow_nil?: false
+
+      filter expr(
+               solar_system_id == ^arg(:solar_system_id) and
+                 location_name == ^arg(:location_name) and
+                 spawn_name == ^arg(:spawn_name)
              )
 
       prepare build(sort: [observed_at: :desc])
