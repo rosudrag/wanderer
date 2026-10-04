@@ -20,7 +20,7 @@ defmodule WandererAppWeb.ScoutExportController do
 
   require Ash.Query
 
-  alias WandererApp.Api.{ScoutSpawnSighting, ScoutStructureSighting}
+  alias WandererApp.Api.{ScoutSpawnSighting, ScoutStructure}
   alias WandererApp.Identity.ScoutAccess
   alias WandererApp.Scout.Space
 
@@ -31,12 +31,19 @@ defmodule WandererAppWeb.ScoutExportController do
   @default_days 7
   @max_days 365
 
-  @structure_columns ~w(observed_at event solar_system_id solar_system_name system_truesec
+  # Current state, one row per structure -- the same thing the page's
+  # structures table shows, not the raw observation tape. `event` and
+  # `distance_m` are gone with the sighting feed (the server derives the
+  # verdict from the diff, and an observer-relative distance means
+  # nothing once the session that measured it ended); `presence`,
+  # `first_seen_at`, `last_confirmed_at` and the absolute position are
+  # what replace them. docs/design/wanderer-scout-presence.md
+  @structure_columns ~w(last_confirmed_at first_seen_at presence solar_system_id
                         structure_id type_id structure_name group_name owner_id owner_name
                         alliance_id upkeep_state structure_state status
                         vulnerable anchoring unanchoring timer_seconds timer_expires_at
-                        shield_pct armor_pct hull_pct distance_m nearest_celestial
-                        nearest_celestial_m)a
+                        shield_pct armor_pct hull_pct pos_x pos_y pos_z
+                        nearest_celestial nearest_celestial_m missing_count missing_since)a
 
   @spawn_columns ~w(observed_at solar_system_id solar_system_name system_truesec location_type
                     location_name spawn_name spawn_category anomaly_type players_in_local
@@ -77,7 +84,7 @@ defmodule WandererAppWeb.ScoutExportController do
 
     case params["tab"] do
       "spawns" -> {"spawns", @spawn_columns, rows(ScoutSpawnSighting, args, space)}
-      _ -> {"structures", @structure_columns, rows(ScoutStructureSighting, args, space)}
+      _ -> {"structures", @structure_columns, rows(ScoutStructure, args, space)}
     end
   end
 

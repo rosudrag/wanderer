@@ -59,5 +59,9 @@ defmodule WandererApp.Api do
     resource WandererApp.Api.ScoutStructureSighting
     # CHEWY PATCH: scout coverage ledger. See WandererApp.Scout.Coverage.
     resource WandererApp.Api.ScoutSystemCoverage
+    # CHEWY PATCH: scout presence feed (current state + derived log). See
+    # WandererApp.Scout.Snapshot.
+    resource WandererApp.Api.ScoutStructure
+    resource WandererApp.Api.ScoutStructureEvent
   end
 end

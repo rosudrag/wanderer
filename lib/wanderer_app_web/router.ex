@@ -231,6 +231,15 @@ defmodule WandererAppWeb.Router do
     plug WandererAppWeb.Plugs.CheckScoutCoverageDisabled
   end
 
+  # CHEWY PATCH: scout presence snapshot ingest (requires
+  # WANDERER_SCOUT_PRESENCE=true). Own pipeline, deliberately NOT folded
+  # into :api_scout_intel: the two features gate independently, and the
+  # presence feed is the structure-only successor to the per-row
+  # structure feed, not an extension of it.
+  pipeline :api_scout_presence do
+    plug WandererAppWeb.Plugs.CheckScoutPresenceDisabled
+  end
+
   # CHEWY PATCH: same flag, browser side (the /scout pages). Separate from
   # :api_scout_intel only because the two are piped after different base
   # pipelines.
@@ -396,6 +405,18 @@ defmodule WandererAppWeb.Router do
     pipe_through [:api, :api_map, :api_scout_coverage]
 
     post "/scout/coverage", ScoutCoverageAPIController, :coverage
+  end
+
+  # CHEWY PATCH: scout presence snapshot ingest (requires
+  # WANDERER_SCOUT_PRESENCE=true). Own scope, same reasoning as the
+  # coverage scope above: independent flag, independent route. Rides
+  # :api_map so the bot authenticates with the map public_api_key it
+  # already holds; stored state is not map-scoped, the map is recorded
+  # as provenance only. See WandererApp.Scout.Snapshot.
+  scope "/api/maps/:map_identifier", WandererAppWeb do
+    pipe_through [:api, :api_map, :api_scout_presence]
+
+    post "/scout/structures/snapshot", ScoutSnapshotAPIController, :snapshot
   end
 
   #

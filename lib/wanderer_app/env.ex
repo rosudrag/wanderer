@@ -121,6 +121,13 @@ defmodule WandererApp.Env do
   # WandererAppWeb.Plugs.CheckScoutCoverageDisabled.
   def scout_coverage_enabled?(), do: get_key(:scout_coverage_enabled, false)
 
+  # CHEWY PATCH: scout presence feed (structure snapshot diff) master
+  # switch. Gates the snapshot ingest route only -- the /scout pages
+  # stay gated by WANDERER_SCOUT_INTEL regardless. See
+  # WandererApp.Scout.Snapshot and
+  # WandererAppWeb.Plugs.CheckScoutPresenceDisabled.
+  def scout_presence_enabled?(), do: get_key(:scout_presence_enabled, false)
+
   def admins(), do: get_key(:admins, [])
   def admin_username(), do: get_key(:admin_username)
   def admin_password(), do: get_key(:admin_password)

@@ -20,9 +20,19 @@ defmodule WandererApp.Scout.Alerts do
   EVERY LiveView mount, map canvas included, so the badge may not cost a
   query per mount — the same rule that forced
   `ScoutAccess.can_view_cached?/1`. So `count_cached/0` answers from
-  `WandererApp.Cache`, `WandererApp.Scout.Ingest` invalidates it whenever
-  a structure batch stores anything, and the TTL is only a backstop for a
-  row written around the ingest path.
+  `WandererApp.Cache`; both `WandererApp.Scout.Ingest` (legacy per-row
+  feed) and `WandererApp.Scout.Snapshot` (presence feed) invalidate it
+  whenever a structure write might have moved the count, and the TTL is
+  only a backstop for a row written around either ingest path.
+
+  ## Reads `ScoutStructure` current state, not the sighting log
+
+  One row per structure already, so no `DISTINCT ON` fold is needed, and
+  this additionally filters `presence == :seen`: a structure that
+  unanchored, sat there, and that the diff has since marked
+  `:cleared`/`:missing`/`:gone` is not an active alert. See
+  `WandererApp.Api.ScoutStructure`'s moduledoc for why `presence` is the
+  authoritative "is this still true" signal.
 
   ## The horizon
 
@@ -32,12 +42,13 @@ defmodule WandererApp.Scout.Alerts do
   question — but a sighting from last spring is not actionable either.
   Seven days is the compromise, and it is the same reasoning the live
   timer table and the "Still out there" spawn list already use to ignore
-  that selector.
+  that selector. Freshness here is `last_confirmed_at` — the
+  current-state table's positive-confirmation column.
   """
 
   require Ash.Query
 
-  alias WandererApp.Api.ScoutStructureSighting
+  alias WandererApp.Api.ScoutStructure
   alias WandererApp.Scout.Space
 
   @horizon_days 7
@@ -57,7 +68,7 @@ defmodule WandererApp.Scout.Alerts do
   def since(now \\ DateTime.utc_now()), do: DateTime.add(now, -@horizon_days, :day)
 
   @doc """
-  The latest sighting of each structure currently reported `Unanchored`.
+  Every structure currently reported `Unanchored`.
 
   Options: `:system_id` and `:space` (both the page's own filters, so the
   banner narrows with the rest of the page), and `:limit`.
@@ -66,20 +77,16 @@ defmodule WandererApp.Scout.Alerts do
   spawns tab it is belt and spawn names — and an alert that a search box
   can hide is not an alert.
   """
-  @spec unanchored(keyword()) :: [ScoutStructureSighting.t()]
+  @spec unanchored(keyword()) :: [ScoutStructure.t()]
   def unanchored(opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
 
-    ScoutStructureSighting
+    ScoutStructure
     |> Ash.Query.for_read(:unanchored, %{
       since: since(),
       system_id: Keyword.get(opts, :system_id)
     })
     |> Space.filter(Keyword.get(opts, :space, Space.all()))
-    # Latest row per structure, folded by Postgres -- the same
-    # DISTINCT ON every other board on this page uses.
-    |> Ash.Query.distinct([:structure_id])
-    |> Ash.Query.distinct_sort(observed_at: :desc)
     |> Ash.Query.limit(limit)
     |> Ash.read(authorize?: false)
     |> case do
@@ -108,7 +115,7 @@ defmodule WandererApp.Scout.Alerts do
     end
   end
 
-  @doc "Drops the cached badge count. Called by the ingest."
+  @doc "Drops the cached badge count. Called by either ingest path."
   @spec invalidate() :: any()
   def invalidate, do: WandererApp.Cache.delete(@cache_key)
 

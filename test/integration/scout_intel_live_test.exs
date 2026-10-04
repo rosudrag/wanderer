@@ -24,7 +24,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
   import Phoenix.LiveViewTest
   import WandererAppWeb.Factory
 
-  alias WandererApp.Api.{ScoutSpawnSighting, ScoutStructureSighting}
+  alias WandererApp.Api.{ScoutSpawnSighting, ScoutStructure, ScoutStructureEvent}
   alias WandererApp.Identity.ScoutAccess
 
   @jita 30_000_142
@@ -55,17 +55,65 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
     %{conn: conn, user: user}
   end
 
+  # CURRENT STATE, not a sighting tape. `/scout`'s boards read
+  # `scout_structures_v1`, which holds one row per `structure_id`, so a
+  # test that reports the same structure twice is moving one row rather
+  # than appending a second. `observed_at` is accepted here because that
+  # is how a report is described, and maps onto `last_confirmed_at`.
+  #
+  # Latest-wins, exactly like `WandererApp.Scout.Snapshot`'s own `stale?`
+  # guard: an older report never drags a row backwards, so a test may
+  # seed in any order and still mean what it reads like.
   defp structure(attrs) do
+    attrs =
+      Map.merge(
+        %{
+          solar_system_id: @jita,
+          structure_id: 1_000_000_000_001,
+          structure_name: "Default Keepstar",
+          status: "FullPower",
+          presence: :seen
+        },
+        attrs
+      )
+
+    observed_at =
+      Map.get(attrs, :observed_at) || DateTime.utc_now() |> DateTime.truncate(:second)
+
+    attrs =
+      attrs
+      |> Map.drop([:observed_at, :event])
+      |> Map.put(:last_confirmed_at, observed_at)
+
+    case ScoutStructure.by_structure_id(attrs.structure_id, authorize?: false) do
+      {:ok, existing} ->
+        if DateTime.compare(observed_at, existing.last_confirmed_at) == :lt do
+          existing
+        else
+          {:ok, row} =
+            ScoutStructure.update(existing, attrs, authorize?: false)
+
+          row
+        end
+
+      _ ->
+        {:ok, row} =
+          ScoutStructure.create(Map.put(attrs, :first_seen_at, observed_at), authorize?: false)
+
+        row
+    end
+  end
+
+  # One entry in the derived event log the drill-down renders.
+  defp structure_event(attrs) do
     {:ok, row} =
-      ScoutStructureSighting.upsert(
+      ScoutStructureEvent.create(
         Map.merge(
           %{
-            observed_at: DateTime.utc_now() |> DateTime.truncate(:second),
-            event: :seen,
-            solar_system_id: @jita,
             structure_id: 1_000_000_000_001,
-            structure_name: "Default Keepstar",
-            status: "FullPower"
+            solar_system_id: @jita,
+            kind: :changed,
+            observed_at: DateTime.utc_now() |> DateTime.truncate(:second)
           },
           attrs
         ),
@@ -228,19 +276,28 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert cleared =~ "Jita Keepstar"
     end
 
-    test "a structure's history opens with every observation of it", %{conn: conn} do
-      structure(%{
-        structure_id: 1_000_000_000_040,
-        structure_name: "History Keepstar",
-        status: "ArmorReinforced",
-        event: :change,
-        observed_at: ago(300)
-      })
-
+    test "a structure's history opens with everything that happened to it", %{conn: conn} do
       structure(%{
         structure_id: 1_000_000_000_040,
         structure_name: "History Keepstar",
         status: "FullPower",
+        observed_at: ago(10)
+      })
+
+      structure_event(%{
+        structure_id: 1_000_000_000_040,
+        kind: :changed,
+        status_before: "NoFuel",
+        status_after: "ArmorReinforced",
+        changed_fields: ["status"],
+        observed_at: ago(300)
+      })
+
+      structure_event(%{
+        structure_id: 1_000_000_000_040,
+        kind: :cleared,
+        status_before: "ArmorReinforced",
+        status_after: "FullPower",
         observed_at: ago(10)
       })
 
@@ -249,9 +306,12 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       detail = render_click(view, "show_structure", %{"id" => "1000000000040"})
 
       assert detail =~ "scout-structure-detail"
-      # Both observations, not just the latest the table above shows.
+      # The whole tape, not just the state the table above shows.
       assert detail =~ "ArmorReinforced"
       assert detail =~ "FullPower"
+      assert detail =~ "cleared"
+      # The header comes from current state, which an event row has not got.
+      assert detail =~ "History Keepstar"
     end
 
     test "an empty log says nothing was ever reported", %{conn: conn} do
@@ -264,19 +324,25 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       {:ok, view, html} = live(conn, ~p"/scout")
       refute html =~ "Pushed Keepstar"
 
-      {:ok, %{stored: 1}} =
-        WandererApp.Scout.Ingest.ingest_structures(
-          [
+      {:ok, %{appeared: 1}} =
+        WandererApp.Scout.Snapshot.ingest(nil, %{
+          "solar_system_id" => to_string(@jita),
+          "observed_at" => to_string(DateTime.to_unix(DateTime.utc_now())),
+          "observer_x" => "0",
+          "observer_y" => "0",
+          "observer_z" => "0",
+          "horizon_m" => "500000",
+          "structures" => [
             %{
-              "utc_timestamp" => Calendar.strftime(DateTime.utc_now(), "%Y-%m-%d %H:%M:%S"),
-              "system_id" => to_string(@jita),
               "structure_id" => "1000000000099",
               "type_name" => "Pushed Keepstar",
-              "status" => "FullPower"
+              "status" => "NoFuel",
+              "pos_x" => "1000",
+              "pos_y" => "0",
+              "pos_z" => "0"
             }
-          ],
-          nil
-        )
+          ]
+        })
 
       # The broadcast is what refreshes the page; without it this is the
       # same HTML as before.
