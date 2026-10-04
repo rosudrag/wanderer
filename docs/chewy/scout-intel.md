@@ -194,7 +194,8 @@ group ONCE so every reader (resource read actions, `/scout`, any future
 export) groups the same way:
 
 ```
-anchoring_family/0  : Unanchored, Anchoring, AnchorVulnerable, Deploying, Fitting, Onlining
+unanchored_family/0 : Unanchored
+anchoring_family/0  : Anchoring, AnchorVulnerable, Deploying, Fitting, Onlining
 unanchoring_family/0: Unanchoring
 reinforced_family/0 : ArmorReinforced, HullReinforced, ShieldReinforced
 vulnerable_family/0 : ArmorVulnerable, HullVulnerable
@@ -205,27 +206,61 @@ steady_family/0     : FullPower, Anchored, ShieldVulnerable, FobInvulnerable
 `steady_family` is the boring state and is still not journalled by the
 eveknob writer (unchanged behaviour).
 
-### Two new read actions
+`Unanchored` left `anchoring_family` in 1.103.4-chewy.54. It is not "being
+built": it is a structure floating in space fully undeployed, with no
+fitting, no services and no timer to wait out — the highest-value thing
+this log ever reports — and inside the anchoring family it was one row
+among half-built Astrahuses. It now has its own family, its own read
+action, and the alert described below.
 
-`WandererApp.Api.ScoutStructureSighting` gains `:anchoring` and
-`:unanchoring`, same argument shape as `:search` (`since`, `system_id`, `q`)
-and NOT exposed through `code_interface` either, matching `:search`:
+### Three scoped read actions
+
+`WandererApp.Api.ScoutStructureSighting` gains `:unanchored`, `:anchoring`
+and `:unanchoring`, same argument shape as `:search` (`since`, `system_id`,
+`q`) and NOT exposed through `code_interface` either, matching `:search`:
 
 |Action|Filter|
 |---|---|
+|`:unanchored`|`status in Status.unanchored_family()`|
 |`:anchoring`|`status in Status.anchoring_family()`|
 |`:unanchoring`|`status in Status.unanchoring_family()`|
 
-Both feed a dedicated `/scout` structures-tab table, latest sighting per
-`structure_id` — the same `Ash.Query.distinct([:structure_id]) |>
+All three feed a dedicated `/scout` structures-tab table, latest sighting
+per `structure_id` — the same `Ash.Query.distinct([:structure_id]) |>
 Ash.Query.distinct_sort(observed_at: :desc)` fold the existing last-seen
-table applies on top of `:search` — and both honour the existing search /
-system-filter / freshness window:
+table applies on top of `:search`:
 
+- **Unanchored** — floating undeployed. See "The unanchored alert".
 - **Anchoring** — no fitting, no services, a live vulnerability window: the
   cheapest kills in the game.
 - **Unanchoring** — a structure being pulled out of the ground: a one-shot
   opportunity with a hard deadline.
+
+`:anchoring` and `:unanchoring` honour the search / system filter / window;
+`:unanchored` deliberately does not — see below.
+
+## The unanchored alert
+
+`WandererApp.Scout.Alerts` owns it. One finding, four surfaces, because a
+log you have to be reading is not an alert:
+
+|Surface|What|
+|---|---|
+|Sidebar badge|A red count on the `/scout` eye icon, drawn on **every** page including the map canvas — the only part of this visible without opening the log. `count_cached/0` answers from `WandererApp.Cache` (`Nav.on_mount/4` runs per LiveView mount; a query there is forbidden), `Ingest.announce/1` invalidates it on every structure batch, and the 5-minute TTL is only a backstop. Never computed for a user without `:scout_intel_view`|
+|Banner|A red bar above the toolbar on **both** tabs, with one click-to-filter chip per system and the age of each sighting|
+|Panel|Its own table at the top of the structures tab, above Live timers, with a red border. Rendered only when non-empty|
+|Card + badge|The first summary card, and the only solid-red status badge on the page|
+
+Two filter rules, both deliberate and both tested:
+
+- **Its own horizon** (`Alerts.horizon_days/0`, 7 days), not the window
+  selector — an unanchored structure stays unanchored until somebody moves
+  it, so "24 hours or 90 days" is the wrong question, and the live timer
+  table and "Still out there" already ignore that selector for the same
+  reason.
+- **The search box does not narrow it**, though the system and space
+  filters do. The search is tab vocabulary — on the spawns tab it is belt
+  and spawn names — and an alert a search box can hide is not an alert.
 
 ## Timers
 
@@ -387,7 +422,8 @@ stale cache may cost a wrong icon, never a wrong page.
 |What|Where|
 |---|---|
 |Ingest + coercion|`lib/wanderer_app/scout/ingest.ex`|
-|Status families (`anchoring_family/0`, `unanchoring_family/0`, ...)|`lib/wanderer_app/scout/status.ex`|
+|Status families (`unanchored_family/0`, `anchoring_family/0`, ...)|`lib/wanderer_app/scout/status.ex`|
+|Unanchored alert (reads + cached badge count)|`lib/wanderer_app/scout/alerts.ex`|
 |Aggregates (group-by, freshness, totals)|`lib/wanderer_app/scout/stats.ex`|
 |Space-type filter (class subquery)|`lib/wanderer_app/scout/space.ex`|
 |Resources|`lib/wanderer_app/api/scout_{spawn,structure}_sighting.ex`|

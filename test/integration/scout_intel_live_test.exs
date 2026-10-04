@@ -356,8 +356,98 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       {:ok, view, _html} = live(conn, ~p"/scout")
 
       assert view |> element("#scout-anchoring") |> render() =~ "Nothing anchoring right now."
+
       assert view |> element("#scout-unanchoring") |> render() =~
                "Nothing unanchoring right now."
+    end
+  end
+
+  describe "the unanchored alert" do
+    test "a structure sitting unanchored raises the banner on both tabs", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_200,
+        structure_name: "Free Keepstar",
+        status: "Unanchored",
+        observed_at: ago(30)
+      })
+
+      {:ok, view, html} = live(conn, ~p"/scout")
+      assert html =~ "scout-unanchored-alert"
+      assert view |> element("#scout-unanchored") |> render() =~ "Free Keepstar"
+
+      # The whole point: a reader on the spawns tab still sees it.
+      assert render_click(view, "select_tab", %{"tab" => "spawns"}) =~ "scout-unanchored-alert"
+    end
+
+    test "the banner survives the window selector and the search box", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_201,
+        structure_name: "Free Astrahus",
+        status: "Unanchored",
+        observed_at: ago(60 * 24 * 3)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      # Three days old, inside the alert's own 7-day horizon but outside a
+      # 24-hour window.
+      narrowed = render_change(view, "select_window", %{"days" => "1"})
+      assert narrowed =~ "scout-unanchored-alert"
+
+      # An alert a search box can hide is not an alert.
+      searched =
+        view
+        |> form("form[phx-change=\"search\"]", %{q: "nothing matches this"})
+        |> render_change()
+
+      assert searched =~ "scout-unanchored-alert"
+    end
+
+    test "the space filter still narrows it", %{conn: conn} do
+      create_solar_system(%{solar_system_id: @hs_sys, system_class: 7, security: "0.9"})
+
+      structure(%{
+        structure_id: 1_000_000_000_202,
+        structure_name: "Highsec Unanchored",
+        status: "Unanchored",
+        solar_system_id: @hs_sys,
+        observed_at: ago(30)
+      })
+
+      {:ok, view, html} = live(conn, ~p"/scout")
+      assert html =~ "scout-unanchored-alert"
+
+      refute view |> element("#scout-space-hs") |> render_click() =~ "scout-unanchored-alert"
+    end
+
+    test "an unanchored structure is not also listed as anchoring", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_203,
+        structure_name: "Free Fortizar",
+        status: "Unanchored",
+        observed_at: ago(10)
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_204,
+        structure_name: "Half Built Astrahus",
+        status: "Onlining",
+        observed_at: ago(10)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      anchoring = view |> element("#scout-anchoring") |> render()
+      assert anchoring =~ "Half Built Astrahus"
+      refute anchoring =~ "Free Fortizar"
+    end
+
+    test "no unanchored structure means no banner at all", %{conn: conn} do
+      structure(%{structure_id: 1_000_000_000_205, status: "FullPower"})
+
+      {:ok, _view, html} = live(conn, ~p"/scout")
+
+      refute html =~ "scout-unanchored-alert"
     end
   end
 

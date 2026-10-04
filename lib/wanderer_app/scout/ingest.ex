@@ -119,8 +119,12 @@ defmodule WandererApp.Scout.Ingest do
   end
 
   # An open page refreshes the affected table; the payload is only the
-  # kind, because the page re-reads under its own filters anyway.
+  # kind, because the page re-reads under its own filters anyway. A
+  # structure batch also drops the sidebar badge's cached count --
+  # `WandererApp.Scout.Alerts` explains why that count is cached at all.
   defp announce(kind) do
+    if kind == :structures, do: WandererApp.Scout.Alerts.invalidate()
+
     Phoenix.PubSub.broadcast(WandererApp.PubSub, "scout_intel", {:scout_intel_ingested, kind})
   catch
     _, _ -> :ok
@@ -265,7 +269,9 @@ defmodule WandererApp.Scout.Ingest do
 
   defp parse_event("seen"), do: {:ok, :seen}
   defp parse_event("change"), do: {:ok, :change}
-  defp parse_event(other), do: {:error, "unknown event #{inspect(other)}, expected SEEN or CHANGE"}
+
+  defp parse_event(other),
+    do: {:error, "unknown event #{inspect(other)}, expected SEEN or CHANGE"}
 
   # -1 is the writer's "no timer" sentinel. Older rows can also carry a
   # boolean here (the two columns added ahead of it shifted the field on

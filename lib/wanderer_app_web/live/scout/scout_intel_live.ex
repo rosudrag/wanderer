@@ -59,6 +59,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
   alias WandererApp.Api.{ScoutSpawnSighting, ScoutStructureSighting}
   alias WandererApp.CachedInfo
   alias WandererApp.Identity.ScoutAccess
+  alias WandererApp.Scout.Alerts
   alias WandererApp.Scout.Space
   alias WandererApp.Scout.Stats
 
@@ -142,8 +143,11 @@ defmodule WandererAppWeb.ScoutIntelLive do
   # the toolbar is how it is undone.
   def handle_event("filter_system", %{"id" => id}, socket) do
     case Integer.parse(to_string(id)) do
-      {system_id, ""} -> {:noreply, socket |> assign(system_id: system_id, limit: @page) |> load()}
-      _ -> {:noreply, socket}
+      {system_id, ""} ->
+        {:noreply, socket |> assign(system_id: system_id, limit: @page) |> load()}
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
@@ -184,9 +188,14 @@ defmodule WandererAppWeb.ScoutIntelLive do
     end
   end
 
-  def handle_event("close_structure", _params, socket), do: {:noreply, assign(socket, detail: nil)}
+  def handle_event("close_structure", _params, socket),
+    do: {:noreply, assign(socket, detail: nil)}
 
-  def handle_event("show_spawn", %{"system" => sid, "location" => location, "spawn" => spawn}, socket) do
+  def handle_event(
+        "show_spawn",
+        %{"system" => sid, "location" => location, "spawn" => spawn},
+        socket
+      ) do
     with {system_id, ""} <- Integer.parse(to_string(sid)),
          {:ok, rows} <- ScoutSpawnSighting.history(system_id, location, spawn, authorize?: false) do
       rows = Enum.take(rows, @history_rows)
@@ -207,7 +216,8 @@ defmodule WandererAppWeb.ScoutIntelLive do
     end
   end
 
-  def handle_event("close_spawn", _params, socket), do: {:noreply, assign(socket, spawn_detail: nil)}
+  def handle_event("close_spawn", _params, socket),
+    do: {:noreply, assign(socket, spawn_detail: nil)}
 
   def handle_event("refresh", _params, socket), do: {:noreply, load(socket)}
 
@@ -245,6 +255,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
     now = DateTime.utc_now()
     since = DateTime.add(now, -days, :day)
+
     filters = %{
       system_id: socket.assigns.system_id,
       q: search_term(socket.assigns.q),
@@ -253,8 +264,22 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
     socket
     |> assign(now: now, since: since)
+    |> load_unanchored(filters)
     |> load_tab(tab, since, now, filters, limit)
     |> assign_freshness()
+  end
+
+  # The alert, read on BOTH tabs: a structure sitting unanchored is the
+  # highest-value thing this log ever reports, and a reader who happens
+  # to be on the spawns tab must still see it. Its own horizon (7 days,
+  # `Alerts.horizon_days/0`) rather than the window selector, and no
+  # text search -- see `WandererApp.Scout.Alerts`.
+  defp load_unanchored(socket, filters) do
+    rows = Alerts.unanchored(system_id: filters.system_id, space: filters.space)
+
+    socket
+    |> assign(unanchored_structures: rows)
+    |> assign_systems([rows])
   end
 
   defp load_tab(socket, :structures, since, now, filters, limit) do
@@ -273,19 +298,37 @@ defmodule WandererAppWeb.ScoutIntelLive do
     end
 
     {structures, more_structures?} =
-      read(ScoutStructureSighting, :search, Map.put(filters, :since, since), limit, distinct_latest)
+      read(
+        ScoutStructureSighting,
+        :search,
+        Map.put(filters, :since, since),
+        limit,
+        distinct_latest
+      )
 
     # The cheapest kills in the game: no fitting, no services, a live
     # vulnerability window. `:anchoring` mirrors `:search`'s filters,
     # scoped server-side to the ANCHORING status family.
     {anchoring_structures, _more} =
-      read(ScoutStructureSighting, :anchoring, Map.put(filters, :since, since), limit, distinct_latest)
+      read(
+        ScoutStructureSighting,
+        :anchoring,
+        Map.put(filters, :since, since),
+        limit,
+        distinct_latest
+      )
 
     # Being pulled out of the ground: a one-shot opportunity with a
     # hard deadline. `:unanchoring` mirrors `:search`'s filters, scoped
     # server-side to `status == "Unanchoring"`.
     {unanchoring_structures, _more} =
-      read(ScoutStructureSighting, :unanchoring, Map.put(filters, :since, since), limit, distinct_latest)
+      read(
+        ScoutStructureSighting,
+        :unanchoring,
+        Map.put(filters, :since, since),
+        limit,
+        distinct_latest
+      )
 
     socket
     |> assign(
@@ -424,6 +467,11 @@ defmodule WandererAppWeb.ScoutIntelLive do
   # countdowns, badges, system names -- moved to
   # `WandererAppWeb.ScoutComponents`, with the cells that render it.
   # -------------------------------------------------------------------
+
+  @doc false
+  # The alert's own horizon, so the banner's copy and the read that
+  # fills it can never disagree.
+  def unanchored_horizon_days, do: Alerts.horizon_days()
 
   @doc false
   # Under an hour is a fleet forming now -- the one number on this page

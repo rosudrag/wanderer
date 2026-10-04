@@ -15,9 +15,18 @@ defmodule WandererApp.Scout.Status do
   render it as a filter-chip label directly.
   """
 
-  # Rows 1-7 of the precedence table minus Unanchoring (its own family,
-  # below): the cheapest-kill window, no fitting or services online yet.
-  @anchoring_family ~w(Unanchored Anchoring AnchorVulnerable Deploying Fitting Onlining)
+  # Rows 3-7: deploying, not deployed. The cheapest-kill window -- no
+  # fitting, no services online yet. `Unanchored` used to live here and
+  # does not any more: see `unanchored_family/0`.
+  @anchoring_family ~w(Anchoring AnchorVulnerable Deploying Fitting Onlining)
+
+  # Row 2 (`structure_state == 1`, STATE_UNANCHORED). Its own family
+  # since 1.103.4-chewy.54: a structure sitting in space unanchored is
+  # the single highest-value finding this log produces -- no fitting, no
+  # services, nothing to shoot back -- and the page alerts on it rather
+  # than listing it. Folding it into the anchoring family buried it in a
+  # table of half-built Astrahuses.
+  @unanchored_family ~w(Unanchored)
 
   # Row 1. A structure being pulled out of the ground: a one-shot
   # opportunity with a hard deadline, kept separate from the anchoring
@@ -39,9 +48,13 @@ defmodule WandererApp.Scout.Status do
   # journalled by the eveknob writer (unchanged behaviour).
   @steady_family ~w(FullPower Anchored ShieldVulnerable FobInvulnerable)
 
-  @doc "Unanchored, Anchoring, AnchorVulnerable, Deploying, Fitting, Onlining."
+  @doc "Anchoring, AnchorVulnerable, Deploying, Fitting, Onlining."
   @spec anchoring_family() :: [String.t()]
   def anchoring_family, do: @anchoring_family
+
+  @doc "Unanchored — on its own, and alerted on."
+  @spec unanchored_family() :: [String.t()]
+  def unanchored_family, do: @unanchored_family
 
   @doc "Unanchoring."
   @spec unanchoring_family() :: [String.t()]

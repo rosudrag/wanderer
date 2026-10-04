@@ -88,6 +88,65 @@ defmodule WandererAppWeb.ScoutComponents do
   defp count_class(:good), do: "bg-success/20 text-success"
   defp count_class(_), do: "bg-neutral-800 text-gray-400"
 
+  attr :rows, :list, required: true
+  attr :systems, :map, required: true
+  attr :now, :any, required: true
+  attr :horizon_days, :integer, required: true
+
+  @doc """
+  The unanchored alert: a red bar above everything else, on both tabs.
+
+  Renders nothing when there is nothing to report — this is the one
+  element on the page allowed to shout, and it only earns that by being
+  absent the rest of the time. Each system is a chip that filters the
+  whole page, so "where" is one click rather than a scroll.
+  """
+  def unanchored_alert(assigns) do
+    ~H"""
+    <div
+      :if={@rows != []}
+      id="scout-unanchored-alert"
+      class="mb-4 rounded-lg border border-error bg-error/15 px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2"
+      role="alert"
+    >
+      <span class="relative flex h-3 w-3 shrink-0">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75">
+        </span>
+        <span class="relative inline-flex rounded-full h-3 w-3 bg-error"></span>
+      </span>
+
+      <span class="font-semibold text-error uppercase tracking-wide text-sm">
+        {plural(length(@rows), "structure", "structures")} unanchored
+      </span>
+
+      <span class="text-xs text-gray-300">
+        Floating undeployed: no fitting, no services, no timer to wait out.
+      </span>
+
+      <div class="flex flex-wrap items-center gap-1.5 ml-auto">
+        <button
+          :for={row <- Enum.take(@rows, 6)}
+          phx-click="filter_system"
+          phx-value-id={row.solar_system_id}
+          class="badge badge-sm border border-error/50 bg-error/10 text-gray-100 hover:bg-error/25 gap-1"
+          title={"#{row.structure_name || row.structure_id} — seen #{ago(row.observed_at, @now)}"}
+        >
+          {system(row, @systems)}
+          <span class="text-error/80 font-mono">{ago(row.observed_at, @now)}</span>
+        </button>
+        <span :if={length(@rows) > 6} class="text-xs text-gray-400">
+          +{length(@rows) - 6} more
+        </span>
+      </div>
+
+      <span class="text-[11px] text-gray-500 w-full">
+        Reported within the last {@horizon_days} days — this bar ignores the window selector and
+        the search box, and narrows only with the system and space filters.
+      </span>
+    </div>
+    """
+  end
+
   attr :label, :string, required: true
   attr :value, :string, required: true
   attr :hint, :string, default: nil
@@ -507,6 +566,9 @@ defmodule WandererAppWeb.ScoutComponents do
   #     shootable right now.
   #   * the ANCHORING family -- the free-kill tier: no fitting, no
   #     services, a live vulnerability window.
+  #   * Unanchored -- the top tier, and the only badge on this page that
+  #     is solid rather than tinted: it is what the red banner above the
+  #     toolbar is about.
   #   * Unanchoring -- its own tier: a one-shot deadline.
   #   * STEADY -- muted: nothing to do here, and nothing that should
   #     draw an eye away from the rows above.
@@ -514,6 +576,7 @@ defmodule WandererAppWeb.ScoutComponents do
 
   def status_badge_class(status) do
     cond do
+      status in Status.unanchored_family() -> "bg-error border-error text-white font-semibold"
       status in Status.dead_family() -> "bg-error/15 border-error/40 text-error"
       status in Status.vulnerable_family() -> "bg-error/15 border-error/40 text-error"
       status in Status.unanchoring_family() -> "bg-error/15 border-error/40 text-error"

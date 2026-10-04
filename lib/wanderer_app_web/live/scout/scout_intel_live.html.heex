@@ -31,6 +31,13 @@
     </div>
   </div>
 
+  <.unanchored_alert
+    rows={@unanchored_structures}
+    systems={@systems}
+    now={@now}
+    horizon_days={unanchored_horizon_days()}
+  />
+
   <div class="flex flex-wrap items-center gap-2 mb-4 p-2 rounded-lg border border-neutral-800 bg-neutral-900/30">
     <div role="tablist" class="tabs tabs-boxed tabs-sm bg-neutral-950/60">
       <button
@@ -113,7 +120,14 @@
     </button>
   </div>
 
-  <div :if={@tab == :structures} class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+  <div :if={@tab == :structures} class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
+    <.stat
+      id="scout-stat-unanchored"
+      label="Unanchored"
+      value={to_string(length(@unanchored_structures))}
+      hint="floating, undeployed"
+      tone={if @unanchored_structures != [], do: :urgent, else: :neutral}
+    />
     <.stat
       label="Timers running"
       value={to_string(length(@active_timers))}
@@ -156,6 +170,48 @@
   </div>
 
   <div :if={@tab == :structures}>
+    <.panel
+      :if={@unanchored_structures != []}
+      title="Unanchored"
+      count={length(@unanchored_structures)}
+      tone={:urgent}
+      class="border-error/60 bg-error/5"
+      hint={"Floating undeployed — no fitting, no services, nothing to wait out. Last #{unanchored_horizon_days()} days, not the window."}
+    >
+      <.grid id="scout-unanchored">
+        <thead>
+          <tr>
+            <th>Structure</th>
+            <th>System</th>
+            <th>Owner</th>
+            <th>Status</th>
+            <th class="w-36">Shield / Armor / Hull</th>
+            <th>Where</th>
+            <th class="w-32">Seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={row <- @unanchored_structures} id={"scout-unanchored-#{row.id}"}>
+            <td>
+              <.subject
+                name={row.structure_name || to_string(row.structure_id)}
+                badge={row.group_name}
+                meta={nearest_celestial_label(row)}
+                click="show_structure"
+                phx-value-id={row.structure_id}
+              />
+            </td>
+            <td><.sys row={row} systems={@systems} /></td>
+            <td class="text-gray-300">{row.owner_name || "—"}</td>
+            <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            <td class="font-mono text-xs tabular-nums whitespace-nowrap">{hp_label(row)}</td>
+            <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
+            <td><.seen at={row.observed_at} now={@now} /></td>
+          </tr>
+        </tbody>
+      </.grid>
+    </.panel>
+
     <.panel
       title="Live timers"
       count={length(@active_timers)}
@@ -419,7 +475,9 @@
             <td class="font-mono tabular-nums text-right whitespace-nowrap">
               {isk(row.isk_value)}
             </td>
-            <td class="font-mono text-xs text-gray-500 whitespace-nowrap">{at(row.first_seen)}</td>
+            <td class="font-mono text-xs text-gray-500 whitespace-nowrap">
+              {at(row.first_seen)}
+            </td>
             <td class="font-mono text-xs text-gray-400 whitespace-nowrap">{at(row.last_seen)}</td>
           </tr>
           <.empty :if={@hotspots == []} cols={7}>Nothing to group in this window.</.empty>
@@ -511,8 +569,7 @@
               @detail.structure_id}
           </h3>
           <p class="text-xs text-gray-500">
-            {plural(length(@detail.rows), "report", "reports")} of structure
-            {@detail.structure_id}, newest first.
+            {plural(length(@detail.rows), "report", "reports")} of structure {@detail.structure_id}, newest first.
             <span :if={nearest_celestial_label(List.first(@detail.rows))}>
               · {nearest_celestial_label(List.first(@detail.rows))}
             </span>
@@ -570,9 +627,10 @@
         <div class="min-w-0">
           <h3 class="font-semibold truncate">{@spawn_detail.spawn_name}</h3>
           <p class="text-xs text-gray-500 truncate">
-            {plural(length(@spawn_detail.rows), "sighting", "sightings")} at
-            {@spawn_detail.location_name} in
-            {system(Map.put(@spawn_detail, :solar_system_name, nil), @systems)}, newest first.
+            {plural(length(@spawn_detail.rows), "sighting", "sightings")} at {@spawn_detail.location_name} in {system(
+              Map.put(@spawn_detail, :solar_system_name, nil),
+              @systems
+            )}, newest first.
           </p>
         </div>
         <button phx-click="close_spawn" class="btn btn-sm btn-ghost">✕</button>

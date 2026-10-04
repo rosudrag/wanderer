@@ -211,6 +211,9 @@ defmodule WandererAppWeb.Layouts do
   # WandererAppWeb.Nav; defaults to false so upstream callers of this
   # component keep working unchanged.
   attr :show_scout?, :boolean, default: false
+  # CHEWY PATCH: `{count, capped?}` of structures reported unanchored, for
+  # the badge on that icon. Defaults to none, same reason.
+  attr :scout_alerts, :any, default: {0, false}
 
   def sidebar_nav_links(assigns) do
     ~H"""
@@ -284,6 +287,7 @@ defmodule WandererAppWeb.Layouts do
           />
           <WandererAppWeb.ScoutNav.scout_nav_links
             show_scout?={@show_scout?}
+            scout_alerts={@scout_alerts}
             active_tab={@active_tab}
             show_sidebar={@show_sidebar}
           />

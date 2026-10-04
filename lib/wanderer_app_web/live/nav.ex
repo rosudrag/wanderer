@@ -29,6 +29,19 @@ defmodule WandererAppWeb.Nav do
         WandererApp.Blog.recent_posts(1) |> List.first()
       end
 
+    # CHEWY PATCH: the one permission-gated sidebar entry. Cached, and
+    # short-circuited on the flag, because this runs on EVERY LiveView
+    # mount including the map canvas. See WandererAppWeb.ScoutNav.
+    show_scout? =
+      WandererApp.Env.scout_intel_enabled?() and
+        WandererApp.Identity.ScoutAccess.can_view_cached?(socket.assigns.current_user.id)
+
+    # CHEWY PATCH: the unanchored-structure badge on that icon -- the only
+    # part of the scout alert visible from the map canvas. Same rule as
+    # above: cached (WandererApp.Scout.Alerts), invalidated by the ingest,
+    # and never computed at all for a user who cannot see the icon.
+    scout_alerts = if show_scout?, do: WandererApp.Scout.Alerts.count_cached(), else: {0, false}
+
     {:cont,
      socket
      |> attach_hook(:active_tab, :handle_params, &set_active_tab/3)
@@ -48,12 +61,8 @@ defmodule WandererAppWeb.Nav do
          group_map_sync_enabled?: WandererApp.Env.group_map_sync_enabled?(),
          corp_roster_enabled?: WandererApp.Env.corp_roster_enabled?()
        },
-       # CHEWY PATCH: the one permission-gated sidebar entry. Cached, and
-       # short-circuited on the flag, because this runs on EVERY LiveView
-       # mount including the map canvas. See WandererAppWeb.ScoutNav.
-       show_scout?:
-         WandererApp.Env.scout_intel_enabled?() and
-           WandererApp.Identity.ScoutAccess.can_view_cached?(socket.assigns.current_user.id)
+       show_scout?: show_scout?,
+       scout_alerts: scout_alerts
      )}
   end
 

@@ -79,6 +79,16 @@ distinct — `scout_nav.ex` shipped `hero-viewfinder-circle-solid`, which is alr
 glyph. Add to that module rather than styling a new table inline. See `docs/chewy/scout-intel.md`
 §"How it is rendered".
 
+**The unanchored alert is the one thing on `/scout` allowed to shout.** `status == "Unanchored"`
+(floating undeployed — no fitting, no services, no timer) is its own status family, its own
+`:unanchored` read action, and four surfaces: a cached red count badge on the sidebar icon visible
+from the map canvas (`Scout.Alerts.count_cached/0`, invalidated by the ingest — never a query in
+`Nav.on_mount/4`), a red banner above the toolbar on BOTH tabs, its own panel above Live timers,
+and the only solid-red status badge on the page. It uses a 7-day horizon instead of the window
+selector and ignores the search box on purpose: an alert a search box can hide is not an alert.
+Everything else on the page stays muted so this one reads. See `docs/chewy/scout-intel.md`
+§"The unanchored alert".
+
 ## Testing the map without an EVE account
 
 `dev/README.md` is the command sequence: a throwaway compose stack on `127.0.0.1:4100`, `/dev/login?token=…`,

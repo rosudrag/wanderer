@@ -189,6 +189,36 @@ defmodule WandererApp.Api.ScoutStructureSighting do
       prepare build(sort: [observed_at: :desc])
     end
 
+    # The alert board: `status == "Unanchored"`, i.e. the structure is
+    # sitting in space fully deployed into nothing -- no fitting, no
+    # services, no reinforcement timer to wait out. Its own action
+    # rather than a slice of `:anchoring` because `/scout` leads with it
+    # on BOTH tabs and from the sidebar, and an alert that costs a
+    # client-side filter over a 250-row page would miss row 251.
+    read :unanchored do
+      argument :since, :utc_datetime, allow_nil?: false
+      argument :system_id, :integer
+      argument :q, :string
+
+      filter expr(
+               observed_at >= ^arg(:since) and
+                 status in ^WandererApp.Scout.Status.unanchored_family() and
+                 (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
+                 (is_nil(^arg(:q)) or
+                    fragment(
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      structure_name,
+                      owner_name,
+                      solar_system_name,
+                      group_name,
+                      nearest_celestial,
+                      ^arg(:q)
+                    ))
+             )
+
+      prepare build(sort: [observed_at: :desc])
+    end
+
     # A structure being pulled out of the ground: a one-shot opportunity
     # with a hard deadline. `status == "Unanchoring"` outranks the whole
     # anchoring family in the precedence table, so it is its own board

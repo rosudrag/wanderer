@@ -21,17 +21,31 @@ defmodule WandererAppWeb.ScoutNav do
   use WandererAppWeb, :html
 
   attr :show_scout?, :boolean, default: false
+  # `{count, capped?}` of structures reported unanchored. The badge is the
+  # only part of that alert visible from the map canvas, which is the only
+  # page most people have open; see `WandererApp.Scout.Alerts`.
+  attr :scout_alerts, :any, default: {0, false}
   attr :active_tab, :atom
   attr :show_sidebar, :boolean
 
   def scout_nav_links(assigns) do
+    {count, capped?} = assigns.scout_alerts
+    assigns = assigns |> assign(:alert_count, count) |> assign(:alert_capped?, capped?)
+
     ~H"""
     <li :if={@show_scout? and @show_sidebar} class="flex-1 w-full">
-      <div class="tooltip tooltip-right" data-tip="Scout Log">
+      <div
+        class="tooltip tooltip-right"
+        data-tip={
+          if @alert_count > 0,
+            do: "Scout Log — #{@alert_count}#{if @alert_capped?, do: "+", else: ""} unanchored",
+            else: "Scout Log"
+        }
+      >
         <.link
           navigate={~p"/scout"}
           class={[
-            "h-full w-full text-gray-400 hover:text-white block p-3",
+            "h-full w-full text-gray-400 hover:text-white block p-3 relative",
             @active_tab in [:scout, :scout_access] &&
               "border-r-4 text-white border-r-orange-400"
           ]}
@@ -39,7 +53,17 @@ defmodule WandererAppWeb.ScoutNav do
         >
           <%!-- Not `hero-viewfinder-circle-solid`: that is the Map entry's
                 icon, two rows up, and the sidebar had the same glyph twice. --%>
-          <.icon name="hero-eye-solid" class="w-6 h-6" />
+          <.icon
+            name="hero-eye-solid"
+            class={if @alert_count > 0, do: "w-6 h-6 text-error", else: "w-6 h-6"}
+          />
+          <span
+            :if={@alert_count > 0}
+            id="scout-nav-alert-badge"
+            class="absolute top-1 right-1 min-w-[1rem] h-4 px-1 rounded-full bg-error text-white text-[10px] font-bold leading-4 animate-pulse"
+          >
+            {@alert_count}{if @alert_capped?, do: "+"}
+          </span>
         </.link>
       </div>
     </li>
