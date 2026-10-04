@@ -1,4 +1,15 @@
 <main class="w-full h-full p-4 pl-20 pb-20 overflow-auto text-gray-200">
+  <%!-- CHEWY PATCH: the toolbar's filters survive a reload. Upstream's
+        generic hook pushes `ls_restore_scout_filters` on mount and takes
+        `ls_update_scout_filters` on every change. --%>
+  <div
+    id="scout-filter-store"
+    phx-hook="LocalStorageSetting"
+    data-key="scout_filters"
+    class="hidden"
+  >
+  </div>
+
   <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-3">
     <h1 class="text-xl font-semibold tracking-tight">Scout Log</h1>
 

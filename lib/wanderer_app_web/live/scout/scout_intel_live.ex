@@ -125,18 +125,22 @@ defmodule WandererAppWeb.ScoutIntelLive do
     {:noreply,
      socket
      |> assign(tab: String.to_existing_atom(tab), limit: @page, detail: nil, spawn_detail: nil)
-     |> load()}
+     |> load()
+     |> persist_filters()}
   end
 
   def handle_event("select_window", %{"days" => days}, socket) do
     case Integer.parse(days) do
-      {days, ""} -> {:noreply, socket |> assign(days: days, limit: @page) |> load()}
-      _ -> {:noreply, socket}
+      {days, ""} ->
+        {:noreply, socket |> assign(days: days, limit: @page) |> load() |> persist_filters()}
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
   def handle_event("search", %{"q" => q}, socket) do
-    {:noreply, socket |> assign(q: q, limit: @page) |> load()}
+    {:noreply, socket |> assign(q: q, limit: @page) |> load() |> persist_filters()}
   end
 
   # Clicking a system is the filter nobody has to discover; the chip in
@@ -144,7 +148,8 @@ defmodule WandererAppWeb.ScoutIntelLive do
   def handle_event("filter_system", %{"id" => id}, socket) do
     case Integer.parse(to_string(id)) do
       {system_id, ""} ->
-        {:noreply, socket |> assign(system_id: system_id, limit: @page) |> load()}
+        {:noreply,
+         socket |> assign(system_id: system_id, limit: @page) |> load() |> persist_filters()}
 
       _ ->
         {:noreply, socket}
@@ -152,7 +157,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
   end
 
   def handle_event("clear_system", _params, socket) do
-    {:noreply, socket |> assign(system_id: nil, limit: @page) |> load()}
+    {:noreply, socket |> assign(system_id: nil, limit: @page) |> load() |> persist_filters()}
   end
 
   # The filter this page exists for: "everything except highsec" is one
@@ -163,11 +168,25 @@ defmodule WandererAppWeb.ScoutIntelLive do
     {:noreply,
      socket
      |> assign(space: Space.toggle(socket.assigns.space, type), limit: @page)
-     |> load()}
+     |> load()
+     |> persist_filters()}
   end
 
   def handle_event("reset_space", _params, socket) do
-    {:noreply, socket |> assign(space: Space.all(), limit: @page) |> load()}
+    {:noreply, socket |> assign(space: Space.all(), limit: @page) |> load() |> persist_filters()}
+  end
+
+  # The browser hands back the filters this page was last left with --
+  # `LocalStorageSetting` (assets/js/hooks/localStorageSetting.ts) pushes
+  # this once on mount, with `nil` on a first visit. A scout who turned
+  # highsec off and picked a 24-hour window meant it for the next visit
+  # too, and re-picking four controls on every page load was the single
+  # most grating thing about this page.
+  def handle_event("ls_restore_scout_filters", %{"value" => value}, socket) do
+    case restore_filters(socket, value) do
+      {:ok, socket} -> {:noreply, load(socket)}
+      :unchanged -> {:noreply, socket}
+    end
   end
 
   def handle_event("load_more", _params, socket) do
@@ -245,6 +264,88 @@ defmodule WandererAppWeb.ScoutIntelLive do
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
+
+  # -------------------------------------------------------------------
+  # Sticky filters
+  #
+  # The four controls in the toolbar survive a reload, a new tab and a
+  # restart, in the browser rather than on the server: a per-user server
+  # cache would be lost on every deploy, which on this fork is often.
+  # `LocalStorageSetting` is the upstream hook for exactly this -- it
+  # pushes `ls_restore_<key>` once on mount and listens for
+  # `ls_update_<key>` -- so this costs no JavaScript.
+  #
+  # `limit` is deliberately NOT persisted: "Load more" is about the page
+  # you are on, not about how you like to read the log.
+  # -------------------------------------------------------------------
+
+  @filter_store "scout_filters"
+
+  defp persist_filters(socket) do
+    state = %{
+      "tab" => to_string(socket.assigns.tab),
+      "days" => socket.assigns.days,
+      "q" => socket.assigns.q,
+      "system_id" => socket.assigns.system_id,
+      "space" => Enum.map(socket.assigns.space, &to_string/1)
+    }
+
+    push_event(socket, "ls_update_#{@filter_store}", %{value: Jason.encode!(state)})
+  end
+
+  # Every field is validated the same way the event handlers validate a
+  # click: localStorage is user-writable, and an unknown window or a
+  # `tab` that is not an existing atom must cost the default, not a
+  # crash on mount.
+  defp restore_filters(socket, value) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, %{} = saved} ->
+        {:ok,
+         assign(socket,
+           tab: restore_tab(saved, socket.assigns.tab),
+           days: restore_days(saved, socket.assigns.days),
+           q: restore_q(saved),
+           system_id: restore_system_id(saved),
+           space: restore_space(saved),
+           limit: @page
+         )}
+
+      _ ->
+        :unchanged
+    end
+  end
+
+  defp restore_filters(_socket, _value), do: :unchanged
+
+  defp restore_tab(%{"tab" => tab}, _default) when tab in ~w(structures spawns),
+    do: String.to_existing_atom(tab)
+
+  defp restore_tab(_saved, default), do: default
+
+  defp restore_days(%{"days" => days}, default) when is_integer(days) do
+    if List.keymember?(@windows, days, 1), do: days, else: default
+  end
+
+  defp restore_days(_saved, default), do: default
+
+  defp restore_q(%{"q" => q}) when is_binary(q), do: String.slice(q, 0, 200)
+  defp restore_q(_saved), do: ""
+
+  defp restore_system_id(%{"system_id" => id}) when is_integer(id) and id > 0, do: id
+  defp restore_system_id(_saved), do: nil
+
+  # An empty selection is a state a reader can actually save (every chip
+  # unticked), so it is restored as-is -- but a non-empty saved list that
+  # parses to nothing is corrupt storage, and the whole page coming back
+  # blank is the worst possible answer to that.
+  defp restore_space(%{"space" => saved}) when is_list(saved) do
+    case Space.parse(saved) do
+      [] -> if saved == [], do: [], else: Space.all()
+      keys -> keys
+    end
+  end
+
+  defp restore_space(_saved), do: Space.all()
 
   # -------------------------------------------------------------------
   # Reads

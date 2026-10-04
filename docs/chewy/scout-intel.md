@@ -350,6 +350,29 @@ utility, so dimming the backdrop needs `!bg-black/70`; and `ScoutNav` used
 it — the sidebar carried the same glyph twice, and the entry never drew the
 orange active bar every upstream entry draws.
 
+### The filters are sticky
+
+Tab, window, search and space selection survive a reload, a new tab and a
+browser restart. They live in **localStorage**, not on the server: a
+per-user server cache would be wiped by every deploy, and on this fork that
+is often. No JavaScript was written for it — upstream's generic
+`LocalStorageSetting` hook (`assets/js/hooks/localStorageSetting.ts`) pushes
+`ls_restore_<key>` once on mount and listens for `ls_update_<key>`, so the
+page mounts a hidden `#scout-filter-store` div and the LiveView answers
+`"ls_restore_scout_filters"` / emits `"ls_update_scout_filters"` after every
+filter event.
+
+localStorage is user-writable, so every restored field is validated exactly
+as a click on the same control would be: an unknown window keeps the
+default, a `tab` that is not an existing atom never reaches
+`String.to_existing_atom/1`, the search is truncated, and a non-empty space
+list that parses to nothing falls back to every bucket rather than
+rendering a blank page. An explicitly empty space list IS restored — every
+chip unticked is a state a reader can choose.
+
+`limit` is deliberately not persisted: "Load more" is about the page you are
+on, not about how you like to read the log.
+
 ### The space filter
 
 Six chips — High, Low, Null, W-Space, Pochven, Other — all on by default,

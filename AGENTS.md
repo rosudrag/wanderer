@@ -89,6 +89,13 @@ selector and ignores the search box on purpose: an alert a search box can hide i
 Everything else on the page stays muted so this one reads. See `docs/chewy/scout-intel.md`
 §"The unanchored alert".
 
+**`/scout`'s filters are sticky, in localStorage, with no new JavaScript.** Tab, window, search and
+space ride upstream's generic `LocalStorageSetting` hook (`ls_restore_<key>` on mount,
+`ls_update_<key>` on change) through a hidden `#scout-filter-store` div. Server-side storage was
+rejected on purpose: a Cachex entry dies with every deploy. Everything restored is re-validated
+like a click — localStorage is user-writable, and `String.to_existing_atom/1` on a stored string is
+how a page crashes on mount.
+
 ## Testing the map without an EVE account
 
 `dev/README.md` is the command sequence: a throwaway compose stack on `127.0.0.1:4100`, `/dev/login?token=…`,

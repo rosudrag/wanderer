@@ -451,6 +451,56 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
     end
   end
 
+  describe "sticky filters" do
+    test "a saved window, search and space selection are restored on mount", %{conn: conn} do
+      create_solar_system(%{solar_system_id: @hs_sys, system_class: 7, security: "0.9"})
+      create_solar_system(%{solar_system_id: @ns_sys, system_class: 9, security: "-0.3"})
+
+      structure(%{
+        structure_id: 1_000_000_000_300,
+        structure_name: "Highsec Saved",
+        solar_system_id: @hs_sys
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_301,
+        structure_name: "Nullsec Saved",
+        solar_system_id: @ns_sys
+      })
+
+      {:ok, view, html} = live(conn, ~p"/scout")
+      assert html =~ "Highsec Saved"
+
+      restored =
+        render_hook(view, "ls_restore_scout_filters", %{
+          "value" => Jason.encode!(%{"tab" => "structures", "days" => 1, "space" => ["ns"]})
+        })
+
+      refute restored =~ "Highsec Saved"
+      assert restored =~ "Nullsec Saved"
+    end
+
+    test "a first visit and a corrupt payload both leave the defaults alone", %{conn: conn} do
+      structure(%{structure_id: 1_000_000_000_302, structure_name: "Still Here"})
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      assert render_hook(view, "ls_restore_scout_filters", %{"value" => nil}) =~ "Still Here"
+
+      assert render_hook(view, "ls_restore_scout_filters", %{"value" => "{not json"}) =~
+               "Still Here"
+
+      # An unknown window and a tab that is not an existing atom are
+      # user-writable storage, not input this page may crash on.
+      restored =
+        render_hook(view, "ls_restore_scout_filters", %{
+          "value" => Jason.encode!(%{"tab" => "nope", "days" => 4242, "space" => ["garbage"]})
+        })
+
+      assert restored =~ "Still Here"
+    end
+  end
+
   describe "spawns tab" do
     test "hotspots group repeat spawns in the same place", %{conn: conn} do
       spawn_sighting(%{observed_at: ago(90), isk_value: Decimal.new("100000000")})
