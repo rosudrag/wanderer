@@ -498,7 +498,11 @@ defmodule WandererAppWeb.ScoutIntelLive do
     |> assign(
       active_timers: timers |> Enum.filter(&running?(&1, now)) |> by_deadline(),
       structures: by_recent(structures),
-      anchoring_structures: by_recent(anchoring_structures),
+      # The anchoring clock IS reported (`timer_expires_at` is populated
+      # on every row of this family), so this board reads soonest-first
+      # like the timer board, not newest-first: the structure whose
+      # invulnerability ends next is the one worth undocking for.
+      anchoring_structures: by_deadline(anchoring_structures),
       abandoned_structures: by_recent(abandoned_structures),
       unanchoring_structures: by_predicted_out(unanchoring_structures),
       archived_structures: by_archived(archived_structures),

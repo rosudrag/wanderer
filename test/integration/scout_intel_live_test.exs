@@ -426,6 +426,24 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       refute anchoring =~ "Fitting"
     end
 
+    test "the anchoring table renders the clock the feed reports", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_070,
+        structure_name: "Half Built Astrahus",
+        status: "Anchoring",
+        timer_seconds: 7_200,
+        timer_expires_at:
+          DateTime.utc_now() |> DateTime.add(2, :hour) |> DateTime.truncate(:second)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      anchoring = view |> element("#scout-anchoring") |> render()
+
+      assert anchoring =~ "Anchors in"
+      assert anchoring =~ ~r/(1h 59m|2h 0m)/
+    end
+
     test "the unanchoring table shows only Unanchoring, latest row per structure",
          %{conn: conn} do
       structure(%{

@@ -284,10 +284,12 @@
       title="Anchoring"
       count={length(@anchoring_structures)}
       tone={if @anchoring_structures != [], do: :warn, else: :neutral}
+      hint="the anchoring clock the client reports; the window opens when it hits zero"
     >
       <.grid id="scout-anchoring">
         <thead>
           <tr>
+            <th class="w-28">Anchors in</th>
             <th>Structure</th>
             <th>System</th>
             <th>Owner</th>
@@ -299,6 +301,7 @@
         </thead>
         <tbody>
           <tr :for={row <- @anchoring_structures} id={"scout-anchoring-#{row.id}"}>
+            <td><.countdown_cell expires_at={row.timer_expires_at} now={@now} /></td>
             <td>
               <.subject
                 name={row.structure_name || to_string(row.structure_id)}
@@ -314,7 +317,7 @@
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
             <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@anchoring_structures == []} cols={7}>
+          <.empty :if={@anchoring_structures == []} cols={8}>
             Nothing anchoring right now.
           </.empty>
         </tbody>
