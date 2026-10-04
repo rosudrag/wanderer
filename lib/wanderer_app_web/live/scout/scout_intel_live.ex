@@ -56,7 +56,11 @@ defmodule WandererAppWeb.ScoutIntelLive do
   # the formatters they render with. The template calls them unqualified.
   import WandererAppWeb.ScoutComponents
 
-  alias WandererApp.Api.{ScoutSpawnSighting, ScoutStructureSighting}
+  alias WandererApp.Api.{
+    ScoutSpawnSighting,
+    ScoutStructure,
+    ScoutStructureEvent
+  }
   alias WandererApp.CachedInfo
   alias WandererApp.Identity.ScoutAccess
   alias WandererApp.Scout.Alerts
@@ -193,14 +197,22 @@ defmodule WandererAppWeb.ScoutIntelLive do
     {:noreply, socket |> assign(limit: socket.assigns.limit + @page) |> load()}
   end
 
+  # The drill-down is the DERIVED event log, not the raw sighting tape.
+  # `scout_structure_events_v1` holds one row per thing that actually
+  # happened to this structure -- appeared, changed, cleared, missing,
+  # gone -- so a hull that sat in armour reinforcement for 36 hours is
+  # two lines here instead of several hundred identical ones. The header
+  # reads current state (`ScoutStructure`) because an event row carries
+  # only what moved, never the whole structure.
   def handle_event("show_structure", %{"id" => id}, socket) do
     with {structure_id, ""} <- Integer.parse(to_string(id)),
-         {:ok, rows} <- ScoutStructureSighting.history(structure_id, authorize?: false) do
+         {:ok, rows} <- ScoutStructureEvent.history(structure_id, authorize?: false) do
       rows = Enum.take(rows, @history_rows)
+      structure = current_structure(structure_id)
 
       {:noreply,
        socket
-       |> assign(detail: %{structure_id: structure_id, rows: rows})
+       |> assign(detail: %{structure_id: structure_id, structure: structure, rows: rows})
        |> assign_systems([rows])}
     else
       _ -> {:noreply, socket}
@@ -376,7 +388,8 @@ defmodule WandererAppWeb.ScoutIntelLive do
   # `Alerts.horizon_days/0`) rather than the window selector, and no
   # text search -- see `WandererApp.Scout.Alerts`.
   defp load_unanchored(socket, filters) do
-    rows = Alerts.unanchored(system_id: filters.system_id, space: filters.space)
+    rows =
+      Alerts.unanchored(system_id: filters.system_id, space: filters.space) |> by_recent()
 
     socket
     |> assign(unanchored_structures: rows)
@@ -384,74 +397,72 @@ defmodule WandererAppWeb.ScoutIntelLive do
   end
 
   defp load_tab(socket, :structures, since, now, filters, limit) do
-    # DISTINCT ON (structure_id) ORDER BY observed_at DESC: the latest
-    # row per structure, folded by Postgres rather than by loading the
-    # window and folding it here. Applied at the call site, the same
-    # way for every read below -- the fold is not baked into any action.
-    distinct_latest = fn query ->
-      query
-      |> Ash.Query.distinct([:structure_id])
-      |> Ash.Query.distinct_sort(observed_at: :desc)
-    end
-
-    # The fold matters MOST here and was missing: the log is append-only,
-    # so a structure the client reports every few minutes for the hours
-    # its timer runs produced one timer row per poll. Three identical
-    # "Dal - Nothing to see here part 2" lines is what a reader saw.
+    # ONE ROW PER STRUCTURE, by construction. These boards read
+    # `ScoutStructure` -- current state, `structure_id` is the identity --
+    # so there is no fold at the call site any more, and that is a
+    # correctness fix rather than a tidy-up.
+    #
+    # The old shape applied `Ash.Query.distinct([:structure_id])` AFTER
+    # the status filter. DISTINCT ON then picked the newest row THAT
+    # STILL MATCHED THE FILTER, not the newest row about that structure:
+    # an Unanchoring sighting from Tuesday kept boarding even when a
+    # FullPower sighting from Thursday existed, because the fresher row
+    # was filtered out before the fold ever saw it. A table that stores
+    # one row per structure cannot express that bug.
+    #
+    # Absence is handled by the same table: every board below additionally
+    # filters `presence == :seen` inside its own action, so a structure
+    # that was refuelled (`:cleared`), stopped showing up
+    # (`:missing`) or is confirmed gone (`:gone`) leaves the opportunity
+    # lists without anyone editing a row.
+    # docs/design/wanderer-scout-presence.md
     {timers, _more} =
-      read(
-        ScoutStructureSighting,
-        :active_timers,
-        Map.put(filters, :now, now),
-        limit,
-        distinct_latest
-      )
+      read(ScoutStructure, :active_timers, Map.put(filters, :now, now), limit)
 
     {structures, more_structures?} =
-      read(
-        ScoutStructureSighting,
-        :search,
-        Map.put(filters, :since, since),
-        limit,
-        distinct_latest
-      )
+      read(ScoutStructure, :search, Map.put(filters, :since, since), limit)
 
     # The cheapest kills in the game: no fitting, no services, a live
     # vulnerability window. `:anchoring` mirrors `:search`'s filters,
     # scoped server-side to the ANCHORING status family.
     {anchoring_structures, _more} =
-      read(
-        ScoutStructureSighting,
-        :anchoring,
-        Map.put(filters, :since, since),
-        limit,
-        distinct_latest
-      )
+      read(ScoutStructure, :anchoring, Map.put(filters, :since, since), limit)
+
+    # Nothing to shoot and nothing to wait for: asset safety off, or
+    # simply unfuelled. `:abandoned` mirrors `:search`'s filters, scoped
+    # server-side to WandererApp.Scout.Status.dead_family/0.
+    {abandoned_structures, _more} =
+      read(ScoutStructure, :abandoned, Map.put(filters, :since, since), limit)
 
     # Being pulled out of the ground: a one-shot opportunity with a
     # hard deadline. `:unanchoring` mirrors `:search`'s filters, scoped
     # server-side to `status == "Unanchoring"`.
     {unanchoring_structures, _more} =
-      read(
-        ScoutStructureSighting,
-        :unanchoring,
-        Map.put(filters, :since, since),
-        limit,
-        distinct_latest
-      )
+      read(ScoutStructure, :unanchoring, Map.put(filters, :since, since), limit)
 
+    # Every board is sorted here rather than trusted to come out of the
+    # read in storage order. Each table gets the sort its question
+    # implies -- deadline first where there is a deadline, most recently
+    # confirmed first everywhere else.
     socket
     |> assign(
-      active_timers: Enum.filter(timers, &running?(&1, now)),
-      structures: structures,
-      anchoring_structures: anchoring_structures,
-      unanchoring_structures: unanchoring_structures,
+      active_timers: timers |> Enum.filter(&running?(&1, now)) |> by_deadline(),
+      structures: by_recent(structures),
+      anchoring_structures: by_recent(anchoring_structures),
+      abandoned_structures: by_recent(abandoned_structures),
+      unanchoring_structures: by_deadline(unanchoring_structures),
       more?: more_structures?,
       spawns: [],
       hotspots: [],
       fresh_spawns: []
     )
-    |> assign_systems([timers, structures, anchoring_structures, unanchoring_structures])
+    |> assign_systems([
+      timers,
+      structures,
+      anchoring_structures,
+      abandoned_structures,
+      unanchoring_structures
+    ])
   end
 
   defp load_tab(socket, :spawns, since, now, filters, limit) do
@@ -482,16 +493,17 @@ defmodule WandererAppWeb.ScoutIntelLive do
         end
       )
 
-    fresh_spawns = Enum.filter(fresh_spawns, &fresh?(&1, now))
+    fresh_spawns = fresh_spawns |> Enum.filter(&fresh?(&1, now)) |> by_recent()
 
     socket
     |> assign(
-      spawns: spawns,
+      spawns: by_recent(spawns),
       hotspots: hotspots,
       more?: more?,
       active_timers: [],
       structures: [],
       anchoring_structures: [],
+      abandoned_structures: [],
       unanchoring_structures: [],
       fresh_spawns: fresh_spawns
     )
@@ -566,6 +578,46 @@ defmodule WandererAppWeb.ScoutIntelLive do
   # observed_at is allow_nil?: false on scout_spawn_sighting, so a
   # single clause covers every row that can actually reach here.
   defp fresh?(%{observed_at: at}, now), do: DateTime.diff(now, at, :second) < @fresh_seconds
+
+  # -------------------------------------------------------------------
+  # Sorting
+  #
+  # Applied in the BEAM, over a page of rows the socket already holds,
+  # and never left to the query: every structure board runs through a
+  # DISTINCT ON whose ORDER BY exists to choose the surviving row per
+  # structure, not to order the result. Two orders, because the page
+  # only ever asks two questions.
+  # -------------------------------------------------------------------
+
+  # Current state for the drill-down header. An event row carries only
+  # what moved, so the name, position and presence have to come from the
+  # structure itself.
+  defp current_structure(structure_id) do
+    case ScoutStructure.by_structure_id(structure_id, authorize?: false) do
+      {:ok, row} -> row
+      _ -> nil
+    end
+  end
+
+  # Newest first: every board whose rows have no deadline. Spawn rows
+  # carry `observed_at` (when it happened); structure current-state rows
+  # carry `last_confirmed_at` (when we last proved it was still there).
+  # Same question, different column, one sort.
+  defp by_recent(rows), do: Enum.sort_by(rows, &recency/1, {:desc, DateTime})
+
+  defp recency(row), do: Map.get(row, :observed_at) || Map.get(row, :last_confirmed_at)
+
+  # Soonest deadline first, rows without one last and newest-first among
+  # themselves -- a board sorted by deadline is read top-down until the
+  # reader runs out of time to care.
+  defp by_deadline(rows) do
+    Enum.sort_by(rows, fn row ->
+      case row.timer_expires_at do
+        nil -> {1, 0}
+        expires_at -> {0, DateTime.to_unix(expires_at)}
+      end
+    end)
+  end
 
   # -------------------------------------------------------------------
   # Summary strip

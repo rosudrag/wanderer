@@ -88,6 +88,44 @@ defmodule WandererAppWeb.ScoutComponents do
   defp count_class(:good), do: "bg-success/20 text-success"
   defp count_class(_), do: "bg-neutral-800 text-gray-400"
 
+  attr :id, :string, default: nil
+  attr :title, :string, required: true
+  attr :hint, :string, default: nil
+  attr :count, :any, default: nil
+  slot :inner_block, required: true
+
+  @doc """
+  The raw feed at the bottom of a tab: everything that was ingested, in
+  the order it arrived.
+
+  Deliberately NOT a `panel/1`. The boards above it are findings — a
+  running timer, an unanchored Fortizar, an abandoned Azbel — and the
+  flat log is the tape they were derived from; rendering it with the
+  same weight as a board made the page end on its least actionable
+  table. Dashed border, monospace label, muted body: it reads as the
+  ingest it is, and a reader who wants it still has every row.
+  """
+  def log_panel(assigns) do
+    ~H"""
+    <section
+      id={@id}
+      class="mt-8 mb-5 rounded-lg border border-dashed border-neutral-800 bg-neutral-950/40 overflow-hidden"
+    >
+      <header class="flex items-center gap-2 px-3 py-1.5 border-b border-dashed border-neutral-800">
+        <span class="w-1.5 h-1.5 rounded-full bg-neutral-600 shrink-0"></span>
+        <h2 class="text-[11px] font-mono uppercase tracking-wider text-gray-500 whitespace-nowrap">
+          {@title}
+        </h2>
+        <span :if={@count} class="text-[11px] font-mono text-gray-600">{@count}</span>
+        <span :if={@hint} class="text-[11px] text-gray-600 truncate hidden md:inline">{@hint}</span>
+      </header>
+      <div class="overflow-x-auto opacity-80 hover:opacity-100 transition-opacity">
+        {render_slot(@inner_block)}
+      </div>
+    </section>
+    """
+  end
+
   attr :rows, :list, required: true
   attr :systems, :map, required: true
   attr :now, :any, required: true
@@ -128,7 +166,7 @@ defmodule WandererAppWeb.ScoutComponents do
           title={"#{row.structure_name || row.structure_id} — #{@horizon_days}-day horizon, not the window selector"}
         >
           {system(row, @systems)}
-          <span class="text-error/80 font-mono">{ago(row.observed_at, @now)}</span>
+          <span class="text-error/80 font-mono">{ago(row.last_confirmed_at, @now)}</span>
         </button>
         <span :if={length(@rows) > 8} class="text-xs text-gray-400">
           +{length(@rows) - 8}
@@ -381,6 +419,28 @@ defmodule WandererAppWeb.ScoutComponents do
     """
   end
 
+  attr :presence, :atom, required: true
+
+  @doc """
+  CHEWY PATCH: the presence badge -- `WandererApp.Api.ScoutStructure`'s
+  current-state signal, orthogonal to `status`. `:seen` renders plain
+  (nothing to flag, the structure is an active target); `:cleared` /
+  `:missing` / `:gone` render muted, the same "nothing to do here" tone
+  `status_badge_class/1` uses for the steady tier -- these are exactly
+  the presences every opportunity board already filters out, so seeing
+  one here only ever happens on `:search`, which shows every presence.
+  """
+  def presence_badge(assigns) do
+    ~H"""
+    <span class={["badge badge-sm border-0", presence_badge_class(@presence)]}>
+      {@presence}
+    </span>
+    """
+  end
+
+  defp presence_badge_class(:seen), do: "bg-success/15 text-success"
+  defp presence_badge_class(_other), do: "bg-neutral-800 text-gray-500"
+
   attr :expires_at, :any, default: nil
   attr :now, :any, required: true
   attr :absolute, :boolean, default: true
@@ -577,18 +637,6 @@ defmodule WandererAppWeb.ScoutComponents do
       true -> "bg-transparent border-neutral-700 text-gray-400"
     end
   end
-
-  @doc false
-  # "72% / 54% / 100%": shield, armor, hull, in that order. "—" for
-  # whichever the client has not reported (a POCO carries no hull_pct).
-  def hp_label(row) do
-    [row.shield_pct, row.armor_pct, row.hull_pct]
-    |> Enum.map(&pct_label/1)
-    |> Enum.join(" / ")
-  end
-
-  defp pct_label(nil), do: "—"
-  defp pct_label(value), do: "#{value}%"
 
   @doc false
   # The resolved nearest celestial if the client has one, else the raw

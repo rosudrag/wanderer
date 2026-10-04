@@ -89,6 +89,17 @@ selector and ignores the search box on purpose: an alert a search box can hide i
 Everything else on the page stays muted so this one reads. See `docs/chewy/scout-intel.md`
 §"The unanchored alert".
 
+**On `/scout`, a board is a finding and the flat log is the tape.** Each status family that implies
+an action gets its own `panel/1` board fed by its own scoped read action — Unanchored, Live timers,
+Unanchoring, Anchoring, Abandoned (`Status.dead_family/0`: asset safety off or unfuelled) — and the
+window-bounded flat log sits at the bottom of both tabs in `log_panel/1`: dashed border, monospace
+label, muted body, deliberately NOT a `panel/1`. Two rules that follow: a new status worth acting
+on gets a read action and a board, never a column on the log; and ordering is assigned in the BEAM
+(`by_deadline/1` / `by_recent/1` in `scout_intel_live.ex`), never inherited from the query, because
+every structure board's `DISTINCT ON` orders only to pick the surviving row per structure. Shield /
+armor / hull is stored, exported and merge-significant but NOT rendered — a percentage triple read
+hours later is not actionable.
+
 **`/scout`'s filters are sticky, in localStorage, with no new JavaScript.** Tab, window, search and
 space ride upstream's generic `LocalStorageSetting` hook (`ls_restore_<key>` on mount,
 `ls_update_<key>` on change) through a hidden `#scout-filter-store` div. Server-side storage was

@@ -213,31 +213,37 @@ this log ever reports — and inside the anchoring family it was one row
 among half-built Astrahuses. It now has its own family, its own read
 action, and the alert described below.
 
-### Three scoped read actions
+### Four scoped read actions
 
-`WandererApp.Api.ScoutStructureSighting` gains `:unanchored`, `:anchoring`
-and `:unanchoring`, same argument shape as `:search` (`since`, `system_id`,
-`q`) and NOT exposed through `code_interface` either, matching `:search`:
+`WandererApp.Api.ScoutStructureSighting` gains `:unanchored`, `:anchoring`,
+`:unanchoring` and `:abandoned`, same argument shape as `:search` (`since`,
+`system_id`, `q`) and NOT exposed through `code_interface` either, matching
+`:search`:
 
 |Action|Filter|
 |---|---|
 |`:unanchored`|`status in Status.unanchored_family()`|
 |`:anchoring`|`status in Status.anchoring_family()`|
 |`:unanchoring`|`status in Status.unanchoring_family()`|
+|`:abandoned`|`status in Status.dead_family()`|
 
-All three feed a dedicated `/scout` structures-tab table, latest sighting
+All four feed a dedicated `/scout` structures-tab table, latest sighting
 per `structure_id` — the same `Ash.Query.distinct([:structure_id]) |>
-Ash.Query.distinct_sort(observed_at: :desc)` fold the existing last-seen
-table applies on top of `:search`:
+Ash.Query.distinct_sort(observed_at: :desc)` fold the ingest log applies on
+top of `:search`:
 
 - **Unanchored** — floating undeployed. See "The unanchored alert".
 - **Anchoring** — no fitting, no services, a live vulnerability window: the
   cheapest kills in the game.
 - **Unanchoring** — a structure being pulled out of the ground: a one-shot
   opportunity with a hard deadline.
+- **Abandoned** — asset safety off (`Abandoned`) or unfuelled (`NoFuel`).
+  Neither carries a timer, so neither can appear in the timer table, and
+  before this board both were visible only as one muted row somewhere in the
+  flat log.
 
-`:anchoring` and `:unanchoring` honour the search / system filter / window;
-`:unanchored` deliberately does not — see below.
+Every one of them honours the search / system filter / window except
+`:unanchored`, which deliberately does not — see below.
 
 ## The unanchored alert
 
@@ -314,8 +320,21 @@ flag covers all of it.
 
 |Tab|What it leads with|
 |---|---|
-|Structures|Live reinforcement timers (soonest first, colour-coded: red under an hour, amber under six), then **Anchoring** and **Unanchoring** (latest sighting per structure whose `status` is in that family — see "Merged status" above), then the latest observation **per structure** folded by Postgres `DISTINCT ON (structure_id)`, then that structure's full history on click|
+|Structures|**Unanchored**, then live reinforcement timers (soonest first, colour-coded: red under an hour, amber under six), then **Unanchoring**, **Anchoring** and **Abandoned** (latest sighting per structure whose `status` is in that family — see "Merged status" above), and last, at the bottom and deliberately quiet, the ingest log: the latest observation **per structure** folded by Postgres `DISTINCT ON (structure_id)`. Any row drills down into that structure's full history on click|
 |Spawns|"Still out there" — the latest sighting **per system + location + spawn name** within the last 3 hours, folded by Postgres `DISTINCT ON (solar_system_id, location_name, spawn_name)`, same trick as the structures tab's fold — then the hotspot aggregate (`GROUP BY` system + location + spawn, with a count, an ISK sum, `first_seen`/`last_seen`, and a representative `spawn_category`/`location_type` picked via `max/1`) over the flat reverse-chronological log, then every sighting of *that* spawn at *that* location on click|
+
+**Boards are findings; the log is the tape.** Everything above the ingest
+log answers "what should a fleet do right now"; the flat log answers "what
+has the client sent". They are not rendered with the same weight — see
+`log_panel/1` below — and the log sits at the bottom of both tabs.
+
+**Order is assigned, never inherited from the query.** Every structure board
+runs through a `DISTINCT ON` whose `ORDER BY` exists to pick the surviving
+row per structure, not to order the result, so `ScoutIntelLive` sorts each
+list in the BEAM over the page it already holds: `by_deadline/1` (soonest
+`timer_expires_at` first, rows without one last) for the timer and
+unanchoring boards, `by_recent/1` (newest `observed_at` first) for every
+other board and both spawn lists.
 
 Seven properties that are deliberate, not incidental:
 
@@ -370,11 +389,18 @@ sentence in another.
 |Component|What it fixes|
 |---|---|
 |`panel/1`|A section is a bordered card with a title, a **row count**, and a one-line hint — not an `<h2>` over a paragraph of prose over a full-bleed table, which is what made the page read as a wall|
+|`log_panel/1`|The flat ingest log at the bottom of a tab, rendered as what it is: dashed border, monospace label, muted body. It is NOT a `panel/1` — giving the tape the same weight as a finding ended the page on its least actionable table|
 |`stat/1`|The strip under the toolbar: timers running (and how many inside the hour), anchoring, unanchoring, rows in the window. Counted from the rows the page already holds — never a second query — and capped reads say `250+`, the same string the panel chip shows|
 |`sys/1`|Name, then **one** qualifier: the class title in w-space and Pochven, the security status everywhere else. `map_solar_system_v2` titles nullsec `0.0` and lowsec `L`, so showing both rendered `1DQ1-A 0.0 -0.4` and `J110145 C5 -1.0`. Falls back to the static map's `security` when the client logged no truesec|
 |`status/1`|Coloured by family, and **quiet** for the steady tier: when every row shouts, the reinforced one stops standing out|
 |`seen/1`, `countdown_cell/1`|Age first (what you act on), timestamp under it (what you paste in fleet chat)|
 |`empty/1`|One empty state, so every table says nothing the same way|
+
+One column is deliberately absent: **shield / armor / hull**. It is stored,
+exported in the CSV and used by `Merge.changed_fields/0` to decide whether a
+re-report is news, but it is not rendered. A percentage triple read hours
+after the observation says nothing a fleet can act on — the status badge and
+the timer already carry the verdict.
 
 Three fixes worth remembering because each was invisible until the page was
 rendered in a browser: daisyUI's `select-sm` sets `line-height: 2rem` while

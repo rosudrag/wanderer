@@ -131,7 +131,7 @@
     </button>
   </div>
 
-  <div :if={@tab == :structures} class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
+  <div :if={@tab == :structures} class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
     <.stat
       id="scout-stat-unanchored"
       label="Unanchored"
@@ -154,6 +154,13 @@
       label="Unanchoring"
       value={to_string(length(@unanchoring_structures))}
       tone={if @unanchoring_structures != [], do: :warn, else: :neutral}
+    />
+    <.stat
+      id="scout-stat-abandoned"
+      label="Abandoned"
+      value={to_string(length(@abandoned_structures))}
+      hint="asset safety off / no fuel"
+      tone={if @abandoned_structures != [], do: :good, else: :neutral}
     />
     <.stat
       label="Structures seen"
@@ -180,7 +187,6 @@
 
   <div :if={@tab == :structures}>
     <.panel
-      :if={@unanchored_structures != []}
       title="Unanchored"
       count={length(@unanchored_structures)}
       tone={:urgent}
@@ -194,7 +200,6 @@
             <th>System</th>
             <th>Owner</th>
             <th>Status</th>
-            <th class="w-36">Shield / Armor / Hull</th>
             <th>Where</th>
             <th class="w-32">Seen</th>
           </tr>
@@ -213,10 +218,12 @@
             <td><.sys row={row} systems={@systems} /></td>
             <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
-            <td class="font-mono text-xs tabular-nums whitespace-nowrap">{hp_label(row)}</td>
             <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
-            <td><.seen at={row.observed_at} now={@now} /></td>
+            <td><.seen at={row.last_confirmed_at} now={@now} /></td>
           </tr>
+          <.empty :if={@unanchored_structures == []} cols={6}>
+            Nothing is sitting unanchored.
+          </.empty>
         </tbody>
       </.grid>
     </.panel>
@@ -253,7 +260,7 @@
             <td><.sys row={row} systems={@systems} /></td>
             <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
-            <td><.seen at={row.observed_at} now={@now} /></td>
+            <td><.seen at={row.last_confirmed_at} now={@now} /></td>
           </tr>
           <.empty :if={@active_timers == []} cols={6}>No structure timer is running.</.empty>
         </tbody>
@@ -272,7 +279,6 @@
             <th>System</th>
             <th>Owner</th>
             <th>Status</th>
-            <th class="w-36">Shield / Armor / Hull</th>
             <th>Where</th>
             <th class="w-32">Seen</th>
           </tr>
@@ -290,11 +296,10 @@
             <td><.sys row={row} systems={@systems} /></td>
             <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
-            <td class="font-mono text-xs tabular-nums whitespace-nowrap">{hp_label(row)}</td>
             <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
-            <td><.seen at={row.observed_at} now={@now} /></td>
+            <td><.seen at={row.last_confirmed_at} now={@now} /></td>
           </tr>
-          <.empty :if={@anchoring_structures == []} cols={7}>
+          <.empty :if={@anchoring_structures == []} cols={6}>
             Nothing anchoring right now.
           </.empty>
         </tbody>
@@ -314,7 +319,6 @@
             <th>System</th>
             <th>Owner</th>
             <th>Status</th>
-            <th class="w-36">Shield / Armor / Hull</th>
             <th>Where</th>
             <th class="w-32">Seen</th>
           </tr>
@@ -333,11 +337,10 @@
             <td><.sys row={row} systems={@systems} /></td>
             <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
-            <td class="font-mono text-xs tabular-nums whitespace-nowrap">{hp_label(row)}</td>
             <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
-            <td><.seen at={row.observed_at} now={@now} /></td>
+            <td><.seen at={row.last_confirmed_at} now={@now} /></td>
           </tr>
-          <.empty :if={@unanchoring_structures == []} cols={8}>
+          <.empty :if={@unanchoring_structures == []} cols={7}>
             Nothing unanchoring right now.
           </.empty>
         </tbody>
@@ -345,9 +348,51 @@
     </.panel>
 
     <.panel
-      title="Last seen"
+      title="Abandoned"
+      count={length(@abandoned_structures)}
+      tone={if @abandoned_structures != [], do: :good, else: :neutral}
+      hint="asset safety off, or unfuelled"
+    >
+      <.grid id="scout-abandoned">
+        <thead>
+          <tr>
+            <th>Structure</th>
+            <th>System</th>
+            <th>Owner</th>
+            <th>Status</th>
+            <th>Where</th>
+            <th class="w-32">Seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={row <- @abandoned_structures} id={"scout-abandoned-#{row.id}"}>
+            <td>
+              <.subject
+                name={row.structure_name || to_string(row.structure_id)}
+                badge={row.group_name}
+                meta={nearest_celestial_label(row)}
+                click="show_structure"
+                phx-value-id={row.structure_id}
+              />
+            </td>
+            <td><.sys row={row} systems={@systems} /></td>
+            <td class="text-gray-300">{row.owner_name || "—"}</td>
+            <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            <td class="text-xs text-gray-400">{distance_or_celestial(row)}</td>
+            <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+          </tr>
+          <.empty :if={@abandoned_structures == []} cols={6}>
+            Nothing abandoned or unfuelled in this window.
+          </.empty>
+        </tbody>
+      </.grid>
+    </.panel>
+
+    <.log_panel
+      id="scout-structure-log"
+      title="Ingest log · structures"
       count={count_label(@structures, @more?)}
-      hint="latest report per structure"
+      hint="every structure reported in this window, latest report per structure"
     >
       <.grid id="scout-structures">
         <thead>
@@ -375,7 +420,7 @@
             <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
             <td><.countdown_cell expires_at={row.timer_expires_at} now={@now} /></td>
-            <td><.seen at={row.observed_at} now={@now} /></td>
+            <td><.seen at={row.last_confirmed_at} now={@now} /></td>
           </tr>
           <.empty :if={@structures == []} cols={6}>
             <span :if={@totals && @totals.structures == 0}>
@@ -389,7 +434,7 @@
           </.empty>
         </tbody>
       </.grid>
-    </.panel>
+    </.log_panel>
   </div>
 
   <div :if={@tab == :spawns}>
@@ -488,7 +533,12 @@
       </.grid>
     </.panel>
 
-    <.panel title="Log" count={count_label(@spawns, @more?)}>
+    <.log_panel
+      id="scout-spawn-log"
+      title="Ingest log · spawns"
+      count={count_label(@spawns, @more?)}
+      hint="every sighting reported in this window"
+    >
       <.grid id="scout-spawns">
         <thead>
           <tr>
@@ -542,7 +592,7 @@
           </.empty>
         </tbody>
       </.grid>
-    </.panel>
+    </.log_panel>
   </div>
 
   <div :if={@more?} class="flex items-center gap-3 mb-6" id="scout-more">
@@ -561,13 +611,13 @@
       <div class="flex items-start justify-between gap-4 px-4 py-3 border-b border-neutral-800 sticky top-0 bg-neutral-900 z-10">
         <div class="min-w-0">
           <h3 class="font-semibold truncate">
-            {(List.first(@detail.rows) || %{}) |> Map.get(:structure_name) ||
-              @detail.structure_id}
+            {(@detail.structure || %{}) |> Map.get(:structure_name) || @detail.structure_id}
           </h3>
           <p class="text-xs text-gray-500">
-            {plural(length(@detail.rows), "report", "reports")} · {@detail.structure_id}
-            <span :if={nearest_celestial_label(List.first(@detail.rows))}>
-              · {nearest_celestial_label(List.first(@detail.rows))}
+            {plural(length(@detail.rows), "event", "events")} · {@detail.structure_id}
+            <span :if={@detail.structure}>· {@detail.structure.presence}</span>
+            <span :if={nearest_celestial_label(@detail.structure)}>
+              · {nearest_celestial_label(@detail.structure)}
             </span>
           </p>
         </div>
@@ -578,12 +628,11 @@
         <.grid id="scout-structure-history">
           <thead>
             <tr>
-              <th class="w-32">Seen</th>
-              <th class="w-20">Event</th>
+              <th class="w-32">When</th>
+              <th class="w-24">Event</th>
               <th>System</th>
-              <th>Owner</th>
               <th>Status</th>
-              <th class="w-28">Comes out</th>
+              <th>What moved</th>
             </tr>
           </thead>
           <tbody>
@@ -592,18 +641,24 @@
               <td>
                 <span class={[
                   "badge badge-sm border",
-                  row.event == :change && "bg-warning/15 border-warning/40 text-warning",
-                  row.event == :seen && "bg-transparent border-neutral-700 text-gray-500"
+                  row.kind in [:gone, :missing] && "bg-error/15 border-error/40 text-error",
+                  row.kind == :changed && "bg-warning/15 border-warning/40 text-warning",
+                  row.kind in [:appeared, :cleared] &&
+                    "bg-transparent border-neutral-700 text-gray-500"
                 ]}>
-                  {row.event}
+                  {row.kind}
                 </span>
               </td>
               <td><.sys row={row} systems={@systems} /></td>
-              <td class="text-gray-300">{row.owner_name || "—"}</td>
-              <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
-              <td><.countdown_cell expires_at={row.timer_expires_at} now={@now} /></td>
+              <td class="text-xs text-gray-300">
+                <span :if={row.status_before}>{row.status_before} →</span>
+                {row.status_after || "—"}
+              </td>
+              <td class="text-xs text-gray-500">
+                {Enum.join(row.changed_fields || [], ", ")}
+              </td>
             </tr>
-            <.empty :if={@detail.rows == []} cols={6}>No history for this structure.</.empty>
+            <.empty :if={@detail.rows == []} cols={5}>Nothing has happened to this structure yet.</.empty>
           </tbody>
         </.grid>
       </div>

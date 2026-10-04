@@ -200,6 +200,36 @@ defmodule WandererApp.Api.ScoutStructureSighting do
       prepare build(sort: [observed_at: :desc])
     end
 
+    # The loot board: `WandererApp.Scout.Status.dead_family/0` --
+    # `Abandoned` (asset safety is off, everything inside drops) and
+    # `NoFuel` (low power: no tether, no services, and the owner is not
+    # paying attention). Neither carries a timer, so neither appears in
+    # the live-timer table, and both used to be visible only as one
+    # muted row somewhere in the flat log.
+    read :abandoned do
+      argument :since, :utc_datetime, allow_nil?: false
+      argument :system_id, :integer
+      argument :q, :string
+
+      filter expr(
+               observed_at >= ^arg(:since) and
+                 status in ^WandererApp.Scout.Status.dead_family() and
+                 (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
+                 (is_nil(^arg(:q)) or
+                    fragment(
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      structure_name,
+                      owner_name,
+                      solar_system_name,
+                      group_name,
+                      nearest_celestial,
+                      ^arg(:q)
+                    ))
+             )
+
+      prepare build(sort: [observed_at: :desc])
+    end
+
     # The alert board: `status == "Unanchored"`, i.e. the structure is
     # sitting in space fully deployed into nothing -- no fitting, no
     # services, no reinforcement timer to wait out. Its own action
