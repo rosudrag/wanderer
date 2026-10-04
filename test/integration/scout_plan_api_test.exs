@@ -31,6 +31,10 @@ defmodule WandererAppWeb.ScoutPlanAPITest do
   @one_jump 990_200_002
   @two_jumps 990_200_003
 
+  # No jump rows at all: BFS reaches nothing from it, so a plan over it is
+  # empty and the push has nothing to send.
+  @isolated 990_200_009
+
   setup do
     WandererApp.Cache.delete("scout:planner:adjacency")
     Application.put_env(:wanderer_app, :scout_planner_enabled, true)
@@ -117,6 +121,56 @@ defmodule WandererAppWeb.ScoutPlanAPITest do
 
       assert header =~ ~r/^#plan 1 origin=#{@origin} kind=sigs generated=/
       assert Enum.all?(lines, &(length(String.split(&1, "|")) == 7))
+    end
+  end
+
+  # The ESI call itself is not exercised here: `WandererApp.Esi` delegates
+  # straight to `ApiClient` with no behaviour seam, so a passing push would
+  # mean a real HTTP request to CCP from a test run. What IS asserted is
+  # everything that decides WHETHER a push happens, which is where this
+  # endpoint can refuse a pilot's route by accident.
+  describe "POST .../scout/plan/waypoints (the ESI push)" do
+    test "a character this instance does not know is refused", %{conn: conn, map: map} do
+      conn =
+        post(
+          conn,
+          ~p"/api/maps/#{map.id}/scout/plan/waypoints?origin=#{@origin}&character_eve_id=90000001"
+        )
+
+      assert response(conn, 422) =~ "unknown_character"
+    end
+
+    test "character_eve_id is required -- a route is pushed onto exactly one pilot", %{
+      conn: conn,
+      map: map
+    } do
+      conn = post(conn, ~p"/api/maps/#{map.id}/scout/plan/waypoints?origin=#{@origin}")
+
+      assert response(conn, 422) =~ "character_eve_id"
+    end
+
+    test "an isolated origin yields no gate stops, and says so", %{conn: conn, map: map} do
+      put_system(@isolated, "Planisolated", "0.7")
+
+      conn =
+        post(
+          conn,
+          ~p"/api/maps/#{map.id}/scout/plan/waypoints?origin=#{@isolated}&character_eve_id=90000001"
+        )
+
+      assert response(conn, 422) =~ "no_gate_stops"
+    end
+
+    test "the flag gates the push as well as the read", %{conn: conn, map: map} do
+      Application.put_env(:wanderer_app, :scout_planner_enabled, false)
+
+      conn =
+        post(
+          conn,
+          ~p"/api/maps/#{map.id}/scout/plan/waypoints?origin=#{@origin}&character_eve_id=90000001"
+        )
+
+      assert response(conn, 404)
     end
   end
 

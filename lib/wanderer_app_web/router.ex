@@ -437,6 +437,12 @@ defmodule WandererAppWeb.Router do
     pipe_through [:api, :api_map, :api_scout_planner]
 
     get "/scout/plan", ScoutPlanAPIController, :plan
+
+    # The same plan, pushed onto one character's autopilot through ESI --
+    # the only way a multi-stop CUSTOM route can be set at all (the game
+    # client can set a single destination, not an ordered list). POST,
+    # because unlike the read above it changes what a pilot sees.
+    post "/scout/plan/waypoints", ScoutPlanAPIController, :waypoints
   end
 
   #

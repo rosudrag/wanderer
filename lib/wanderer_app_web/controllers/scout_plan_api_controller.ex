@@ -36,6 +36,7 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
   use WandererAppWeb, :controller
 
   alias WandererApp.Scout.Planner
+  alias WandererApp.Scout.PlanWaypoints
 
   @kinds ~w(visit anoms sigs grid)
   @formats ~w(json text flat)
@@ -62,6 +63,43 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
 
       case Planner.plan(opts) do
         {:ok, result} -> render_result(conn, result, format)
+        {:error, reason} -> error(conn, to_string(reason))
+      end
+    else
+      {:error, message} -> error(conn, message)
+    end
+  end
+
+  # POST .../scout/plan/waypoints -- the same plan, then PUSHED onto a
+  # character's autopilot through ESI. Separate verb and action on
+  # purpose: `plan/2` is a pure read anybody holding the map key may do,
+  # this one changes what a pilot's client shows, and the route only
+  # exists in-game as an ordered waypoint list ESI alone can write
+  # (see WandererApp.Scout.PlanWaypoints).
+  #
+  # The response is the plan in the requested format regardless of how
+  # far the push got, with the pushed count on the header line, because
+  # the bot logs what it was told to fly and a partial push is still a
+  # valid route prefix.
+  def waypoints(conn, params) do
+    with {:ok, origin} <- fetch_origin(params),
+         {:ok, kind} <- fetch_kind(params),
+         {:ok, format} <- fetch_format(params),
+         {:ok, character_eve_id} <- fetch_character_eve_id(params) do
+      opts = [
+        origin: origin,
+        kind: kind,
+        limit: fetch_limit(params),
+        max_jumps: fetch_max_jumps(params),
+        regions: fetch_regions(params),
+        map_id: conn.assigns[:map_id],
+        chain: truthy?(Map.get(params, "chain"))
+      ]
+
+      with {:ok, result} <- Planner.plan(opts),
+           {:ok, pushed} <- PlanWaypoints.push(result.stops, character_eve_id) do
+        render_result(conn, Map.put(result, :pushed, pushed), format)
+      else
         {:error, reason} -> error(conn, to_string(reason))
       end
     else
@@ -98,6 +136,19 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
     do: {:error, "unknown format, expected one of #{Enum.join(@formats, ", ")}"}
 
   defp fetch_format(_params), do: {:ok, "json"}
+
+  # Required by `waypoints/2` only: a route is pushed onto exactly one
+  # pilot, and guessing which one from the map key is not something a
+  # write this visible should do -- eveknob sends its own
+  # `${ISXBob.Me.CharID}`.
+  defp fetch_character_eve_id(%{"character_eve_id" => id}) when is_binary(id) and id != "" do
+    case Integer.parse(id) do
+      {value, ""} when value > 0 -> {:ok, to_string(value)}
+      _ -> {:error, "character_eve_id must be a positive integer"}
+    end
+  end
+
+  defp fetch_character_eve_id(_params), do: {:error, "character_eve_id is required"}
 
   # Capped, not rejected -- a hand-edited URL asking for too much gets
   # the cap, not a 422, same tradeoff `ScoutExportController` makes.
@@ -167,8 +218,21 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
     header_line(result) <> ";" <> Enum.map_join(result.stops, ";", &row_line/1)
   end
 
+  # `pushed=` is present only on the waypoints action, and is the count
+  # ESI actually accepted -- which can be a PREFIX of the stops below it
+  # (`WandererApp.Scout.PlanWaypoints` halts rather than skipping a
+  # stop). A client that flies the list without reading this number is
+  # assuming a route it was not promised; version 1 clients that ignore
+  # the key still parse the line, since every token after `#plan 1` is
+  # `key=value` and order is not load-bearing.
   defp header_line(result) do
-    "#plan 1 origin=#{result.origin} kind=#{result.kind} generated=#{DateTime.to_iso8601(result.generated_at)}"
+    base =
+      "#plan 1 origin=#{result.origin} kind=#{result.kind} generated=#{DateTime.to_iso8601(result.generated_at)}"
+
+    case Map.get(result, :pushed) do
+      nil -> base
+      pushed -> base <> " pushed=#{length(pushed)}"
+    end
   end
 
   defp row_line(stop) do
