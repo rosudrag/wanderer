@@ -156,7 +156,10 @@ defmodule WandererApp.Scout.Snapshot do
       if complete? do
         known
         |> Enum.filter(&in_scope?(&1, blob))
-        |> Enum.reject(&(MapSet.member?(blob_ids, &1.structure_id) or MapSet.member?(steady_ids, &1.structure_id)))
+        |> Enum.reject(
+          &(MapSet.member?(blob_ids, &1.structure_id) or
+              MapSet.member?(steady_ids, &1.structure_id))
+        )
       else
         []
       end
@@ -254,7 +257,8 @@ defmodule WandererApp.Scout.Snapshot do
           boolean()
   def gone?(missing_count, missing_since, observed_at, status, timer_expires_at) do
     count_path =
-      missing_count >= 2 and DateTime.diff(observed_at, missing_since, :second) >= @gone_after_seconds
+      missing_count >= 2 and
+        DateTime.diff(observed_at, missing_since, :second) >= @gone_after_seconds
 
     timer_path =
       status in ["Unanchoring", "Unanchored"] and not is_nil(timer_expires_at) and
@@ -514,7 +518,10 @@ defmodule WandererApp.Scout.Snapshot do
   defp bool(nil), do: nil
   defp bool(""), do: nil
   defp bool(value) when is_boolean(value), do: value
-  defp bool(value) when is_binary(value), do: parse_bool(value |> String.trim() |> String.downcase())
+
+  defp bool(value) when is_binary(value),
+    do: parse_bool(value |> String.trim() |> String.downcase())
+
   defp bool(_value), do: nil
 
   defp parse_bool(value) when value in ~w(true 1 yes), do: true
@@ -620,7 +627,7 @@ defmodule WandererApp.Scout.Snapshot do
 
   defp apply_changed(changed, blob, map_id) do
     Enum.reduce(changed, {0, 0}, fn %{known: known, blob: structure, changed_fields: fields},
-                                     {ok, skipped} ->
+                                    {ok, skipped} ->
       if stale?(known, blob.observed_at) do
         {ok, skipped + 1}
       else
@@ -669,7 +676,16 @@ defmodule WandererApp.Scout.Snapshot do
 
         case update(known, attrs) do
           {:ok, _record} ->
-            write_event(:cleared, known.structure_id, blob, known.status, known.status, [], map_id)
+            write_event(
+              :cleared,
+              known.structure_id,
+              blob,
+              known.status,
+              known.status,
+              [],
+              map_id
+            )
+
             {ok + 1, skipped}
 
           {:error, reason} ->
@@ -700,7 +716,9 @@ defmodule WandererApp.Scout.Snapshot do
           |> Map.put(:presence, :seen)
 
         case update(known, attrs) do
-          {:ok, _record} -> {ok + 1, skipped}
+          {:ok, _record} ->
+            {ok + 1, skipped}
+
           {:error, reason} ->
             Logger.warning("[Scout.Snapshot] unchanged update failed: #{inspect(reason)}")
             {ok, skipped + 1}
@@ -776,7 +794,12 @@ defmodule WandererApp.Scout.Snapshot do
   # moves the sidebar badge.
   defp announce do
     WandererApp.Scout.Alerts.invalidate()
-    Phoenix.PubSub.broadcast(WandererApp.PubSub, "scout_intel", {:scout_intel_ingested, :structures})
+
+    Phoenix.PubSub.broadcast(
+      WandererApp.PubSub,
+      "scout_intel",
+      {:scout_intel_ingested, :structures}
+    )
   catch
     _, _ -> :ok
   end

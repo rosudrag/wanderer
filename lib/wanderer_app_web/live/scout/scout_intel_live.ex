@@ -61,6 +61,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
     ScoutStructure,
     ScoutStructureEvent
   }
+
   alias WandererApp.CachedInfo
   alias WandererApp.Identity.ScoutAccess
   alias WandererApp.Scout.Alerts
