@@ -222,6 +222,101 @@ defmodule WandererApp.ScoutIntelTest do
     end
   end
 
+  describe "repeat observations are merged, not appended" do
+    # The client re-reports every structure on grid on every pass. Before
+    # WandererApp.Scout.Merge that was one row per pass: three identical
+    # lines in the page's timer table, and a history drill-down of 200
+    # rows where three things happened.
+    defp seen_row(overrides \\ %{}) do
+      structure_row(Map.merge(%{"event" => "SEEN", "timer_seconds" => "-1"}, overrides))
+    end
+
+    test "an unchanged SEEN moves the stored row forward instead of adding one" do
+      assert {:ok, %{stored: 1}} = Ingest.ingest_structures([seen_row()], nil)
+
+      assert {:ok, %{stored: 1, failed: 0}} =
+               Ingest.ingest_structures(
+                 [seen_row(%{"utc_timestamp" => "2026-09-27 19:38:15"})],
+                 nil
+               )
+
+      assert {:ok, [row]} = ScoutStructureSighting.read()
+      assert row.observed_at == ~U[2026-09-27 19:38:15Z]
+    end
+
+    test "a changed status is news and keeps both rows" do
+      assert {:ok, %{stored: 1}} = Ingest.ingest_structures([seen_row()], nil)
+
+      assert {:ok, %{stored: 1}} =
+               Ingest.ingest_structures(
+                 [
+                   seen_row(%{
+                     "utc_timestamp" => "2026-09-27 19:38:15",
+                     "status" => "ArmorReinforced"
+                   })
+                 ],
+                 nil
+               )
+
+      assert {:ok, rows} = ScoutStructureSighting.read()
+      assert length(rows) == 2
+    end
+
+    test "a CHANGE is never merged, in either direction" do
+      assert {:ok, %{stored: 1}} = Ingest.ingest_structures([seen_row()], nil)
+
+      assert {:ok, %{stored: 1}} =
+               Ingest.ingest_structures(
+                 [seen_row(%{"utc_timestamp" => "2026-09-27 19:38:15", "event" => "CHANGE"})],
+                 nil
+               )
+
+      assert {:ok, rows} = ScoutStructureSighting.read()
+      assert length(rows) == 2
+    end
+
+    test "the same running timer read a minute apart is the same timer" do
+      # timer_seconds is re-read every pass, so a running reinforcement
+      # drifts by seconds between observations. Comparing expiries for
+      # equality would make every pass "news" and defeat the merge.
+      assert {:ok, %{stored: 1}} =
+               Ingest.ingest_structures(
+                 [
+                   seen_row(%{"utc_timestamp" => "2026-09-27 17:00:00", "timer_seconds" => "3600"})
+                 ],
+                 nil
+               )
+
+      assert {:ok, %{stored: 1}} =
+               Ingest.ingest_structures(
+                 [
+                   seen_row(%{"utc_timestamp" => "2026-09-27 17:01:00", "timer_seconds" => "3545"})
+                 ],
+                 nil
+               )
+
+      assert {:ok, [row]} = ScoutStructureSighting.read()
+      assert row.observed_at == ~U[2026-09-27 17:01:00Z]
+    end
+
+    test "a replayed older row never drags the stored sighting backwards" do
+      assert {:ok, %{stored: 1}} =
+               Ingest.ingest_structures(
+                 [seen_row(%{"utc_timestamp" => "2026-09-27 19:38:15"})],
+                 nil
+               )
+
+      assert {:ok, %{stored: 1}} =
+               Ingest.ingest_structures(
+                 [seen_row(%{"utc_timestamp" => "2026-09-27 17:38:15"})],
+                 nil
+               )
+
+      assert {:ok, rows} = ScoutStructureSighting.read()
+      assert Enum.map(rows, & &1.observed_at) |> Enum.max() == ~U[2026-09-27 19:38:15Z]
+    end
+  end
+
   describe "the :anchoring / :unanchoring read actions" do
     test ":anchoring returns only the anchoring family, latest row per structure" do
       earlier =

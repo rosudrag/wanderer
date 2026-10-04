@@ -96,6 +96,15 @@ rejected on purpose: a Cachex entry dies with every deploy. Everything restored 
 like a click — localStorage is user-writable, and `String.to_existing_atom/1` on a stored string is
 how a page crashes on mount.
 
+**Scout structure intel is deduplicated twice, and both halves are load-bearing.** The eveknob
+client re-reports every structure on grid on every pass. Reads fold
+(`DISTINCT ON (structure_id) ORDER BY observed_at DESC`) — the live timer table was missing that
+fold and showed one row per poll — and writes merge: `lib/wanderer_app/scout/merge.ex` turns an
+unchanged `SEEN` into a `:touch` of the stored row's `observed_at` rather than another insert,
+comparing timers with a 120s tolerance because `timer_expires_at` is derived from a relative
+countdown re-read each pass. `event: :change` is never merged. Add a structure board to `/scout`
+without the fold and the duplicates come straight back.
+
 ## Testing the map without an EVE account
 
 `dev/README.md` is the command sequence: a throwaway compose stack on `127.0.0.1:4100`, `/dev/login?token=…`,

@@ -96,6 +96,11 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
   defp ago(minutes),
     do: DateTime.utc_now() |> DateTime.add(-minutes, :minute) |> DateTime.truncate(:second)
 
+  defp view_timers(conn) do
+    {:ok, view, _html} = live(conn, ~p"/scout")
+    view |> element("#scout-active-timers") |> render()
+  end
+
   describe "structures tab" do
     test "shows only the newest observation of each structure", %{conn: conn} do
       structure(%{
@@ -141,6 +146,27 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
 
       assert timers =~ "Running Keepstar"
       refute timers =~ "Expired Astrahus"
+    end
+
+    test "one structure with many sightings is one timer row", %{conn: conn} do
+      # The log is append-only, so a structure the client re-reports while
+      # its timer runs has a row per pass. The timer table folds them.
+      expires = DateTime.utc_now() |> DateTime.add(3, :day) |> DateTime.truncate(:second)
+
+      for minutes <- [300, 180, 60] do
+        structure(%{
+          structure_id: 1_000_000_000_015,
+          structure_name: "Polled Keepstar",
+          status: "ArmorReinforced",
+          event: if(minutes == 300, do: :change, else: :seen),
+          observed_at: ago(minutes),
+          timer_expires_at: expires
+        })
+      end
+
+      timers = view_timers(conn)
+
+      assert length(Regex.scan(~r/Polled Keepstar/, timers)) == 1
     end
 
     test "the tick drops a timer that ran out while the page sat open", %{conn: conn} do

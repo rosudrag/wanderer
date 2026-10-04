@@ -271,6 +271,42 @@ countdown is meaningless in a log read hours later. Verified on real data —
 two observations of the same Egmar citadel seven hours apart, with
 `timer_seconds` of 32405 and 7278, resolve to the same expiry.
 
+## Repeat observations are merged at ingest
+
+The client re-reports every structure on grid on **every pass**. The table
+is append-only, so a Fortizar sitting in armor reinforcement for 36 hours
+used to produce one row per pass — hundreds saying the same thing, and the
+page showed three identical "Dal - Nothing to see here part 2" lines in the
+timer table.
+
+Two independent fixes, both needed:
+
+1. **The read folds.** Every structure board on the page is
+   `DISTINCT ON (structure_id) ORDER BY observed_at DESC`. The live timer
+   table was the one that was not, which is the duplication that showed.
+   Fixing the write alone would not have helped: the rows already stored
+   stay stored.
+2. **The write merges** (`WandererApp.Scout.Merge`). An incoming `SEEN`
+   that repeats the previous sighting of the same structure moves that
+   row's `observed_at` forward (`:touch`) instead of inserting. So "Seen
+   4m ago" stays honest while the history keeps only the changes — which
+   is what a per-structure history is for.
+
+What counts as a repeat: both rows are `SEEN`, the incoming row is not
+older than the stored one, and every field in `Merge.changed_fields/0`
+(status, ownership, name, the vulnerability flags, the HP readings, the
+system) is equal. `event: :change` is never merged in either direction —
+the writer already decided it is news.
+
+**Timers compare with a tolerance.** `timer_expires_at` is derived from the
+client's relative `timer_seconds`, re-read each pass, so two readings of
+one running timer differ by seconds. Equality would make every pass "a
+change" and defeat the module; two expiries within 120s are the same timer.
+
+The merge costs one indexed lookup per ingested row —
+`index([:structure_id, :observed_at])`, added for it and used by the
+history drill-down too.
+
 ## The page
 
 `/scout` is two tabs over the same two tables, and one `WANDERER_SCOUT_INTEL`

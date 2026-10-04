@@ -62,6 +62,10 @@ defmodule WandererApp.Api.ScoutStructureSighting do
       # The :anchoring / :unanchoring reads filter on this; every other
       # read action's filter runs through the four-column ILIKE instead.
       index([:status])
+      # The per-structure history drill-down, the latest-per-structure
+      # fold, and WandererApp.Scout.Merge's "what did this structure look
+      # like last time" lookup -- which runs once per ingested row.
+      index([:structure_id, :observed_at])
     end
   end
 
@@ -113,6 +117,13 @@ defmodule WandererApp.Api.ScoutStructureSighting do
     create :upsert do
       upsert?(true)
       upsert_identity(:uniq_sighting)
+    end
+
+    # Moves a stored sighting forward in time when the client re-reports
+    # it unchanged, instead of appending an identical row. See
+    # `WandererApp.Scout.Merge` for when that is allowed to happen.
+    update :touch do
+      accept [:observed_at, :timer_seconds, :timer_expires_at, :distance_m]
     end
 
     read :recent do

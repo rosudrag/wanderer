@@ -45,7 +45,7 @@ defmodule WandererApp.Scout.Ingest do
 
   require Logger
 
-  alias WandererApp.Api.{ScoutSpawnSighting, ScoutStructureSighting}
+  alias WandererApp.Api.ScoutSpawnSighting
   alias WandererApp.CachedInfo
 
   # An upper bound on one POST. The client posts incrementally; a batch
@@ -78,10 +78,21 @@ defmodule WandererApp.Scout.Ingest do
   @doc """
   Ingests structure-observation rows. See the module doc for the two
   traps in the source file (stale header, misnamed `type_name`).
+
+  Writes go through `WandererApp.Scout.Merge`, not straight to the
+  resource: the client re-reports every structure on grid on every pass,
+  and an unchanged `SEEN` moves the stored row's `observed_at` forward
+  instead of appending a copy of it.
   """
   @spec ingest_structures([map()], Ecto.UUID.t() | nil) :: {:ok, result()} | {:error, term()}
   def ingest_structures(rows, map_id) when is_list(rows) do
-    ingest(rows, map_id, &structure_attrs/2, &ScoutStructureSighting.upsert/2, :structures)
+    ingest(
+      rows,
+      map_id,
+      &structure_attrs/2,
+      &WandererApp.Scout.Merge.upsert_structure/2,
+      :structures
+    )
   end
 
   def ingest_structures(_rows, _map_id), do: {:error, :rows_must_be_a_list}

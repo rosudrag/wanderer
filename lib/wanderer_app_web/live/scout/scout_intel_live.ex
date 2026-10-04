@@ -384,19 +384,28 @@ defmodule WandererAppWeb.ScoutIntelLive do
   end
 
   defp load_tab(socket, :structures, since, now, filters, limit) do
-    {timers, _more} =
-      read(ScoutStructureSighting, :active_timers, Map.put(filters, :now, now), limit)
-
     # DISTINCT ON (structure_id) ORDER BY observed_at DESC: the latest
     # row per structure, folded by Postgres rather than by loading the
     # window and folding it here. Applied at the call site, the same
-    # way for every one of :search/:anchoring/:unanchoring below -- the
-    # fold is not baked into any of the three actions.
+    # way for every read below -- the fold is not baked into any action.
     distinct_latest = fn query ->
       query
       |> Ash.Query.distinct([:structure_id])
       |> Ash.Query.distinct_sort(observed_at: :desc)
     end
+
+    # The fold matters MOST here and was missing: the log is append-only,
+    # so a structure the client reports every few minutes for the hours
+    # its timer runs produced one timer row per poll. Three identical
+    # "Dal - Nothing to see here part 2" lines is what a reader saw.
+    {timers, _more} =
+      read(
+        ScoutStructureSighting,
+        :active_timers,
+        Map.put(filters, :now, now),
+        limit,
+        distinct_latest
+      )
 
     {structures, more_structures?} =
       read(
