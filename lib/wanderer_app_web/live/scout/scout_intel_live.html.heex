@@ -125,7 +125,7 @@
       id="scout-stat-unanchored"
       label="Unanchored"
       value={to_string(length(@unanchored_structures))}
-      hint="floating, undeployed"
+      hint={"last #{unanchored_horizon_days()}d"}
       tone={if @unanchored_structures != [], do: :urgent, else: :neutral}
     />
     <.stat
@@ -137,19 +137,17 @@
     <.stat
       label="Anchoring"
       value={to_string(length(@anchoring_structures))}
-      hint="no fitting, no services"
       tone={if @anchoring_structures != [], do: :warn, else: :neutral}
     />
     <.stat
       label="Unanchoring"
       value={to_string(length(@unanchoring_structures))}
-      hint="one-shot, hard deadline"
       tone={if @unanchoring_structures != [], do: :warn, else: :neutral}
     />
     <.stat
       label="Structures seen"
       value={count_label(@structures, @more?)}
-      hint={"in the last #{window_label(@days, @windows)}"}
+      hint={window_label(@days, @windows)}
     />
   </div>
 
@@ -157,16 +155,16 @@
     <.stat
       label="Still out there"
       value={to_string(length(@fresh_spawns))}
-      hint={"seen in the last #{fresh_window_label()}"}
+      hint={"last #{fresh_window_label()}"}
       tone={if @fresh_spawns != [], do: :good, else: :neutral}
     />
     <.stat
       label="Sightings"
       value={count_label(@spawns, @more?)}
-      hint={"in the last #{window_label(@days, @windows)}"}
+      hint={window_label(@days, @windows)}
     />
-    <.stat label="Hotspots" value={to_string(length(@hotspots))} hint="system + belt + spawn" />
-    <.stat label="Richest sighting" value={isk(richest(@spawns))} hint="in the window" />
+    <.stat label="Hotspots" value={to_string(length(@hotspots))} />
+    <.stat label="Richest sighting" value={isk(richest(@spawns))} />
   </div>
 
   <div :if={@tab == :structures}>
@@ -176,7 +174,7 @@
       count={length(@unanchored_structures)}
       tone={:urgent}
       class="border-error/60 bg-error/5"
-      hint={"Floating undeployed — no fitting, no services, nothing to wait out. Last #{unanchored_horizon_days()} days, not the window."}
+      hint={"last #{unanchored_horizon_days()} days, not the window"}
     >
       <.grid id="scout-unanchored">
         <thead>
@@ -216,7 +214,7 @@
       title="Live timers"
       count={length(@active_timers)}
       tone={if urgent_timers(@active_timers, @now) > 0, do: :urgent, else: :neutral}
-      hint="Still running, soonest first. Independent of the window — a timer either runs or it does not."
+      hint="ignores the window"
     >
       <.grid id="scout-active-timers">
         <thead>
@@ -255,7 +253,6 @@
       title="Anchoring"
       count={length(@anchoring_structures)}
       tone={if @anchoring_structures != [], do: :warn, else: :neutral}
-      hint="Never finished deploying: no fitting, no services — the cheapest kill in the game."
     >
       <.grid id="scout-anchoring">
         <thead>
@@ -297,7 +294,6 @@
       title="Unanchoring"
       count={length(@unanchoring_structures)}
       tone={if @unanchoring_structures != [], do: :warn, else: :neutral}
-      hint="Being pulled out of the ground — a one-shot opportunity with a hard deadline."
     >
       <.grid id="scout-unanchoring">
         <thead>
@@ -340,7 +336,7 @@
     <.panel
       title="Last seen"
       count={count_label(@structures, @more?)}
-      hint="The newest report of each structure in the window. Click one for its full history."
+      hint="latest report per structure"
     >
       <.grid id="scout-structures">
         <thead>
@@ -390,7 +386,7 @@
       title="Still out there"
       count={length(@fresh_spawns)}
       tone={if @fresh_spawns != [], do: :good, else: :neutral}
-      hint={"The newest sighting of each spawn within #{fresh_window_label()} — independent of the window, because a spawn either is probably still there or it is not."}
+      hint={"latest per spawn, last #{fresh_window_label()}, ignores the window"}
     >
       <.grid id="scout-fresh-spawns">
         <thead>
@@ -434,11 +430,7 @@
       </.grid>
     </.panel>
 
-    <.panel
-      title="Hotspots"
-      count={length(@hotspots)}
-      hint="Every sighting in the window grouped by where it spawned, most frequent first."
-    >
+    <.panel title="Hotspots" count={length(@hotspots)} hint="grouped by system + location + spawn">
       <.grid id="scout-hotspots">
         <thead>
           <tr>
@@ -485,11 +477,7 @@
       </.grid>
     </.panel>
 
-    <.panel
-      title="Log"
-      count={count_label(@spawns, @more?)}
-      hint="Every sighting in the window, newest first."
-    >
+    <.panel title="Log" count={count_label(@spawns, @more?)}>
       <.grid id="scout-spawns">
         <thead>
           <tr>
@@ -548,10 +536,7 @@
 
   <div :if={@more?} class="flex items-center gap-3 mb-6" id="scout-more">
     <button phx-click="load_more" class="btn btn-sm">Load more</button>
-    <span class="text-xs text-gray-500">
-      Showing the first {@limit} rows — narrow the window, the search or the space filter to see
-      the rest.
-    </span>
+    <span class="text-xs text-gray-500">first {@limit} rows</span>
   </div>
 
   <div
@@ -569,7 +554,7 @@
               @detail.structure_id}
           </h3>
           <p class="text-xs text-gray-500">
-            {plural(length(@detail.rows), "report", "reports")} of structure {@detail.structure_id}, newest first.
+            {plural(length(@detail.rows), "report", "reports")} · {@detail.structure_id}
             <span :if={nearest_celestial_label(List.first(@detail.rows))}>
               · {nearest_celestial_label(List.first(@detail.rows))}
             </span>
@@ -627,10 +612,10 @@
         <div class="min-w-0">
           <h3 class="font-semibold truncate">{@spawn_detail.spawn_name}</h3>
           <p class="text-xs text-gray-500 truncate">
-            {plural(length(@spawn_detail.rows), "sighting", "sightings")} at {@spawn_detail.location_name} in {system(
+            {plural(length(@spawn_detail.rows), "sighting", "sightings")} · {@spawn_detail.location_name} · {system(
               Map.put(@spawn_detail, :solar_system_name, nil),
               @systems
-            )}, newest first.
+            )}
           </p>
         </div>
         <button phx-click="close_spawn" class="btn btn-sm btn-ghost">✕</button>

@@ -119,30 +119,21 @@ defmodule WandererAppWeb.ScoutComponents do
         {plural(length(@rows), "structure", "structures")} unanchored
       </span>
 
-      <span class="text-xs text-gray-300">
-        Floating undeployed: no fitting, no services, no timer to wait out.
-      </span>
-
       <div class="flex flex-wrap items-center gap-1.5 ml-auto">
         <button
-          :for={row <- Enum.take(@rows, 6)}
+          :for={row <- Enum.take(@rows, 8)}
           phx-click="filter_system"
           phx-value-id={row.solar_system_id}
           class="badge badge-sm border border-error/50 bg-error/10 text-gray-100 hover:bg-error/25 gap-1"
-          title={"#{row.structure_name || row.structure_id} — seen #{ago(row.observed_at, @now)}"}
+          title={"#{row.structure_name || row.structure_id} — #{@horizon_days}-day horizon, not the window selector"}
         >
           {system(row, @systems)}
           <span class="text-error/80 font-mono">{ago(row.observed_at, @now)}</span>
         </button>
-        <span :if={length(@rows) > 6} class="text-xs text-gray-400">
-          +{length(@rows) - 6} more
+        <span :if={length(@rows) > 8} class="text-xs text-gray-400">
+          +{length(@rows) - 8}
         </span>
       </div>
-
-      <span class="text-[11px] text-gray-500 w-full">
-        Reported within the last {@horizon_days} days — this bar ignores the window selector and
-        the search box, and narrows only with the system and space filters.
-      </span>
     </div>
     """
   end
