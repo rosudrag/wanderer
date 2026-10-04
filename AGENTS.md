@@ -139,6 +139,21 @@ because `mix phx.server` hangs forever on the npm watcher `config/dev.exs` confi
 
 ## Traps that cost real time here
 
+- **Another agent may be editing this working tree right now, so `git add -A` is not a commit scope.**
+  Observed 2026-10-04: `scout_intel_live.ex` was being rewritten by a second session while this one
+  edited the same file; staging it whole carried half of that feature into a commit whose resources
+  were still untracked, and the resulting image built with
+  `WandererApp.Api.ScoutStructure.by_structure_id/2 is undefined` — `/scout`'s drill-down would have
+  raised on click. Before committing, read `git status` for files you never touched, and treat the
+  `#17 mix compile` step of `deploy.ps1 -Build` as the gate: an `is undefined` warning there means the
+  commit is internally inconsistent, so do NOT put that tag in `.env`. Same reason a version bump is
+  not optional even when someone else already bumped it — `@version` must be one you have not built.
+- **The toolchain for this repo is `C:\erl26` + `C:\elixir1173`, and neither is on PATH by default.**
+  `C:\Program Files\Elixir` (1.20) with `C:\Program Files\Erlang OTP` (OTP 28) is also installed and
+  cannot build this project: `x509` fails with `no record AttributePKCS-10 found` in `PKCS-FRAME.hrl`.
+  Worse, running `mix local.hex --force` under that pair rewrites `~/.mix/archives/hex-2.5.1` into a
+  1.20 build, after which 1.17 dies with `corrupt atom table` — for every session on this box, not
+  just yours. Prefix PATH explicitly, and if you do corrupt it, reinstall hex with 1.17's own mix.
 - **Never `docker build` from a tar of this Windows working tree.** NTFS drops the exec bit and git hands
   you CRLF, so the image fails with `exec /app/entrypoint.sh: no such file or directory`, then
   `/app/releases/*/env.sh: not found`. Build from a fresh `git clone` on the server, the way
@@ -260,5 +275,18 @@ plus a short container hostname ⇒ `:noconnection`). Use:
 ssh ex44 "sudo docker exec wanderer sh -c 'ls -d /app/lib/wanderer_app-*'"   # which build
 ssh ex44 "sudo docker logs wanderer 2>&1 | grep PersistentTracking"
 ```
+
+Nothing probes the app container directly: port 8000 is `expose`d but never published, and the runner
+image carries neither `curl` nor `wget`. Probe the public origin from the box instead, and read data
+from Postgres — whose database is named `postgres`, not `wanderer_db`:
+
+```bash
+ssh ex44 "curl -s -o /dev/null -w '%{http_code}\n' https://wanderer.chewytech.com/scout"   # 302 = alive
+ssh ex44 "sudo docker exec wanderer-db psql -U postgres -d postgres -c 'select count(*) from scout_structures_v1;'"
+```
+
+`/scout` and the rest of the LiveViews are SSO-only in production (`WANDERER_DEV_AUTH_TOKEN` is never
+set there), so a deploy can prove routing, migrations and data but NOT a rendered page. Say so rather
+than implying the page was seen.
 
 Full operational notes: `projects/infrastructure/hetzner/wanderer/README.md` in the monorepo.
