@@ -52,9 +52,8 @@ defmodule WandererApp.ScoutIntelTest do
         "owner_name" => "Moonlight Mouse Hole",
         "alliance_id" => "99014050",
         "upkeep_state" => "1",
-        "upkeep_label" => "FullPower",
         "structure_state" => "112",
-        "state_label" => "ArmorVulnerable",
+        "status" => "ArmorVulnerable",
         "vulnerable" => "TRUE",
         "anchoring" => "FALSE",
         "unanchoring" => "FALSE",
@@ -108,6 +107,9 @@ defmodule WandererApp.ScoutIntelTest do
       assert row.system_truesec == 0.25287
       assert row.distance_m == 225_354
       assert row.observed_at == ~U[2026-09-27 17:38:15Z]
+      assert row.upkeep_state == 1
+      assert row.structure_state == 112
+      assert row.status == "ArmorVulnerable"
       refute Map.has_key?(row, :character_name)
     end
 
@@ -163,6 +165,26 @@ defmodule WandererApp.ScoutIntelTest do
 
       assert error =~ "unknown event"
     end
+
+    test "status is stored verbatim, never re-derived from upkeep_state/structure_state" do
+      # upkeep_state 1 + structure_state 110 is row 15 of the precedence
+      # table ("FullPower") -- if this server ever re-derived status
+      # instead of trusting the bot, this row would come back FullPower.
+      # It must not: eveknob is authoritative.
+      row =
+        structure_row(%{
+          "upkeep_state" => "1",
+          "structure_state" => "110",
+          "status" => "Onlining"
+        })
+
+      assert {:ok, %{stored: 1}} = Ingest.ingest_structures([row], nil)
+      assert {:ok, [stored]} = ScoutStructureSighting.read()
+
+      assert stored.upkeep_state == 1
+      assert stored.structure_state == 110
+      assert stored.status == "Onlining"
+    end
   end
 
   describe "ingest idempotence" do
@@ -197,6 +219,80 @@ defmodule WandererApp.ScoutIntelTest do
 
       assert {:ok, rows} = ScoutStructureSighting.read()
       assert length(rows) == 2
+    end
+  end
+
+  describe "the :anchoring / :unanchoring read actions" do
+    test ":anchoring returns only the anchoring family, latest row per structure" do
+      earlier =
+        structure_row(%{
+          "structure_id" => "1111",
+          "status" => "Anchoring",
+          "utc_timestamp" => "2026-09-27 10:00:00"
+        })
+
+      later =
+        structure_row(%{
+          "structure_id" => "1111",
+          "status" => "Onlining",
+          "utc_timestamp" => "2026-09-27 11:00:00"
+        })
+
+      not_anchoring =
+        structure_row(%{
+          "structure_id" => "2222",
+          "status" => "FullPower",
+          "utc_timestamp" => "2026-09-27 10:30:00"
+        })
+
+      assert {:ok, %{stored: 3}} =
+               Ingest.ingest_structures([earlier, later, not_anchoring], nil)
+
+      assert {:ok, [row]} =
+               ScoutStructureSighting
+               |> Ash.Query.for_read(:anchoring, %{since: ~U[2026-01-01 00:00:00Z]})
+               |> Ash.Query.distinct([:structure_id])
+               |> Ash.Query.distinct_sort(observed_at: :desc)
+               |> Ash.read(authorize?: false)
+
+      # Only the anchoring-family structure, folded to its latest row.
+      assert row.structure_id == 1_111
+      assert row.status == "Onlining"
+    end
+
+    test ":unanchoring returns only status == Unanchoring, latest row per structure" do
+      anchoring =
+        structure_row(%{"structure_id" => "3333", "status" => "Anchoring"})
+
+      unanchoring_early =
+        structure_row(%{
+          "structure_id" => "4444",
+          "status" => "Unanchoring",
+          "unanchoring" => "TRUE",
+          "utc_timestamp" => "2026-09-27 10:00:00"
+        })
+
+      unanchoring_late =
+        structure_row(%{
+          "structure_id" => "4444",
+          "status" => "Unanchoring",
+          "unanchoring" => "TRUE",
+          "utc_timestamp" => "2026-09-27 12:00:00"
+        })
+
+      assert {:ok, %{stored: 3}} =
+               Ingest.ingest_structures([anchoring, unanchoring_early, unanchoring_late], nil)
+
+      assert {:ok, [row]} =
+               ScoutStructureSighting
+               |> Ash.Query.for_read(:unanchoring, %{since: ~U[2026-01-01 00:00:00Z]})
+               |> Ash.Query.distinct([:structure_id])
+               |> Ash.Query.distinct_sort(observed_at: :desc)
+               |> Ash.read(authorize?: false)
+
+      assert row.structure_id == 4_444
+      assert row.status == "Unanchoring"
+      assert row.observed_at == ~U[2026-09-27 12:00:00Z]
     end
   end
 

@@ -5,8 +5,8 @@ defmodule WandererAppWeb.ScoutExportController do
   The page is a reader; a fleet commander planning a timer board wants
   the rows. Same flag, same permission and the same `:search` read
   actions as `WandererAppWeb.ScoutIntelLive`, taking its filters from
-  the query string (`tab`, `days`, `q`, `system_id`) so "what I am
-  looking at" and "what I exported" cannot drift.
+  the query string (`tab`, `days`, `q`, `system_id`, `space`) so "what
+  I am looking at" and "what I exported" cannot drift.
 
   Unlike the page, the export carries **every** stored column: the point
   of a CSV is the fields the HTML had no room for.
@@ -22,6 +22,7 @@ defmodule WandererAppWeb.ScoutExportController do
 
   alias WandererApp.Api.{ScoutSpawnSighting, ScoutStructureSighting}
   alias WandererApp.Identity.ScoutAccess
+  alias WandererApp.Scout.Space
 
   # A hard cap, not a page: a CSV has no "load more". 50k rows is a few
   # megabytes and still a single round trip.
@@ -32,7 +33,7 @@ defmodule WandererAppWeb.ScoutExportController do
 
   @structure_columns ~w(observed_at event solar_system_id solar_system_name system_truesec
                         structure_id type_id structure_name group_name owner_id owner_name
-                        alliance_id upkeep_state upkeep_label structure_state state_label
+                        alliance_id upkeep_state structure_state status
                         vulnerable anchoring unanchoring timer_seconds timer_expires_at
                         shield_pct armor_pct hull_pct distance_m nearest_celestial
                         nearest_celestial_m)a
@@ -72,15 +73,18 @@ defmodule WandererAppWeb.ScoutExportController do
       q: search_term(params["q"])
     }
 
+    space = Space.parse(params["space"])
+
     case params["tab"] do
-      "spawns" -> {"spawns", @spawn_columns, rows(ScoutSpawnSighting, args)}
-      _ -> {"structures", @structure_columns, rows(ScoutStructureSighting, args)}
+      "spawns" -> {"spawns", @spawn_columns, rows(ScoutSpawnSighting, args, space)}
+      _ -> {"structures", @structure_columns, rows(ScoutStructureSighting, args, space)}
     end
   end
 
-  defp rows(resource, args) do
+  defp rows(resource, args, space) do
     resource
     |> Ash.Query.for_read(:search, args)
+    |> Space.filter(space)
     |> Ash.Query.limit(@max_rows)
     |> Ash.read(authorize?: false)
     |> case do

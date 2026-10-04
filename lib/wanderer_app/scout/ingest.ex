@@ -193,9 +193,11 @@ defmodule WandererApp.Scout.Ingest do
          owner_name: string(row, ["owner_name"]),
          alliance_id: int(row, ["alliance_id"]),
          upkeep_state: int(row, ["upkeep_state"]),
-         upkeep_label: string(row, ["upkeep_label"]),
          structure_state: int(row, ["structure_state"]),
-         state_label: string(row, ["state_label"]),
+         # Computed client-side (eveknob) per the precedence table in
+         # docs/chewy/scout-intel.md. The bot is authoritative: never
+         # re-derived here from upkeep_state/structure_state/unanchoring.
+         status: string(row, ["status"]),
          vulnerable: bool(row, ["vulnerable"]),
          anchoring: bool(row, ["anchoring"]),
          unanchoring: bool(row, ["unanchoring"]),

@@ -55,6 +55,8 @@ defmodule WandererAppWeb.ScoutIntelLive do
   alias WandererApp.Api.{ScoutSpawnSighting, ScoutStructureSighting}
   alias WandererApp.CachedInfo
   alias WandererApp.Identity.ScoutAccess
+  alias WandererApp.Scout.Space
+  alias WandererApp.Scout.Status
   alias WandererApp.Scout.Stats
 
   @windows [{"24 hours", 1}, {"7 days", 7}, {"30 days", 30}, {"90 days", 90}]
@@ -100,6 +102,8 @@ defmodule WandererAppWeb.ScoutIntelLive do
          windows: @windows,
          q: "",
          system_id: nil,
+         space: Space.all(),
+         space_types: Space.types(),
          limit: @page,
          detail: nil,
          spawn_detail: nil,
@@ -142,6 +146,21 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
   def handle_event("clear_system", _params, socket) do
     {:noreply, socket |> assign(system_id: nil, limit: @page) |> load()}
+  end
+
+  # The filter this page exists for: "everything except highsec" is one
+  # click. Applies to every table, including the two that ignore the
+  # window selector (live timers, still-out-there) — a reader who turned
+  # highsec off meant it for those too.
+  def handle_event("toggle_space", %{"type" => type}, socket) do
+    {:noreply,
+     socket
+     |> assign(space: Space.toggle(socket.assigns.space, type), limit: @page)
+     |> load()}
+  end
+
+  def handle_event("reset_space", _params, socket) do
+    {:noreply, socket |> assign(space: Space.all(), limit: @page) |> load()}
   end
 
   def handle_event("load_more", _params, socket) do
@@ -223,7 +242,11 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
     now = DateTime.utc_now()
     since = DateTime.add(now, -days, :day)
-    filters = %{system_id: socket.assigns.system_id, q: search_term(socket.assigns.q)}
+    filters = %{
+      system_id: socket.assigns.system_id,
+      q: search_term(socket.assigns.q),
+      space: socket.assigns.space
+    }
 
     socket
     |> assign(now: now, since: since)
@@ -235,26 +258,44 @@ defmodule WandererAppWeb.ScoutIntelLive do
     {timers, _more} =
       read(ScoutStructureSighting, :active_timers, Map.put(filters, :now, now), limit)
 
+    # DISTINCT ON (structure_id) ORDER BY observed_at DESC: the latest
+    # row per structure, folded by Postgres rather than by loading the
+    # window and folding it here. Applied at the call site, the same
+    # way for every one of :search/:anchoring/:unanchoring below -- the
+    # fold is not baked into any of the three actions.
+    distinct_latest = fn query ->
+      query
+      |> Ash.Query.distinct([:structure_id])
+      |> Ash.Query.distinct_sort(observed_at: :desc)
+    end
+
     {structures, more_structures?} =
-      read(ScoutStructureSighting, :search, Map.put(filters, :since, since), limit, fn query ->
-        # DISTINCT ON (structure_id) ORDER BY observed_at DESC: the
-        # latest row per structure, folded by Postgres rather than by
-        # loading the window and folding it here.
-        query
-        |> Ash.Query.distinct([:structure_id])
-        |> Ash.Query.distinct_sort(observed_at: :desc)
-      end)
+      read(ScoutStructureSighting, :search, Map.put(filters, :since, since), limit, distinct_latest)
+
+    # The cheapest kills in the game: no fitting, no services, a live
+    # vulnerability window. `:anchoring` mirrors `:search`'s filters,
+    # scoped server-side to the ANCHORING status family.
+    {anchoring_structures, _more} =
+      read(ScoutStructureSighting, :anchoring, Map.put(filters, :since, since), limit, distinct_latest)
+
+    # Being pulled out of the ground: a one-shot opportunity with a
+    # hard deadline. `:unanchoring` mirrors `:search`'s filters, scoped
+    # server-side to `status == "Unanchoring"`.
+    {unanchoring_structures, _more} =
+      read(ScoutStructureSighting, :unanchoring, Map.put(filters, :since, since), limit, distinct_latest)
 
     socket
     |> assign(
       active_timers: Enum.filter(timers, &running?(&1, now)),
       structures: structures,
+      anchoring_structures: anchoring_structures,
+      unanchoring_structures: unanchoring_structures,
       more?: more_structures?,
       spawns: [],
       hotspots: [],
       fresh_spawns: []
     )
-    |> assign_systems([timers, structures])
+    |> assign_systems([timers, structures, anchoring_structures, unanchoring_structures])
   end
 
   defp load_tab(socket, :spawns, since, now, filters, limit) do
@@ -262,7 +303,11 @@ defmodule WandererAppWeb.ScoutIntelLive do
       read(ScoutSpawnSighting, :search, Map.put(filters, :since, since), limit)
 
     hotspots =
-      Stats.spawn_hotspots(since, system_id: filters.system_id, q: filters.q)
+      Stats.spawn_hotspots(since,
+        system_id: filters.system_id,
+        q: filters.q,
+        space: filters.space
+      )
 
     {fresh_spawns, _more} =
       read(
@@ -290,17 +335,25 @@ defmodule WandererAppWeb.ScoutIntelLive do
       more?: more?,
       active_timers: [],
       structures: [],
+      anchoring_structures: [],
+      unanchoring_structures: [],
       fresh_spawns: fresh_spawns
     )
     |> assign_systems([spawns, hotspots, fresh_spawns])
   end
 
   # Asks for one row past the page so the UI can say "there are more"
-  # without a second count query over the same window.
+  # without a second count query over the same window. `:space` is not
+  # an argument of either read action -- it is a subquery against the
+  # static map, applied to the query rather than carried by the action,
+  # so the two resources and the CSV export share one implementation.
   defp read(resource, action, args, limit, shape \\ & &1) do
+    {space, args} = Map.pop!(args, :space)
+
     query =
       resource
       |> Ash.Query.for_read(action, args)
+      |> Space.filter(space)
       |> shape.()
       |> Ash.Query.limit(limit + 1)
 
@@ -467,6 +520,68 @@ defmodule WandererAppWeb.ScoutIntelLive do
   defp format_celestial(name, _meters), do: name
 
   @doc false
+  # One badge, coloured by status family (`WandererApp.Scout.Status`)
+  # rather than by the raw string, so every status in the same tier
+  # reads the same at a glance. The ONE place this mapping lives --
+  # every table on this page calls through here instead of re-deriving
+  # it inline.
+  #
+  #   * Abandoned / NoFuel -- the opportunity tier: asset safety is off
+  #     or nobody is paying the fuel bill.
+  #   * ArmorReinforced / HullReinforced / ShieldReinforced -- the
+  #     timer tier: a clock is running.
+  #   * ArmorVulnerable / HullVulnerable -- the live-fight tier:
+  #     shootable right now.
+  #   * the ANCHORING family -- the free-kill tier: no fitting, no
+  #     services, a live vulnerability window.
+  #   * Unanchoring -- its own tier: a one-shot deadline.
+  #   * STEADY -- muted: nothing to do here.
+  def status_badge_class(nil), do: "badge-ghost"
+
+  def status_badge_class(status) do
+    cond do
+      status in Status.dead_family() -> "badge-error"
+      status in Status.vulnerable_family() -> "badge-error"
+      status in Status.unanchoring_family() -> "badge-error"
+      status in Status.reinforced_family() -> "badge-warning"
+      status in Status.anchoring_family() -> "badge-warning"
+      status in Status.steady_family() -> "badge-ghost"
+      true -> "badge-ghost"
+    end
+  end
+
+  @doc false
+  # "72% / 54% / 100%": shield, armor, hull, in that order. "—" for
+  # whichever the client has not reported (a POCO carries no hull_pct).
+  def hp_label(row) do
+    [row.shield_pct, row.armor_pct, row.hull_pct]
+    |> Enum.map(&pct_label/1)
+    |> Enum.join(" / ")
+  end
+
+  defp pct_label(nil), do: "—"
+  defp pct_label(value), do: "#{value}%"
+
+  @doc false
+  # The resolved nearest celestial if the client has one, else the raw
+  # observer-relative distance -- one fallback a caller can render
+  # without checking both fields itself.
+  def distance_or_celestial(row) do
+    case nearest_celestial_label(row) do
+      nil -> format_distance(Map.get(row, :distance_m))
+      label -> label
+    end
+  end
+
+  defp format_distance(nil), do: "—"
+
+  defp format_distance(meters) when is_integer(meters) and meters >= 1000,
+    do: "#{Float.round(meters / 1000, 1)} km"
+
+  defp format_distance(meters) when is_integer(meters), do: "#{meters} m"
+  defp format_distance(_meters), do: "—"
+
+  @doc false
   # The client logs the raw system ID as the name when it has not
   # resolved the real one yet; `systems` is this page's own resolution,
   # and the stored string is the fallback.
@@ -501,6 +616,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
       }
       |> maybe_put("q", search_term(assigns.q))
       |> maybe_put("system_id", assigns.system_id && to_string(assigns.system_id))
+      |> maybe_put("space", Space.to_param(assigns.space))
 
     "/scout/export.csv?" <> URI.encode_query(params)
   end

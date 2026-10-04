@@ -30,6 +30,14 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
   @jita 30_000_142
   @amarr 30_002_187
 
+  # Dedicated ids for the space-filter tests: they are the only ones that
+  # need a map_solar_system_v2 row, and a shared id would let one test's
+  # static row decide another's result.
+  @hs_sys 30_050_001
+  @ns_sys 30_050_002
+  @wh_sys 31_050_003
+  @unmapped_sys 30_050_004
+
   setup do
     Application.put_env(:wanderer_app, :scout_intel_enabled, true)
 
@@ -57,7 +65,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
             solar_system_id: @jita,
             structure_id: 1_000_000_000_001,
             structure_name: "Default Keepstar",
-            state_label: "Shield"
+            status: "FullPower"
           },
           attrs
         ),
@@ -93,22 +101,22 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       structure(%{
         structure_id: 1_000_000_000_777,
         structure_name: "Sosala Fortizar",
-        state_label: "Reinforced",
+        status: "ArmorReinforced",
         observed_at: ago(600)
       })
 
       structure(%{
         structure_id: 1_000_000_000_777,
         structure_name: "Sosala Fortizar",
-        state_label: "Anchored",
+        status: "FullPower",
         observed_at: ago(5)
       })
 
       {:ok, _view, html} = live(conn, ~p"/scout")
 
       assert html =~ "Sosala Fortizar"
-      assert html =~ "Anchored"
-      refute html =~ "Reinforced"
+      assert html =~ "FullPower"
+      refute html =~ "ArmorReinforced"
     end
 
     test "lists a running timer and omits one that has run out", %{conn: conn} do
@@ -198,7 +206,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       structure(%{
         structure_id: 1_000_000_000_040,
         structure_name: "History Keepstar",
-        state_label: "Reinforced",
+        status: "ArmorReinforced",
         event: :change,
         observed_at: ago(300)
       })
@@ -206,7 +214,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       structure(%{
         structure_id: 1_000_000_000_040,
         structure_name: "History Keepstar",
-        state_label: "Shield",
+        status: "FullPower",
         observed_at: ago(10)
       })
 
@@ -216,8 +224,8 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
 
       assert detail =~ "scout-structure-detail"
       # Both observations, not just the latest the table above shows.
-      assert detail =~ "Reinforced"
-      assert detail =~ "Shield"
+      assert detail =~ "ArmorReinforced"
+      assert detail =~ "FullPower"
     end
 
     test "an empty log says nothing was ever reported", %{conn: conn} do
@@ -238,7 +246,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
               "system_id" => to_string(@jita),
               "structure_id" => "1000000000099",
               "type_name" => "Pushed Keepstar",
-              "state_label" => "Shield"
+              "status" => "FullPower"
             }
           ],
           nil
@@ -247,6 +255,109 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       # The broadcast is what refreshes the page; without it this is the
       # same HTML as before.
       assert render(view) =~ "Pushed Keepstar"
+    end
+  end
+
+  describe "the anchoring and unanchoring tables" do
+    test "the anchoring table shows only ANCHORING-family statuses", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_060,
+        structure_name: "Still Deploying Astrahus",
+        status: "Onlining",
+        observed_at: ago(5)
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_061,
+        structure_name: "Steady Fortizar",
+        status: "FullPower",
+        observed_at: ago(5)
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_062,
+        structure_name: "Pulling Out Keepstar",
+        status: "Unanchoring",
+        observed_at: ago(5)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      anchoring = view |> element("#scout-anchoring") |> render()
+
+      assert anchoring =~ "Still Deploying Astrahus"
+      refute anchoring =~ "Steady Fortizar"
+      refute anchoring =~ "Pulling Out Keepstar"
+    end
+
+    test "the anchoring table folds to the latest row per structure", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_063,
+        structure_name: "Slow Boat Fortizar",
+        status: "Fitting",
+        observed_at: ago(600)
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_063,
+        structure_name: "Slow Boat Fortizar",
+        status: "Onlining",
+        observed_at: ago(5)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      anchoring = view |> element("#scout-anchoring") |> render()
+
+      assert anchoring =~ "Onlining"
+      refute anchoring =~ "Fitting"
+    end
+
+    test "the unanchoring table shows only Unanchoring, latest row per structure",
+         %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_064,
+        structure_name: "Steady Keepstar",
+        status: "FullPower",
+        observed_at: ago(5)
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_065,
+        structure_name: "Coming Out Astrahus",
+        status: "ArmorReinforced",
+        observed_at: ago(600)
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_065,
+        structure_name: "Coming Out Astrahus",
+        status: "Unanchoring",
+        observed_at: ago(5)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      unanchoring = view |> element("#scout-unanchoring") |> render()
+
+      assert unanchoring =~ "Coming Out Astrahus"
+      refute unanchoring =~ "Steady Keepstar"
+      # The fold: the ArmorReinforced row is history, not the latest.
+      assert unanchoring =~ "Unanchoring"
+    end
+
+    test "both tables render an empty state when nothing matches", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_066,
+        structure_name: "Nothing Special",
+        status: "FullPower"
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      assert view |> element("#scout-anchoring") |> render() =~ "Nothing anchoring right now."
+      assert view |> element("#scout-unanchoring") |> render() =~
+               "Nothing unanchoring right now."
     end
   end
 
@@ -394,6 +505,128 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert hotspots =~ "faction"
       assert hotspots =~ Calendar.strftime(first_seen, "%Y-%m-%d %H:%M")
       assert hotspots =~ Calendar.strftime(last_seen, "%Y-%m-%d %H:%M")
+    end
+  end
+
+  describe "the space filter" do
+    # The classification comes from map_solar_system_v2.system_class, not
+    # from the row's stored truesec -- see WandererApp.Scout.Space -- so
+    # every one of these needs the static row to exist.
+    setup do
+      create_solar_system(%{solar_system_id: @hs_sys, system_class: 7, security: "0.9"})
+      create_solar_system(%{solar_system_id: @ns_sys, system_class: 9, security: "-0.3"})
+      create_solar_system(%{solar_system_id: @wh_sys, system_class: 3, security: "-0.99"})
+      :ok
+    end
+
+    test "unticking High drops highsec from the timer table and the fold", %{conn: conn} do
+      running = DateTime.utc_now() |> DateTime.add(3, :day) |> DateTime.truncate(:second)
+
+      structure(%{
+        structure_id: 1_000_000_000_100,
+        structure_name: "Highsec Fortizar",
+        solar_system_id: @hs_sys,
+        timer_expires_at: running
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_101,
+        structure_name: "Nullsec Keepstar",
+        solar_system_id: @ns_sys,
+        timer_expires_at: running
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_102,
+        structure_name: "Hole Astrahus",
+        solar_system_id: @wh_sys
+      })
+
+      {:ok, view, html} = live(conn, ~p"/scout")
+      assert html =~ "Highsec Fortizar"
+
+      filtered = view |> element("#scout-space-hs") |> render_click()
+
+      refute filtered =~ "Highsec Fortizar"
+      assert filtered =~ "Nullsec Keepstar"
+      assert filtered =~ "Hole Astrahus"
+
+      # Including the timer table, which ignores the window but not this.
+      timers = view |> element("#scout-active-timers") |> render()
+      refute timers =~ "Highsec Fortizar"
+      assert timers =~ "Nullsec Keepstar"
+
+      restored = view |> element("#scout-space-reset") |> render_click()
+      assert restored =~ "Highsec Fortizar"
+    end
+
+    test "it narrows the spawn log, the fresh list and the hotspots together", %{conn: conn} do
+      spawn_sighting(%{
+        solar_system_id: @hs_sys,
+        spawn_name: "Highsec Hauler",
+        observed_at: ago(30)
+      })
+
+      spawn_sighting(%{
+        solar_system_id: @wh_sys,
+        spawn_name: "Hole Drifter",
+        observed_at: ago(30)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+      render_click(view, "select_tab", %{"tab" => "spawns"})
+
+      render_click(view, "toggle_space", %{"type" => "hs"})
+
+      for id <- ~w(#scout-spawns #scout-fresh-spawns #scout-hotspots) do
+        rendered = view |> element(id) |> render()
+        refute rendered =~ "Highsec Hauler"
+        assert rendered =~ "Hole Drifter"
+      end
+    end
+
+    test "a system missing from the static map lives in Other, and only there", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_110,
+        structure_name: "Nowhere Astrahus",
+        solar_system_id: @unmapped_sys
+      })
+
+      {:ok, view, html} = live(conn, ~p"/scout")
+      # Default selection is every bucket, so nothing is filtered at all.
+      assert html =~ "Nowhere Astrahus"
+
+      # Still visible with only Other selected...
+      for key <- ~w(hs ls ns wh pochven) do
+        render_click(view, "toggle_space", %{"type" => key})
+      end
+
+      assert render(view) =~ "Nowhere Astrahus"
+
+      # ...and gone the moment Other itself is unticked.
+      refute render_click(view, "toggle_space", %{"type" => "other"}) =~ "Nowhere Astrahus"
+    end
+
+    test "the CSV export applies the same selection", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_120,
+        structure_name: "Highsec Export",
+        solar_system_id: @hs_sys
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_121,
+        structure_name: "Nullsec Export",
+        solar_system_id: @ns_sys
+      })
+
+      body =
+        conn
+        |> get(~p"/scout/export.csv", %{"tab" => "structures", "space" => "ns,wh"})
+        |> response(200)
+
+      assert body =~ "Nullsec Export"
+      refute body =~ "Highsec Export"
     end
   end
 

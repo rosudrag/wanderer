@@ -1,0 +1,469 @@
+{
+  "base_filter": null, 
+  "hash": "23EA87098FC179C40D60DEAB02C08AC06EEFCE6FE0991A50E1ED1B3E1DF46C19", 
+  "multitenancy": {
+    "attribute": null, 
+    "global": null, 
+    "strategy": null
+  }, 
+  "check_constraints": [], 
+  "custom_indexes": [
+    {
+      "concurrently": false, 
+      "unique": false, 
+      "name": null, 
+      "fields": [
+        {
+          "type": "atom", 
+          "value": "observed_at"
+        }
+      ], 
+      "prefix": null, 
+      "all_tenants?": false, 
+      "using": null, 
+      "table": null, 
+      "message": null, 
+      "include": null, 
+      "where": null, 
+      "error_fields": [
+        "observed_at"
+      ], 
+      "nulls_distinct": true
+    }, 
+    {
+      "concurrently": false, 
+      "unique": false, 
+      "name": null, 
+      "fields": [
+        {
+          "type": "atom", 
+          "value": "timer_expires_at"
+        }
+      ], 
+      "prefix": null, 
+      "all_tenants?": false, 
+      "using": null, 
+      "table": null, 
+      "message": null, 
+      "include": null, 
+      "where": null, 
+      "error_fields": [
+        "timer_expires_at"
+      ], 
+      "nulls_distinct": true
+    }, 
+    {
+      "concurrently": false, 
+      "prefix": null, 
+      "using": null, 
+      "table": null, 
+      "message": null, 
+      "unique": false, 
+      "name": null, 
+      "fields": [
+        {
+          "type": "atom", 
+          "value": "status"
+        }
+      ], 
+      "all_tenants?": false, 
+      "error_fields": [
+        "status"
+      ], 
+      "include": null, 
+      "where": null, 
+      "nulls_distinct": true
+    }
+  ], 
+  "repo": "Elixir.WandererApp.Repo", 
+  "has_create_action": true, 
+  "table": "scout_structure_sightings_v1", 
+  "attributes": [
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "fragment(\"gen_random_uuid()\")", 
+      "precision": null, 
+      "source": "id", 
+      "references": null, 
+      "primary_key?": true, 
+      "allow_nil?": false, 
+      "type": "uuid", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "observed_at", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": false, 
+      "type": "utc_datetime", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "\"seen\"", 
+      "precision": null, 
+      "source": "event", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": false, 
+      "type": "text", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "solar_system_id", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": false, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "solar_system_name", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "text", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "system_truesec", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "float", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "structure_id", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": false, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "type_id", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "structure_name", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "text", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "group_name", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "text", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "owner_id", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "owner_name", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "text", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "alliance_id", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "upkeep_state", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "structure_state", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "source": "status", 
+      "scale": null, 
+      "allow_nil?": true, 
+      "references": null, 
+      "primary_key?": false, 
+      "default": "nil", 
+      "generated?": false, 
+      "type": "text", 
+      "precision": null, 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "vulnerable", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "boolean", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "anchoring", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "boolean", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "unanchoring", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "boolean", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "timer_seconds", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "timer_expires_at", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "utc_datetime", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "shield_pct", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "armor_pct", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "hull_pct", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "distance_m", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "nearest_celestial", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "text", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "nearest_celestial_m", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "bigint", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "nil", 
+      "precision": null, 
+      "source": "map_id", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": true, 
+      "type": "uuid", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "fragment(\"(now() AT TIME ZONE 'utc')\")", 
+      "precision": null, 
+      "source": "inserted_at", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": false, 
+      "type": "utc_datetime_usec", 
+      "size": null
+    }, 
+    {
+      "scale": null, 
+      "generated?": false, 
+      "default": "fragment(\"(now() AT TIME ZONE 'utc')\")", 
+      "precision": null, 
+      "source": "updated_at", 
+      "references": null, 
+      "primary_key?": false, 
+      "allow_nil?": false, 
+      "type": "utc_datetime_usec", 
+      "size": null
+    }
+  ], 
+  "custom_statements": [], 
+  "identities": [
+    {
+      "base_filter": null, 
+      "name": "uniq_sighting", 
+      "keys": [
+        {
+          "type": "atom", 
+          "value": "structure_id"
+        }, 
+        {
+          "type": "atom", 
+          "value": "observed_at"
+        }, 
+        {
+          "type": "atom", 
+          "value": "event"
+        }
+      ], 
+      "index_name": "scout_structure_sightings_v1_uniq_sighting_index", 
+      "all_tenants?": false, 
+      "nils_distinct?": true, 
+      "where": null
+    }
+  ], 
+  "schema": null
+}

@@ -116,9 +116,14 @@ defmodule WandererAppWeb.ScoutIntelAPIController do
       owner_name: %OpenApiSpex.Schema{type: :string},
       alliance_id: %OpenApiSpex.Schema{type: :integer},
       upkeep_state: %OpenApiSpex.Schema{type: :integer},
-      upkeep_label: %OpenApiSpex.Schema{type: :string},
       structure_state: %OpenApiSpex.Schema{type: :integer},
-      state_label: %OpenApiSpex.Schema{type: :string},
+      status: %OpenApiSpex.Schema{
+        type: :string,
+        description:
+          "Merged power/lifecycle/unanchoring verdict, PascalCase (\"FullPower\", " <>
+            "\"Onlining\", \"Unanchoring\", ...). Computed client-side; posted verbatim " <>
+            "and never re-derived here. See the precedence table in docs/chewy/scout-intel.md."
+      },
       vulnerable: %OpenApiSpex.Schema{type: :boolean},
       anchoring: %OpenApiSpex.Schema{type: :boolean},
       unanchoring: %OpenApiSpex.Schema{type: :boolean},
@@ -155,9 +160,8 @@ defmodule WandererAppWeb.ScoutIntelAPIController do
       owner_name: "Moonlight Mouse Hole",
       alliance_id: 99_014_050,
       upkeep_state: 1,
-      upkeep_label: "FullPower",
       structure_state: 112,
-      state_label: "ArmorVulnerable",
+      status: "ArmorVulnerable",
       vulnerable: true,
       anchoring: false,
       unanchoring: false,

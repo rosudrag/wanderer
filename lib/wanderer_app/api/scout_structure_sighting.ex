@@ -59,6 +59,9 @@ defmodule WandererApp.Api.ScoutStructureSighting do
       # :active_timers filters and sorts on this, and it is the query the
       # page runs on every mount.
       index([:timer_expires_at])
+      # The :anchoring / :unanchoring reads filter on this; every other
+      # read action's filter runs through the four-column ILIKE instead.
+      index([:status])
     end
   end
 
@@ -89,9 +92,8 @@ defmodule WandererApp.Api.ScoutStructureSighting do
       :owner_name,
       :alliance_id,
       :upkeep_state,
-      :upkeep_label,
       :structure_state,
-      :state_label,
+      :status,
       :vulnerable,
       :anchoring,
       :unanchoring,
@@ -154,6 +156,64 @@ defmodule WandererApp.Api.ScoutStructureSighting do
     read :history do
       argument :structure_id, :integer, allow_nil?: false
       filter expr(structure_id == ^arg(:structure_id))
+      prepare build(sort: [observed_at: :desc])
+    end
+
+    # Cheapest-kill board: latest sighting per structure whose `status`
+    # is in `WandererApp.Scout.Status.anchoring_family/0` -- no fitting,
+    # no services online yet, a live vulnerability window. Same shape as
+    # `:search`; the caller folds to one row per `structure_id` with the
+    # same `Ash.Query.distinct/2` + `distinct_sort/2` the last-seen table
+    # already applies on top of `:search`.
+    read :anchoring do
+      argument :since, :utc_datetime, allow_nil?: false
+      argument :system_id, :integer
+      argument :q, :string
+
+      filter expr(
+               observed_at >= ^arg(:since) and
+                 status in ^WandererApp.Scout.Status.anchoring_family() and
+                 (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
+                 (is_nil(^arg(:q)) or
+                    fragment(
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      structure_name,
+                      owner_name,
+                      solar_system_name,
+                      group_name,
+                      nearest_celestial,
+                      ^arg(:q)
+                    ))
+             )
+
+      prepare build(sort: [observed_at: :desc])
+    end
+
+    # A structure being pulled out of the ground: a one-shot opportunity
+    # with a hard deadline. `status == "Unanchoring"` outranks the whole
+    # anchoring family in the precedence table, so it is its own board
+    # rather than folded into `:anchoring`.
+    read :unanchoring do
+      argument :since, :utc_datetime, allow_nil?: false
+      argument :system_id, :integer
+      argument :q, :string
+
+      filter expr(
+               observed_at >= ^arg(:since) and
+                 status in ^WandererApp.Scout.Status.unanchoring_family() and
+                 (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
+                 (is_nil(^arg(:q)) or
+                    fragment(
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      structure_name,
+                      owner_name,
+                      solar_system_name,
+                      group_name,
+                      nearest_celestial,
+                      ^arg(:q)
+                    ))
+             )
+
       prepare build(sort: [observed_at: :desc])
     end
 
@@ -228,9 +288,12 @@ defmodule WandererApp.Api.ScoutStructureSighting do
     attribute :alliance_id, :integer
 
     attribute :upkeep_state, :integer
-    attribute :upkeep_label, :string
     attribute :structure_state, :integer
-    attribute :state_label, :string
+
+    # Merged power/state/unanchoring verdict, PascalCase, computed
+    # client-side by eveknob and stored verbatim -- see the precedence
+    # table in docs/chewy/scout-intel.md. Never re-derived server-side.
+    attribute :status, :string
 
     attribute :vulnerable, :boolean
     attribute :anchoring, :boolean

@@ -101,20 +101,24 @@ cost a wrong column mapping if you parse that file positionally.
 1. **The on-disk header is stale, and the width keeps moving.** The header is
    written once, on file creation, and never rewritten — so a long-lived log
    carries whatever header was current when it was created while its rows
-   carry whatever the writer emits today. Observed: a file headed with 24
-   columns whose rows were 26, and the writer has since grown a 27th
-   (`timer_utc`). Older rows really are narrower. **Switch on the field
-   count; never trust the header.**
+   carry whatever the writer emits today. Historic widths observed on disk:
+   24, 26, 27 and 29 columns. The writer now emits **28** —
+   `upkeep_label`/`state_label` merged into one `status` column (see "Merged
+   status" below), which narrows the just-widened 29-column file by one
+   rather than growing it further. **Switch on the field count; never trust
+   the header.**
 
-   Current order (27), from `obj_StructureWatch:RecordRow`: `timestamp,
+   Current order (28), from `obj_StructureWatch:RecordRow`: `timestamp,
    character, event, system_id, system_name, system_truesec, structure_id,
    type_id, type_name, group_name, owner_id, owner_name, alliance_id,
-   upkeep_state, upkeep_label, structure_state, state_label, vulnerable,
-   anchoring, unanchoring, timer_seconds, shield_pct, armor_pct, hull_pct,
-   distance_m, utc_timestamp, timer_utc`.
+   upkeep_state, structure_state, status, vulnerable, anchoring,
+   unanchoring, timer_seconds, shield_pct, armor_pct, hull_pct, distance_m,
+   utc_timestamp, timer_utc, nearest_celestial, nearest_celestial_m`.
 
-   `anchoring`/`unanchoring` were inserted before `timer_seconds` (24 → 26)
-   and `timer_utc` appended (26 → 27). `timer_utc` is the absolute instant
+   `anchoring`/`unanchoring` were inserted before `timer_seconds` (24 → 26),
+   `timer_utc` appended (26 → 27), `nearest_celestial`/`nearest_celestial_m`
+   appended (27 → 29), and `upkeep_label`/`state_label` merged into the
+   single `status` column (29 → 28). `timer_utc` is the absolute instant
    the timer expires, computed client-side; this endpoint ignores it and
    derives `timer_expires_at` from `observed_at + timer_seconds` itself, so
    the two are cross-checkable rather than redundant.
@@ -126,6 +130,102 @@ cost a wrong column mapping if you parse that file positionally.
 
 `system_name` is also frequently just the system ID as a string — the client
 caches the resolved name and logs the ID until it has one.
+
+## Merged status
+
+`upkeep_state` (power) and `structure_state` (lifecycle/combat) describe ONE
+verdict with two labels, and the pair lies on its own: a structure that never
+finished deploying has no service module **by construction**, so the server
+drives it to `LowPower` immediately and `Abandoned` ~7 days later
+(`structures/structure.py:586-608`, `ABANDONING_TIME_MIN`). Live data showed
+5 rows of `Abandoned + Onlining` that were half-finished drops, not abandoned
+hulls.
+
+One column replaces both: **`status`** (string, PascalCase, no spaces).
+Computed client-side by eveknob and stored verbatim — this server never
+re-derives it. Upwell structures (categoryID 65), first match wins:
+
+| # | Condition | `status` |
+|---|---|---|
+| 1 | `unanchoring` bool is TRUE | `Unanchoring` |
+| 2 | `structure_state` == 1 (STATE_UNANCHORED) | `Unanchored` |
+| 3 | `structure_state` == 2 (STATE_ANCHORING) | `Anchoring` |
+| 4 | `structure_state` == 115 (STATE_ANCHOR_VULNERABLE) | `AnchorVulnerable` |
+| 5 | `structure_state` == 116 (STATE_DEPLOY_VULNERABLE) | `Deploying` |
+| 6 | `structure_state` == 101 (STATE_FITTING_INVULNERABLE) | `Fitting` |
+| 7 | `structure_state` == 102 (STATE_ONLINING_VULNERABLE) | `Onlining` |
+| 8 | `upkeep_state` == 3 (UPKEEP_STATE_ABANDONED) | `Abandoned` |
+| 9 | `structure_state` == 111 (STATE_ARMOR_REINFORCE) | `ArmorReinforced` |
+| 10 | `structure_state` == 113 (STATE_HULL_REINFORCE) | `HullReinforced` |
+| 11 | `structure_state` == 112 (STATE_ARMOR_VULNERABLE) | `ArmorVulnerable` |
+| 12 | `structure_state` == 114 (STATE_HULL_VULNERABLE) | `HullVulnerable` |
+| 13 | `upkeep_state` == 2 (UPKEEP_STATE_LOW_POWER) | `NoFuel` |
+| 14 | `structure_state` == 118 (STATE_FOB_INVULNERABLE) | `FobInvulnerable` |
+| 15 | `upkeep_state` == 1 and `structure_state` == 110 | `FullPower` |
+| 16 | anything else | `Unknown` |
+
+Three rulings baked into that order:
+
+- **Rows 1-7 (the deployment family) outrank upkeep entirely.** Upkeep is
+  meaningless during deployment — this is what turns the 5 live
+  `Abandoned + Onlining` rows above into honest `Onlining`.
+- **Row 8 outranks rows 9-12.** `Abandoned` means asset safety is off and the
+  hull drops its contents — the rarest, highest-value finding, and a
+  reinforcement timer does not change that. `timer_utc`/`timer_seconds`
+  still carry the timer and `vulnerable` still carries "shootable right
+  now", so nothing is lost by `status` alone reading `Abandoned`.
+- **Rows 9-10 outrank row 13**: "a Low Power and Reinforced just means
+  Reinforced." Armor vs hull is kept distinct in storage (hull reinforce is
+  the final timer, armor is not); the UI may group both under one
+  "Reinforced" filter.
+
+Orbitals (categoryID 46: POCO groupID 1025, Orbital Skyhook groupID 4736)
+have no upkeep concept — `upkeep_state` stays EMPTY for every orbital row.
+`unanchoring` TRUE still wins (`Unanchoring`); otherwise `status` is the
+existing family label verbatim, from `obj_StructureLabels.PocoStateLabel` /
+`.SkyhookStateLabel` (POCO: `Anchoring | Onlining | ShieldReinforced |
+Anchored | Unknown`; Skyhook: `ShieldVulnerable | ArmorReinforced |
+ArmorVulnerable | HullReinforced | HullVulnerable | Unknown`).
+
+### Status families
+
+`WandererApp.Scout.Status` (`lib/wanderer_app/scout/status.ex`) defines each
+group ONCE so every reader (resource read actions, `/scout`, any future
+export) groups the same way:
+
+```
+anchoring_family/0  : Unanchored, Anchoring, AnchorVulnerable, Deploying, Fitting, Onlining
+unanchoring_family/0: Unanchoring
+reinforced_family/0 : ArmorReinforced, HullReinforced, ShieldReinforced
+vulnerable_family/0 : ArmorVulnerable, HullVulnerable
+dead_family/0       : Abandoned, NoFuel
+steady_family/0     : FullPower, Anchored, ShieldVulnerable, FobInvulnerable
+```
+
+`steady_family` is the boring state and is still not journalled by the
+eveknob writer (unchanged behaviour).
+
+### Two new read actions
+
+`WandererApp.Api.ScoutStructureSighting` gains `:anchoring` and
+`:unanchoring`, same argument shape as `:search` (`since`, `system_id`, `q`)
+and NOT exposed through `code_interface` either, matching `:search`:
+
+|Action|Filter|
+|---|---|
+|`:anchoring`|`status in Status.anchoring_family()`|
+|`:unanchoring`|`status in Status.unanchoring_family()`|
+
+Both feed a dedicated `/scout` structures-tab table, latest sighting per
+`structure_id` — the same `Ash.Query.distinct([:structure_id]) |>
+Ash.Query.distinct_sort(observed_at: :desc)` fold the existing last-seen
+table applies on top of `:search` — and both honour the existing search /
+system-filter / freshness window:
+
+- **Anchoring** — no fitting, no services, a live vulnerability window: the
+  cheapest kills in the game.
+- **Unanchoring** — a structure being pulled out of the ground: a one-shot
+  opportunity with a hard deadline.
 
 ## Timers
 
@@ -143,7 +243,7 @@ flag covers all of it.
 
 |Tab|What it leads with|
 |---|---|
-|Structures|Live reinforcement timers (soonest first, colour-coded: red under an hour, amber under six), then the latest observation **per structure** folded by Postgres `DISTINCT ON (structure_id)`, then that structure's full history on click|
+|Structures|Live reinforcement timers (soonest first, colour-coded: red under an hour, amber under six), then **Anchoring** and **Unanchoring** (latest sighting per structure whose `status` is in that family — see "Merged status" above), then the latest observation **per structure** folded by Postgres `DISTINCT ON (structure_id)`, then that structure's full history on click|
 |Spawns|"Still out there" — the latest sighting **per system + location + spawn name** within the last 3 hours, folded by Postgres `DISTINCT ON (solar_system_id, location_name, spawn_name)`, same trick as the structures tab's fold — then the hotspot aggregate (`GROUP BY` system + location + spawn, with a count, an ISK sum, `first_seen`/`last_seen`, and a representative `spawn_category`/`location_type` picked via `max/1`) over the flat reverse-chronological log, then every sighting of *that* spawn at *that* location on click|
 
 Seven properties that are deliberate, not incidental:
@@ -181,16 +281,43 @@ Seven properties that are deliberate, not incidental:
   an append-only table is a sequential scan; that is why it is conditional.
 
 Filtering is one search box (an ILIKE in Postgres over the four strings a
-reader would type) plus a system filter set by clicking any system cell and
-cleared by the chip in the toolbar. Both apply to every table on the tab,
-including the timer table — `since` deliberately does not: a running timer is
-running however old the sighting that found it.
+reader would type), a space-type chip row, and a system filter set by clicking
+any system cell and cleared by the chip in the toolbar. All three apply to
+every table on the tab, including the timer table and "Still out there" —
+`since` deliberately does not: a running timer is running however old the
+sighting that found it.
 
-`GET /scout/export.csv?tab=&days=&q=&system_id=` takes the same filters and
-emits **every** stored column (the CSV exists for the fields the HTML has no
-room for), capped at 50k rows. It is a plain controller, so it re-checks the
-login and the permission itself — the `/scout` `live_session` gate does not
-cover it.
+### The space filter
+
+Six chips — High, Low, Null, W-Space, Pochven, Other — all on by default,
+each one click to drop. "Everything except highsec" is the filter the page
+exists for, so it is one click and it holds across tab switches.
+
+`WandererApp.Scout.Space` owns it, and three things about it are load-bearing:
+
+- **It classifies on `map_solar_system_v2.system_class`, not on the row's
+  stored `system_truesec`.** Truesec cannot tell J-space, Pochven and
+  nullsec apart (all ≤ 0.0) and the client may not have filled it in at all.
+  The class is authoritative: 7 = HS, 8 = LS, 9 = NS, 25 = Pochven, and
+  `WandererApp.SystemClass.wormhole_classes/0` (C1–C6, C13, Thera, the five
+  drifter holes) for W-space.
+- **It is a subquery, not an Elixir filter.** One `solar_system_id IN (SELECT
+  … WHERE system_class = ANY($1))` per read, applied to the `Ash.Query` rather
+  than carried as an action argument, so the two resources, `Stats.spawn_hotspots/2`
+  (schemaless Ecto) and the CSV export share one implementation and the page's
+  `limit` still bounds what reaches the BEAM.
+- **`:other` is the complement, so the selection is total.** Abyssal/Zarzakh
+  classes and any system missing from the static table live there, expressed
+  as `NOT IN` the classes the five named buckets claim. All six selected ⇒ no
+  SQL filter at all, and no row can vanish unless the reader unticked the
+  bucket it lives in. Unticking everything shows nothing — the empty subquery
+  says so with no special case.
+
+`GET /scout/export.csv?tab=&days=&q=&system_id=&space=` takes the same filters
+(`space` being the comma-separated chip keys, absent meaning all) and emits
+**every** stored column (the CSV exists for the fields the HTML has no room
+for), capped at 50k rows. It is a plain controller, so it re-checks the login
+and the permission itself — the `/scout` `live_session` gate does not cover it.
 
 `WandererApp.Scout.Stats` holds the three reads Ash cannot express
 (`GROUP BY`, `max(observed_at)`, `count(*)`) as schemaless Ecto. It hard-codes
@@ -232,7 +359,9 @@ stale cache may cost a wrong icon, never a wrong page.
 |What|Where|
 |---|---|
 |Ingest + coercion|`lib/wanderer_app/scout/ingest.ex`|
+|Status families (`anchoring_family/0`, `unanchoring_family/0`, ...)|`lib/wanderer_app/scout/status.ex`|
 |Aggregates (group-by, freshness, totals)|`lib/wanderer_app/scout/stats.ex`|
+|Space-type filter (class subquery)|`lib/wanderer_app/scout/space.ex`|
 |Resources|`lib/wanderer_app/api/scout_{spawn,structure}_sighting.ex`|
 |Ingest controller|`lib/wanderer_app_web/controllers/scout_intel_api_controller.ex`|
 |CSV export|`lib/wanderer_app_web/controllers/scout_export_controller.ex`|

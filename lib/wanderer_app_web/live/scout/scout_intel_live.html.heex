@@ -24,7 +24,7 @@
     <span class="text-gray-600">Live: new reports appear without a reload.</span>
   </div>
 
-  <div class="flex flex-wrap items-end gap-4 mb-6">
+  <div class="flex flex-wrap items-end gap-4 mb-2">
     <div role="tablist" class="tabs tabs-boxed">
       <button
         role="tab"
@@ -73,6 +73,30 @@
       />
     </form>
 
+    <div id="scout-space-filter">
+      <label class="block text-xs text-gray-400 mb-1">Space</label>
+      <div class="join">
+        <button
+          :for={{key, label} <- @space_types}
+          phx-click="toggle_space"
+          phx-value-type={key}
+          id={"scout-space-#{key}"}
+          aria-pressed={to_string(key in @space)}
+          title={
+            if key == :other,
+              do: "Abyssal, Zarzakh, and systems missing from the static map",
+              else: nil
+          }
+          class={[
+            "btn btn-sm join-item",
+            if(key in @space, do: "btn-active", else: "btn-ghost text-gray-500 line-through")
+          ]}
+        >
+          {label}
+        </button>
+      </div>
+    </div>
+
     <button
       :if={@system_id}
       phx-click="clear_system"
@@ -81,7 +105,21 @@
     >
       System: {system(%{solar_system_id: @system_id, solar_system_name: nil}, @systems)} ✕
     </button>
+
+    <button
+      :if={length(@space) < length(@space_types)}
+      phx-click="reset_space"
+      id="scout-space-reset"
+      class="btn btn-sm btn-outline"
+    >
+      All space ✕
+    </button>
   </div>
+
+  <p class="mb-6 text-xs text-gray-600">
+    Window, search, space and system filter every table on this page — including the live
+    timers and “Still out there”, which ignore the window but not the rest.
+  </p>
 
   <div :if={@tab == :structures}>
     <h2 class="text-lg font-semibold mb-2">Live timers</h2>
@@ -98,7 +136,7 @@
           <th>Structure</th>
           <th>System</th>
           <th>Owner</th>
-          <th>State</th>
+          <th>Status</th>
           <th>Seen</th>
         </tr>
       </thead>
@@ -133,7 +171,9 @@
           </td>
           <td>{row.owner_name || "—"}</td>
           <td>
-            {row.state_label || "—"}
+            <span class={["badge badge-sm", status_badge_class(row.status)]}>
+              {row.status || "—"}
+            </span>
             <span :if={row.vulnerable} class="badge badge-error badge-sm ml-1">vulnerable</span>
           </td>
           <td class="whitespace-nowrap text-gray-400">{at(row.observed_at)}</td>
@@ -157,8 +197,7 @@
           <th>Structure</th>
           <th>System</th>
           <th>Owner</th>
-          <th>Power</th>
-          <th>State</th>
+          <th>Status</th>
           <th>Comes out</th>
         </tr>
       </thead>
@@ -189,11 +228,10 @@
             </span>
           </td>
           <td>{row.owner_name || "—"}</td>
-          <td>{row.upkeep_label || "—"}</td>
           <td>
-            {row.state_label || "—"}
-            <span :if={row.unanchoring} class="badge badge-error badge-sm ml-1">unanchoring</span>
-            <span :if={row.anchoring} class="badge badge-warning badge-sm ml-1">anchoring</span>
+            <span class={["badge badge-sm", status_badge_class(row.status)]}>
+              {row.status || "—"}
+            </span>
             <span :if={row.vulnerable} class="badge badge-error badge-sm ml-1">vulnerable</span>
           </td>
           <td class="font-mono whitespace-nowrap">
@@ -205,7 +243,7 @@
           </td>
         </tr>
         <tr :if={@structures == []}>
-          <td colspan="7" class="text-gray-500">
+          <td colspan="6" class="text-gray-500">
             <span :if={@totals && @totals.structures == 0}>
               No structure has ever been reported — no scanner client has posted to
               <code>/api/maps/:map/scout/structures</code>
@@ -215,6 +253,125 @@
               No structures match this window and filter.
             </span>
           </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2 class="text-lg font-semibold mb-2">Anchoring</h2>
+    <p class="mb-3 text-gray-400 text-sm">
+      A structure that never finished deploying has no fitting and no services yet —
+      the cheapest kill in the game.
+    </p>
+
+    <table class="table w-full mb-10" id="scout-anchoring">
+      <thead>
+        <tr>
+          <th>Seen</th>
+          <th>Structure</th>
+          <th>System</th>
+          <th>Owner</th>
+          <th>Status</th>
+          <th>HP</th>
+          <th>Distance</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr :for={row <- @anchoring_structures} id={"scout-anchoring-#{row.id}"}>
+          <td class="whitespace-nowrap">{at(row.observed_at)}</td>
+          <td>
+            <button
+              phx-click="show_structure"
+              phx-value-id={row.structure_id}
+              class="link link-hover text-left"
+            >
+              {row.structure_name || row.structure_id}
+            </button>
+            <span :if={row.group_name} class="badge badge-ghost badge-sm ml-1">
+              {row.group_name}
+            </span>
+          </td>
+          <td>
+            <button phx-click="filter_system" phx-value-id={row.solar_system_id} class="link link-hover">
+              {system(row, @systems)}
+            </button>
+            <span :if={security(row.system_truesec)} class="text-gray-500 ml-1 font-mono text-xs">
+              {security(row.system_truesec)}
+            </span>
+          </td>
+          <td>{row.owner_name || "—"}</td>
+          <td>
+            <span class={["badge badge-sm", status_badge_class(row.status)]}>
+              {row.status || "—"}
+            </span>
+          </td>
+          <td class="font-mono whitespace-nowrap">{hp_label(row)}</td>
+          <td class="text-gray-400">{distance_or_celestial(row)}</td>
+        </tr>
+        <tr :if={@anchoring_structures == []}>
+          <td colspan="7" class="text-gray-500">Nothing anchoring right now.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2 class="text-lg font-semibold mb-2">Unanchoring</h2>
+    <p class="mb-3 text-gray-400 text-sm">
+      It is being pulled out of the ground — a one-shot opportunity with a hard deadline.
+    </p>
+
+    <table class="table w-full mb-10" id="scout-unanchoring">
+      <thead>
+        <tr>
+          <th>Seen</th>
+          <th>Structure</th>
+          <th>System</th>
+          <th>Owner</th>
+          <th>Status</th>
+          <th>HP</th>
+          <th>Distance</th>
+          <th>Timer</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr :for={row <- @unanchoring_structures} id={"scout-unanchoring-#{row.id}"}>
+          <td class="whitespace-nowrap">{at(row.observed_at)}</td>
+          <td>
+            <button
+              phx-click="show_structure"
+              phx-value-id={row.structure_id}
+              class="link link-hover text-left"
+            >
+              {row.structure_name || row.structure_id}
+            </button>
+            <span :if={row.group_name} class="badge badge-ghost badge-sm ml-1">
+              {row.group_name}
+            </span>
+          </td>
+          <td>
+            <button phx-click="filter_system" phx-value-id={row.solar_system_id} class="link link-hover">
+              {system(row, @systems)}
+            </button>
+            <span :if={security(row.system_truesec)} class="text-gray-500 ml-1 font-mono text-xs">
+              {security(row.system_truesec)}
+            </span>
+          </td>
+          <td>{row.owner_name || "—"}</td>
+          <td>
+            <span class={["badge badge-sm", status_badge_class(row.status)]}>
+              {row.status || "—"}
+            </span>
+          </td>
+          <td class="font-mono whitespace-nowrap">{hp_label(row)}</td>
+          <td class="text-gray-400">{distance_or_celestial(row)}</td>
+          <td class={["font-mono whitespace-nowrap", urgency(row.timer_expires_at, @now)]}>
+            <span :if={is_nil(row.timer_expires_at)} class="text-gray-600">—</span>
+            <span :if={row.timer_expires_at}>
+              {countdown(row.timer_expires_at, @now)}
+              <span class="text-gray-500 ml-2">{at(row.timer_expires_at)}</span>
+            </span>
+          </td>
+        </tr>
+        <tr :if={@unanchoring_structures == []}>
+          <td colspan="8" class="text-gray-500">Nothing unanchoring right now.</td>
         </tr>
       </tbody>
     </table>
@@ -461,8 +618,7 @@
             <th>Event</th>
             <th>System</th>
             <th>Owner</th>
-            <th>Power</th>
-            <th>State</th>
+            <th>Status</th>
             <th>Timer</th>
           </tr>
         </thead>
@@ -480,9 +636,10 @@
             </td>
             <td>{system(row, @systems)}</td>
             <td>{row.owner_name || "—"}</td>
-            <td>{row.upkeep_label || "—"}</td>
             <td>
-              {row.state_label || "—"}
+              <span class={["badge badge-sm", status_badge_class(row.status)]}>
+                {row.status || "—"}
+              </span>
               <span :if={row.vulnerable} class="badge badge-error badge-sm ml-1">vulnerable</span>
             </td>
             <td class="font-mono whitespace-nowrap">
@@ -491,7 +648,7 @@
             </td>
           </tr>
           <tr :if={@detail.rows == []}>
-            <td colspan="7" class="text-gray-500">No history for this structure.</td>
+            <td colspan="6" class="text-gray-500">No history for this structure.</td>
           </tr>
         </tbody>
       </table>

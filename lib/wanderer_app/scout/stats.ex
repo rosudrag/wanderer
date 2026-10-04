@@ -27,6 +27,7 @@ defmodule WandererApp.Scout.Stats do
   import Ecto.Query
 
   alias WandererApp.Repo
+  alias WandererApp.Scout.Space
 
   @spawns "scout_spawn_sightings_v1"
   @structures "scout_structure_sightings_v1"
@@ -62,9 +63,10 @@ defmodule WandererApp.Scout.Stats do
   Spawns in the window grouped by system + location + spawn name, most
   frequent first.
 
-  Takes the same optional `:system_id` and `:q` filters as the
-  `:search` read action, so the aggregate always describes the same rows
-  the flat table below it is showing.
+  Takes the same optional `:system_id`, `:q` and `:space` filters as the
+  page's other reads (`:space` being a `WandererApp.Scout.Space`
+  selection), so the aggregate always describes the same rows the flat
+  table below it is showing.
 
   Besides the grouping columns and `sightings`/`last_seen`/`isk_value`,
   each row also carries `first_seen` (earliest sighting in the group, same
@@ -96,6 +98,7 @@ defmodule WandererApp.Scout.Stats do
     )
     |> hotspot_system(opts[:system_id])
     |> hotspot_search(opts[:q])
+    |> Space.filter_ecto(opts[:space] || Space.all())
     |> Repo.all()
     |> Enum.map(&%{&1 | last_seen: to_utc(&1.last_seen), first_seen: to_utc(&1.first_seen)})
   end
