@@ -1,17 +1,20 @@
-defmodule WandererAppWeb.ScoutRefreshLive do
+defmodule WandererAppWeb.ScoutPlannerLive do
   @moduledoc """
-  CHEWY PATCH: the "Refresh queue" tab on `/scout` -- design doc
+  CHEWY PATCH: `/scout/planner` -- design doc
   `docs/design/wanderer-scout-planner.md` section 8, "the human surface:
   a list, not a canvas".
 
   Phase 1 of that feature shipped the write path: `scout_system_coverage_v1`
   rows land here from eveknob's `obj_ScoutSync.iss`, and until this page
-  nothing ever read them back. This page is that read: an operator picks
-  an origin, a coverage kind, a scope, and gets a table of systems sorted
-  by `WandererApp.Scout.Planner.rank/1`'s score -- the same ranking the
-  bot's `GET /scout/plan` endpoint drives its route from, rendered with
-  every weighted term visible, because section 8's whole gate is that a
-  human can read why a system ranked where it did.
+  nothing ever read them back. This page is that read, in two modes:
+
+    * **Rank** -- an origin, a coverage kind, a scope, and a table of
+      systems sorted by `WandererApp.Scout.Planner.rank_plan/1`'s score,
+      with every weighted term visible, because section 8's whole gate is
+      that a human can read why a system ranked where it did.
+    * **Sweep** -- a whole-region route (`WandererApp.Scout.Sweep`),
+      start-point suggestions, region heat and a k-way split
+      (`WandererApp.Scout.Split`).
 
   Gated twice, the same way `ScoutIntelLive` is gated once:
 
@@ -26,10 +29,23 @@ defmodule WandererAppWeb.ScoutRefreshLive do
       instead of 404ing, since the flag is a product decision, not a
       missing feature.
 
+  ## Everything expensive runs in a task
+
+  A rank is a BFS ball plus a metadata read plus a coverage read plus a
+  route walk; a sweep is a distance matrix plus a greedy tour plus 2-opt;
+  a split spends up to two seconds rebalancing. All three used to run
+  inside `handle_event/3`, which blocks that LiveView process: every
+  other click queued behind the one in flight, and a mistyped `max_jumps`
+  cost a full recompute before the next keystroke was even read. They
+  are `start_async/3` now, each carrying a monotonic token so a result
+  that arrives after its controls changed is dropped rather than
+  rendered, and the previous answer stays on screen (dimmed, with a
+  spinner) instead of the page blanking.
+
   Markup is the `WandererAppWeb.ScoutComponents` vocabulary throughout
-  (`panel/1`, `stat/1`, `grid/1`, `empty/1`, `space_chip/1`, plus the
-  refresh-specific cells added alongside this module) -- this LiveView
-  is reads, same as `ScoutIntelLive`.
+  (`panel/1`, `stat/1`, `grid/1`, `field/1`, `note/1`, `busy/1`,
+  `region_picker/1`, …) -- this LiveView is reads, same as
+  `ScoutIntelLive`.
 
   ## Non-goals (design doc, "Non-goals" section)
 
@@ -43,11 +59,13 @@ defmodule WandererAppWeb.ScoutRefreshLive do
 
   use WandererAppWeb, :live_view
 
+  require Logger
+
   import WandererAppWeb.ScoutComponents
 
   alias WandererApp.Api.{MapSolarSystem, ScoutSystemCoverage}
   alias WandererApp.Identity.ScoutAccess
-  alias WandererApp.Scout.{Planner, PlanWaypoints, Space, Sweep, Split, Assignments}
+  alias WandererApp.Scout.{Assignments, PlanWaypoints, Planner, Regions, Space, Split, Sweep}
 
   @kinds ~w(visit anoms sigs grid)
   @default_kind :sigs
@@ -80,7 +98,7 @@ defmodule WandererAppWeb.ScoutRefreshLive do
       not WandererApp.Env.scout_planner_enabled?() ->
         {:ok,
          socket
-         |> put_flash(:error, "The scout refresh planner is not enabled on this deployment.")
+         |> put_flash(:error, "The scout planner is not enabled on this deployment.")
          |> push_navigate(to: ~p"/scout")}
 
       true ->
@@ -95,8 +113,8 @@ defmodule WandererAppWeb.ScoutRefreshLive do
         {:ok,
          socket
          |> assign(
-           active_tab: :scout_refresh,
-           page_title: "Scout Refresh Queue",
+           active_tab: :scout_planner,
+           page_title: "Scout Planner",
            origin_q: "",
            origin_matches: [],
            origin_id: nil,
@@ -104,8 +122,9 @@ defmodule WandererAppWeb.ScoutRefreshLive do
            kind: @default_kind,
            limit: @default_limit,
            max_jumps: @default_max_jumps,
-           regions_q: "",
            regions: [],
+           region_q: "",
+           region_matches: [],
            security: @default_security,
            security_types: Enum.reject(Space.types(), fn {key, _label} -> key == :other end),
            characters: characters,
@@ -116,12 +135,17 @@ defmodule WandererAppWeb.ScoutRefreshLive do
            candidates: 0,
            generated_at: nil,
            plan_error: nil,
+           plan_stops: [],
+           route_ids: "",
+           rank_loading?: false,
+           rank_token: 0,
            # Sweep mode (design doc "whole-region sweeps") -- a second
            # mode on this SAME page, not a second route: `mode` only
            # picks which filter bar and result panel render below.
            mode: :rank,
-           sweep_regions_q: "",
            sweep_regions: [],
+           sweep_region_q: "",
+           sweep_region_matches: [],
            sweep_kind: @default_kind,
            sweep_security: @default_security,
            sweep_compress: true,
@@ -131,8 +155,14 @@ defmodule WandererAppWeb.ScoutRefreshLive do
            sweep_error: nil,
            sweep_parts: [],
            sweep_pilots: %{},
+           sweep_loading?: false,
+           sweep_token: 0,
+           split_loading?: false,
+           split_token: 0,
            region_heat: nil,
-           region_heat_kind: nil
+           region_heat_kind: nil,
+           heat_loading?: false,
+           heat_token: 0
          )
          |> load()}
     end
@@ -163,6 +193,10 @@ defmodule WandererAppWeb.ScoutRefreshLive do
     {:noreply, assign(socket, origin_q: q, origin_matches: matches)}
   end
 
+  def handle_event("close_origin_search", _params, socket) do
+    {:noreply, assign(socket, origin_matches: [])}
+  end
+
   def handle_event("select_origin", %{"id" => id} = params, socket) do
     case Integer.parse(to_string(id)) do
       {origin_id, ""} ->
@@ -172,8 +206,7 @@ defmodule WandererAppWeb.ScoutRefreshLive do
            origin_id: origin_id,
            origin_name: Map.get(params, "name"),
            origin_q: "",
-           origin_matches: [],
-           limit: socket.assigns.limit
+           origin_matches: []
          )
          |> load()
          |> persist_filters()}
@@ -226,12 +259,62 @@ defmodule WandererAppWeb.ScoutRefreshLive do
     end
   end
 
-  def handle_event("update_regions", %{"regions" => text}, socket) do
-    {:noreply,
-     socket
-     |> assign(regions_q: text, regions: parse_region_ids(text))
-     |> load()
-     |> persist_filters()}
+  # -------------------------------------------------------------------
+  # Region scope -- a searchable vocabulary (`WandererApp.Scout.Regions`),
+  # not the `ids, comma-separated` text box both modes used to carry.
+  # One set of handlers for both, told apart by `scope`.
+  # -------------------------------------------------------------------
+
+  def handle_event("search_regions", %{"scope" => scope, "q" => q}, socket) do
+    matches = Regions.search(q)
+
+    case scope do
+      "sweep" -> {:noreply, assign(socket, sweep_region_q: q, sweep_region_matches: matches)}
+      _rank -> {:noreply, assign(socket, region_q: q, region_matches: matches)}
+    end
+  end
+
+  def handle_event("close_region_search", %{"scope" => "sweep"}, socket),
+    do: {:noreply, assign(socket, sweep_region_matches: [])}
+
+  def handle_event("close_region_search", _params, socket),
+    do: {:noreply, assign(socket, region_matches: [])}
+
+  def handle_event("add_region", %{"scope" => scope, "id" => id}, socket) do
+    with {region_id, ""} <- Integer.parse(to_string(id)),
+         region when not is_nil(region) <- Regions.get(region_id) do
+      add_region(socket, scope, region)
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("remove_region", %{"scope" => "sweep", "id" => id}, socket) do
+    case Integer.parse(to_string(id)) do
+      {region_id, ""} ->
+        regions = Enum.reject(socket.assigns.sweep_regions, &(&1.region_id == region_id))
+
+        {:noreply,
+         socket
+         |> assign(sweep_regions: regions)
+         |> load_sweep()
+         |> persist_filters()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("remove_region", %{"id" => id}, socket) do
+    case Integer.parse(to_string(id)) do
+      {region_id, ""} ->
+        regions = Enum.reject(socket.assigns.regions, &(&1.region_id == region_id))
+
+        {:noreply, socket |> assign(regions: regions) |> load() |> persist_filters()}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   # Reuses `space_chip/1`'s wiring (`phx-click="toggle_space"`,
@@ -255,7 +338,13 @@ defmodule WandererAppWeb.ScoutRefreshLive do
     {:noreply, socket |> assign(security: @security_keys) |> load() |> persist_filters()}
   end
 
-  def handle_event("refresh", _params, socket), do: {:noreply, load(socket)}
+  def handle_event("refresh", _params, socket) do
+    {:noreply,
+     case socket.assigns.mode do
+       :sweep -> socket |> load_sweep() |> maybe_load_region_heat(force: true)
+       _rank -> load(socket)
+     end}
+  end
 
   def handle_event("select_character", %{"character_eve_id" => eve_id}, socket) do
     # Validated against the user's OWN characters, not trusted from the
@@ -336,16 +425,6 @@ defmodule WandererAppWeb.ScoutRefreshLive do
 
   def handle_event("switch_mode", _params, socket), do: {:noreply, socket}
 
-  def handle_event("update_sweep_regions", %{"regions" => text}, socket) do
-    ids = text |> parse_region_ids() |> Enum.take(@max_sweep_regions)
-
-    {:noreply,
-     socket
-     |> assign(sweep_regions_q: text, sweep_regions: ids)
-     |> load_sweep()
-     |> persist_filters()}
-  end
-
   def handle_event("select_sweep_kind", %{"kind" => kind}, socket) when kind in @kinds do
     {:noreply,
      socket
@@ -412,16 +491,15 @@ defmodule WandererAppWeb.ScoutRefreshLive do
   # so clicking one sets the scope AND switches into sweep mode in one
   # step.
   def handle_event("select_region_heat", %{"id" => id}, socket) do
-    case Integer.parse(to_string(id)) do
-      {value, ""} ->
-        {:noreply,
-         socket
-         |> assign(mode: :sweep, sweep_regions_q: to_string(value), sweep_regions: [value])
-         |> load_sweep()
-         |> persist_filters()}
-
-      _ ->
-        {:noreply, socket}
+    with {region_id, ""} <- Integer.parse(to_string(id)),
+         region when not is_nil(region) <- Regions.get(region_id) do
+      {:noreply,
+       socket
+       |> assign(mode: :sweep, sweep_regions: [region], sweep_region_q: "")
+       |> load_sweep()
+       |> persist_filters()}
+    else
+      _ -> {:noreply, socket}
     end
   end
 
@@ -498,8 +576,7 @@ defmodule WandererAppWeb.ScoutRefreshLive do
         {:ok, pushed} ->
           name = character_name(socket.assigns.characters, character_eve_id)
 
-          {:noreply,
-           put_flash(socket, :info, push_message(length(pushed), length(stops), name))}
+          {:noreply, put_flash(socket, :info, push_message(length(pushed), length(stops), name))}
 
         {:error, :no_gate_stops} ->
           {:noreply, put_flash(socket, :error, "This sweep has no gate-reachable stops to fly.")}
@@ -565,7 +642,7 @@ defmodule WandererAppWeb.ScoutRefreshLive do
   # crashes on mount.
   # -------------------------------------------------------------------
 
-  @filter_store "scout_refresh_filters"
+  @filter_store "scout_planner_filters"
 
   def handle_event("ls_restore_#{@filter_store}", %{"value" => value}, socket) do
     case restore_filters(socket, value) do
@@ -581,10 +658,10 @@ defmodule WandererAppWeb.ScoutRefreshLive do
       "kind" => to_string(socket.assigns.kind),
       "limit" => socket.assigns.limit,
       "max_jumps" => socket.assigns.max_jumps,
-      "regions_q" => socket.assigns.regions_q,
+      "regions" => region_ids(socket.assigns.regions),
       "security" => Enum.map(socket.assigns.security, &to_string/1),
       "mode" => to_string(socket.assigns.mode),
-      "sweep_regions_q" => socket.assigns.sweep_regions_q,
+      "sweep_regions" => region_ids(socket.assigns.sweep_regions),
       "sweep_kind" => to_string(socket.assigns.sweep_kind),
       "sweep_security" => Enum.map(socket.assigns.sweep_security, &to_string/1),
       "sweep_compress" => socket.assigns.sweep_compress,
@@ -598,9 +675,6 @@ defmodule WandererAppWeb.ScoutRefreshLive do
   defp restore_filters(socket, value) when is_binary(value) do
     case Jason.decode(value) do
       {:ok, %{} = saved} ->
-        regions_q = restore_regions_q(saved)
-        sweep_regions_q = restore_sweep_regions_q(saved)
-
         {:ok,
          assign(socket,
            origin_id: restore_origin_id(saved),
@@ -608,12 +682,10 @@ defmodule WandererAppWeb.ScoutRefreshLive do
            kind: restore_kind(saved, socket.assigns.kind),
            limit: restore_limit(saved, socket.assigns.limit),
            max_jumps: restore_max_jumps(saved, socket.assigns.max_jumps),
-           regions_q: regions_q,
-           regions: parse_region_ids(regions_q),
+           regions: restore_regions(saved, "regions", nil),
            security: restore_security(saved),
            mode: restore_mode(saved, socket.assigns.mode),
-           sweep_regions_q: sweep_regions_q,
-           sweep_regions: sweep_regions_q |> parse_region_ids() |> Enum.take(@max_sweep_regions),
+           sweep_regions: restore_regions(saved, "sweep_regions", @max_sweep_regions),
            sweep_kind: restore_sweep_kind(saved, socket.assigns.sweep_kind),
            sweep_security: restore_sweep_security(saved),
            sweep_compress: restore_sweep_compress(saved, socket.assigns.sweep_compress),
@@ -653,10 +725,20 @@ defmodule WandererAppWeb.ScoutRefreshLive do
 
   defp restore_max_jumps(_saved, default), do: default
 
-  defp restore_regions_q(%{"regions_q" => text}) when is_binary(text),
-    do: String.slice(text, 0, 200)
+  # A stored region id is re-resolved against the live vocabulary, never
+  # trusted: an id that no longer names a k-space region (an SDE change,
+  # or a hand-edited localStorage entry) has to vanish, not render as a
+  # blank chip scoping every query to nothing.
+  defp restore_regions(saved, key, max) do
+    regions =
+      saved
+      |> Map.get(key, [])
+      |> List.wrap()
+      |> Enum.filter(&is_integer/1)
+      |> Regions.resolve()
 
-  defp restore_regions_q(_saved), do: ""
+    if max, do: Enum.take(regions, max), else: regions
+  end
 
   defp restore_security(%{"security" => saved}) when is_list(saved) do
     keys =
@@ -674,11 +756,6 @@ defmodule WandererAppWeb.ScoutRefreshLive do
     do: String.to_existing_atom(mode)
 
   defp restore_mode(_saved, default), do: default
-
-  defp restore_sweep_regions_q(%{"sweep_regions_q" => text}) when is_binary(text),
-    do: String.slice(text, 0, 100)
-
-  defp restore_sweep_regions_q(_saved), do: ""
 
   defp restore_sweep_kind(%{"sweep_kind" => kind}, _default) when kind in @kinds,
     do: String.to_existing_atom(kind)
@@ -715,6 +792,51 @@ defmodule WandererAppWeb.ScoutRefreshLive do
   # Helpers
   # -------------------------------------------------------------------
 
+  defp region_ids(regions), do: Enum.map(regions, & &1.region_id)
+
+  defp add_region(socket, "sweep", region) do
+    regions = socket.assigns.sweep_regions
+
+    cond do
+      Enum.any?(regions, &(&1.region_id == region.region_id)) ->
+        {:noreply, assign(socket, sweep_region_q: "", sweep_region_matches: [])}
+
+      length(regions) >= @max_sweep_regions ->
+        {:noreply,
+         socket
+         |> assign(sweep_region_q: "", sweep_region_matches: [])
+         |> put_flash(
+           :error,
+           "A sweep covers at most #{@max_sweep_regions} regions -- drop one first."
+         )}
+
+      true ->
+        {:noreply,
+         socket
+         |> assign(
+           sweep_regions: regions ++ [region],
+           sweep_region_q: "",
+           sweep_region_matches: []
+         )
+         |> load_sweep()
+         |> persist_filters()}
+    end
+  end
+
+  defp add_region(socket, _rank, region) do
+    regions = socket.assigns.regions
+
+    if Enum.any?(regions, &(&1.region_id == region.region_id)) do
+      {:noreply, assign(socket, region_q: "", region_matches: [])}
+    else
+      {:noreply,
+       socket
+       |> assign(regions: regions ++ [region], region_q: "", region_matches: [])
+       |> load()
+       |> persist_filters()}
+    end
+  end
+
   defp character_name(characters, eve_id) do
     case Enum.find(characters, &(&1.eve_id == eve_id)) do
       nil -> "that character"
@@ -728,18 +850,6 @@ defmodule WandererAppWeb.ScoutRefreshLive do
   defp push_message(pushed, gate_count, name),
     do:
       "ESI accepted only #{pushed} of #{gate_count} stops -- #{name}'s route is the first part of this plan, not all of it."
-
-  defp parse_region_ids(text) do
-    text
-    |> String.split(",", trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.flat_map(fn s ->
-      case Integer.parse(s) do
-        {n, ""} -> [n]
-        _ -> []
-      end
-    end)
-  end
 
   defp parse_security_key(type) when type in ~w(hs ls ns wh pochven),
     do: String.to_existing_atom(type)
@@ -760,11 +870,7 @@ defmodule WandererAppWeb.ScoutRefreshLive do
   # /scout/plan`, which means `Planner.plan/1`'s nearest-neighbour walk,
   # NOT this page's score order -- a human who copies this and a bot that
   # fetches a plan must fly the same thing, or the button is a lie the
-  # first time someone compares them. It costs a second Planner pass per
-  # page load (the BFS adjacency index is cached, the per-candidate reads
-  # are not); a page load is a human action a few times a minute, and the
-  # alternative -- re-ordering `rank/1`'s stops here -- would be a second
-  # implementation of the walk, drifting from the endpoint's.
+  # first time someone compares them.
   #
   # Gate legs only (design section 6, mode A): a chain/wormhole stop is
   # ranked and shown on this page but was never going to be a waypoint,
@@ -777,42 +883,28 @@ defmodule WandererAppWeb.ScoutRefreshLive do
   end
 
   # -------------------------------------------------------------------
-  # Reads
+  # Reads -- every one of them in a task. See moduledoc.
+  #
+  # The token is what makes a fast click safe: `start_async/3` does not
+  # cancel an in-flight task, so without it a slow rank for the origin
+  # you just left would land on top of the fast one for the origin you
+  # just picked.
   # -------------------------------------------------------------------
 
   defp load(socket) do
     socket = assign(socket, now: DateTime.utc_now())
 
-    if socket.assigns.origin_id do
+    if socket.assigns.origin_id && connected?(socket) do
       opts = plan_opts(socket)
+      token = socket.assigns.rank_token + 1
 
-      case Planner.rank(opts) do
-        {:ok, result} ->
-          plan_stops = plan_stops(opts)
-
-          assign(socket,
-            result: result,
-            stops: result.stops,
-            candidates: result.candidates,
-            generated_at: result.generated_at,
-            plan_stops: plan_stops,
-            route_ids: route_ids(plan_stops),
-            plan_error: nil
-          )
-
-        {:error, reason} ->
-          assign(socket,
-            result: nil,
-            stops: [],
-            candidates: 0,
-            generated_at: nil,
-            plan_stops: [],
-            route_ids: "",
-            plan_error: reason
-          )
-      end
+      socket
+      |> assign(rank_token: token, rank_loading?: true)
+      |> start_async({:rank, token}, fn -> Planner.rank_plan(opts) end)
     else
       assign(socket,
+        rank_loading?: false,
+        rank_token: socket.assigns.rank_token + 1,
         result: nil,
         stops: [],
         candidates: 0,
@@ -830,21 +922,76 @@ defmodule WandererAppWeb.ScoutRefreshLive do
       kind: socket.assigns.kind,
       limit: socket.assigns.limit,
       max_jumps: socket.assigns.max_jumps,
-      regions: socket.assigns.regions,
+      regions: region_ids(socket.assigns.regions),
       security: socket.assigns.security
     ]
   end
 
-  # The copy box and the "Set route" button both read this: whatever
-  # `GET /scout/plan` would return for the same scope, so a human's
-  # pasted list, the pushed route and the bot's own plan are the same
-  # thing. A plan failure here is not a page failure -- the ranking table
-  # above still rendered, and an empty box is the honest answer.
-  defp plan_stops(opts) do
-    case Planner.plan(opts) do
-      {:ok, %{stops: stops}} -> stops
-      {:error, _reason} -> []
+  @impl true
+  def handle_async({:rank, token}, result, socket) do
+    if token == socket.assigns.rank_token do
+      {:noreply, apply_rank(socket, result)}
+    else
+      {:noreply, socket}
     end
+  end
+
+  def handle_async({:sweep, token}, result, socket) do
+    if token == socket.assigns.sweep_token do
+      {:noreply, apply_sweep(socket, result)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_async({:split, token}, result, socket) do
+    if token == socket.assigns.split_token do
+      {:noreply, apply_split(socket, result)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_async({:heat, token}, result, socket) do
+    if token == socket.assigns.heat_token do
+      {:noreply, apply_heat(socket, result)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  defp apply_rank(socket, {:ok, {:ok, %{rank: rank, plan: plan}}}) do
+    assign(socket,
+      rank_loading?: false,
+      now: DateTime.utc_now(),
+      result: rank,
+      stops: rank.stops,
+      candidates: rank.candidates,
+      generated_at: rank.generated_at,
+      plan_stops: plan.stops,
+      route_ids: route_ids(plan.stops),
+      plan_error: nil
+    )
+  end
+
+  defp apply_rank(socket, {:ok, {:error, reason}}), do: rank_failed(socket, reason)
+
+  defp apply_rank(socket, {:exit, reason}) do
+    Logger.error("[scout planner] rank task exited: #{inspect(reason)}")
+    rank_failed(socket, :planner_crashed)
+  end
+
+  defp rank_failed(socket, reason) do
+    assign(socket,
+      rank_loading?: false,
+      result: nil,
+      stops: [],
+      candidates: 0,
+      generated_at: nil,
+      plan_stops: [],
+      route_ids: "",
+      plan_error: reason
+    )
   end
 
   # -------------------------------------------------------------------
@@ -854,23 +1001,22 @@ defmodule WandererAppWeb.ScoutRefreshLive do
   defp load_sweep(socket) do
     socket = assign(socket, now: DateTime.utc_now())
 
-    if socket.assigns.sweep_regions == [] do
-      assign(socket, sweep_result: nil, sweep_error: nil, sweep_parts: [], sweep_pilots: %{})
+    if socket.assigns.sweep_regions == [] or not connected?(socket) do
+      assign(socket,
+        sweep_result: nil,
+        sweep_error: nil,
+        sweep_parts: [],
+        sweep_pilots: %{},
+        sweep_loading?: false,
+        sweep_token: socket.assigns.sweep_token + 1
+      )
     else
-      case Sweep.sweep(sweep_opts(socket)) do
-        {:ok, result} ->
-          socket
-          |> assign(sweep_result: result, sweep_error: nil)
-          |> load_split()
+      build_opts = sweep_opts(socket)
+      token = socket.assigns.sweep_token + 1
 
-        {:error, reason} ->
-          assign(socket,
-            sweep_result: nil,
-            sweep_error: reason,
-            sweep_parts: [],
-            sweep_pilots: %{}
-          )
-      end
+      socket
+      |> assign(sweep_token: token, sweep_loading?: true)
+      |> start_async({:sweep, token}, fn -> Sweep.sweep(build_opts.()) end)
     end
   end
 
@@ -879,40 +1025,94 @@ defmodule WandererAppWeb.ScoutRefreshLive do
   # as it treats avoided"): once "Assign all" claims a part's systems,
   # the NEXT sweep over the same scope must not re-offer them to a
   # different pilot, or two splits over the same region keep competing.
+  #
+  # Returned as a thunk so the `Assignments` read runs inside the task
+  # too -- it is a database round trip, and the point of the task is that
+  # the LiveView process does none of them.
   defp sweep_opts(socket) do
-    [
-      scope: {:regions, socket.assigns.sweep_regions},
-      kind: socket.assigns.sweep_kind,
-      security: socket.assigns.sweep_security,
-      start: socket.assigns.sweep_start,
-      compress: socket.assigns.sweep_compress,
-      exclude: socket.assigns.sweep_kind |> Assignments.active_system_ids() |> MapSet.to_list()
-    ]
+    regions = region_ids(socket.assigns.sweep_regions)
+    kind = socket.assigns.sweep_kind
+    security = socket.assigns.sweep_security
+    start = socket.assigns.sweep_start
+    compress = socket.assigns.sweep_compress
+
+    fn ->
+      [
+        scope: {:regions, regions},
+        kind: kind,
+        security: security,
+        start: start,
+        compress: compress,
+        exclude: kind |> Assignments.active_system_ids() |> MapSet.to_list()
+      ]
+    end
+  end
+
+  defp apply_sweep(socket, {:ok, {:ok, result}}) do
+    socket
+    |> assign(
+      sweep_loading?: false,
+      now: DateTime.utc_now(),
+      sweep_result: result,
+      sweep_error: nil
+    )
+    |> load_split()
+  end
+
+  defp apply_sweep(socket, {:ok, {:error, reason}}), do: sweep_failed(socket, reason)
+
+  defp apply_sweep(socket, {:exit, reason}) do
+    Logger.error("[scout planner] sweep task exited: #{inspect(reason)}")
+    sweep_failed(socket, :sweep_crashed)
+  end
+
+  defp sweep_failed(socket, reason) do
+    assign(socket,
+      sweep_loading?: false,
+      split_loading?: false,
+      sweep_result: nil,
+      sweep_error: reason,
+      sweep_parts: [],
+      sweep_pilots: %{}
+    )
   end
 
   # k=1 is just the sweep above with nowhere to split; `Split.split/3`
-  # only runs once a second pilot is actually in the picture.
+  # only runs once a second pilot is actually in the picture -- and it
+  # spends up to two seconds rebalancing, which is exactly why it is its
+  # own task rather than a tail of the sweep's.
   defp load_split(socket) do
     %{sweep_result: result, sweep_k: k} = socket.assigns
 
-    cond do
-      is_nil(result) or k <= 1 ->
-        assign(socket, sweep_parts: [], sweep_pilots: %{})
+    if is_nil(result) or k <= 1 do
+      assign(socket,
+        sweep_parts: [],
+        sweep_pilots: %{},
+        split_loading?: false,
+        split_token: socket.assigns.split_token + 1
+      )
+    else
+      system_ids = Enum.map(result.stops, & &1.solar_system_id)
+      token = socket.assigns.split_token + 1
 
-      true ->
-        system_ids = Enum.map(result.stops, & &1.solar_system_id)
-
-        case Split.split(system_ids, k, []) do
-          {:ok, parts} ->
-            pilots =
-              default_pilots(parts, socket.assigns.characters, socket.assigns.sweep_pilots)
-
-            assign(socket, sweep_parts: parts, sweep_pilots: pilots)
-
-          {:error, _reason} ->
-            assign(socket, sweep_parts: [], sweep_pilots: %{})
-        end
+      socket
+      |> assign(split_token: token, split_loading?: true)
+      |> start_async({:split, token}, fn -> Split.split(system_ids, k, []) end)
     end
+  end
+
+  defp apply_split(socket, {:ok, {:ok, parts}}) do
+    pilots = default_pilots(parts, socket.assigns.characters, socket.assigns.sweep_pilots)
+
+    assign(socket, split_loading?: false, sweep_parts: parts, sweep_pilots: pilots)
+  end
+
+  defp apply_split(socket, {:ok, {:error, _reason}}),
+    do: assign(socket, split_loading?: false, sweep_parts: [], sweep_pilots: %{})
+
+  defp apply_split(socket, {:exit, reason}) do
+    Logger.error("[scout planner] split task exited: #{inspect(reason)}")
+    assign(socket, split_loading?: false, sweep_parts: [], sweep_pilots: %{})
   end
 
   # Keeps an operator's existing picks (changing `k` by one should not
@@ -941,13 +1141,26 @@ defmodule WandererAppWeb.ScoutRefreshLive do
     %{mode: mode, sweep_kind: kind, region_heat: heat, region_heat_kind: heat_kind} =
       socket.assigns
 
-    if mode == :sweep and (force or is_nil(heat) or heat_kind != kind) do
-      rows = kind |> Sweep.region_heat() |> sort_region_heat()
-      assign(socket, region_heat: rows, region_heat_kind: kind)
+    if connected?(socket) and mode == :sweep and (force or is_nil(heat) or heat_kind != kind) do
+      token = socket.assigns.heat_token + 1
+
+      socket
+      |> assign(heat_token: token, heat_loading?: true, region_heat_kind: kind)
+      |> start_async({:heat, token}, fn -> Sweep.region_heat(kind) end)
     else
       socket
     end
   end
+
+  defp apply_heat(socket, {:ok, rows}) when is_list(rows),
+    do: assign(socket, heat_loading?: false, region_heat: sort_region_heat(rows))
+
+  defp apply_heat(socket, {:exit, reason}) do
+    Logger.error("[scout planner] region heat task exited: #{inspect(reason)}")
+    assign(socket, heat_loading?: false, region_heat: [])
+  end
+
+  defp apply_heat(socket, _other), do: assign(socket, heat_loading?: false)
 
   # Worst-covered first: `unseen + stale` descending, then median age
   # descending (nil -- no coverage row has ever landed for this region

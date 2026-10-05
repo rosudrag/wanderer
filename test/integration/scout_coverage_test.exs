@@ -13,6 +13,11 @@ defmodule WandererApp.ScoutCoverageTest do
     * The stale-skip rule -- an incoming `observed_at` older than or
       equal to the stored one must not overwrite it, but must still
       count as `stored` since the ingest succeeded idempotently.
+    * `spawns_found` / `legs_total` (the clean-tour verdict, `kind =
+      "grid"` only) -- both OPTIONAL and coerced through the same
+      `int/2` path as `legs_scanned`/`sig_count`: present and stored
+      when sent (including `spawns_found: 0`, the whole point of the
+      feature), `nil` when omitted, and never required.
 
   See `docs/design/wanderer-scout-planner.md` section 4 and
   `test/integration/scout_intel_test.exs` (the sighting-table sibling
@@ -207,6 +212,79 @@ defmodule WandererApp.ScoutCoverageTest do
     test "a batch over 1000 rows is rejected outright" do
       rows = List.duplicate(coverage_row(), 1001)
       assert {:error, {:batch_too_large, 1_000}} = Coverage.ingest_coverage(rows, nil)
+    end
+  end
+
+  describe "spawns_found / legs_total (clean-tour verdict, kind = grid)" do
+    test "a grid row carrying spawns_found: 0 and legs_total stores both" do
+      row =
+        coverage_row(%{
+          "kind" => "grid",
+          "legs_scanned" => 20,
+          "spawns_found" => 0,
+          "legs_total" => 20
+        })
+
+      assert {:ok, %{stored: 1, failed: 0}} = Coverage.ingest_coverage([row], nil)
+
+      assert {:ok, %{spawns_found: 0, legs_total: 20, legs_scanned: 20}} =
+               ScoutSystemCoverage.by_system_and_kind(30_002_537, "grid", authorize?: false)
+    end
+
+    test "a grid row carrying spawns_found > 0 stores the count" do
+      row = coverage_row(%{"kind" => "grid", "spawns_found" => 3, "legs_total" => 12})
+
+      assert {:ok, %{stored: 1, failed: 0}} = Coverage.ingest_coverage([row], nil)
+
+      assert {:ok, %{spawns_found: 3, legs_total: 12}} =
+               ScoutSystemCoverage.by_system_and_kind(30_002_537, "grid", authorize?: false)
+    end
+
+    test "the same row without spawns_found/legs_total stores NULL in both" do
+      row = coverage_row(%{"kind" => "grid", "legs_scanned" => 20})
+
+      assert {:ok, %{stored: 1, failed: 0}} = Coverage.ingest_coverage([row], nil)
+
+      assert {:ok, %{spawns_found: nil, legs_total: nil}} =
+               ScoutSystemCoverage.by_system_and_kind(30_002_537, "grid", authorize?: false)
+    end
+
+    test "a stale observed_at is still skipped even when it carries spawns_found/legs_total" do
+      newer =
+        coverage_row(%{
+          "kind" => "grid",
+          "observed_at" => "2026-10-04T18:22:05Z",
+          "spawns_found" => 0,
+          "legs_total" => 20
+        })
+
+      older =
+        coverage_row(%{
+          "kind" => "grid",
+          "observed_at" => "2026-10-04T10:00:00Z",
+          "spawns_found" => 2,
+          "legs_total" => 9
+        })
+
+      assert {:ok, %{stored: 1}} = Coverage.ingest_coverage([newer], nil)
+      assert {:ok, %{stored: 1, failed: 0}} = Coverage.ingest_coverage([older], nil)
+
+      assert {:ok, %{spawns_found: 0, legs_total: 20}} =
+               ScoutSystemCoverage.by_system_and_kind(30_002_537, "grid", authorize?: false)
+    end
+
+    test "stringified spawns_found/legs_total coerce the same way every other field does" do
+      row =
+        coverage_row(%{
+          "kind" => "grid",
+          "spawns_found" => "0",
+          "legs_total" => "20"
+        })
+
+      assert {:ok, %{stored: 1, failed: 0}} = Coverage.ingest_coverage([row], nil)
+
+      assert {:ok, %{spawns_found: 0, legs_total: 20}} =
+               ScoutSystemCoverage.by_system_and_kind(30_002_537, "grid", authorize?: false)
     end
   end
 end

@@ -12,7 +12,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
     * the "Last seen" table shows the NEWEST row per structure, not every
       row — the log is append-only, so the opposite is the default;
     * search and the click-to-filter system chip actually narrow it;
-    * spawn hotspots count repeat spawns in the same place;
+    * the spawns tab's 24-hour list folds to the newest sighting per spawn;
     * the CSV export carries the filters and refuses a user without
       `:scout_intel_view`.
 
@@ -797,28 +797,6 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
   end
 
   describe "spawns tab" do
-    test "hotspots group repeat spawns in the same place", %{conn: conn} do
-      spawn_sighting(%{observed_at: ago(90), isk_value: Decimal.new("100000000")})
-      spawn_sighting(%{observed_at: ago(45), isk_value: Decimal.new("100000000")})
-
-      spawn_sighting(%{
-        observed_at: ago(30),
-        solar_system_id: @amarr,
-        location_name: "Belt IV - 2",
-        spawn_name: "True Sansha Mutant"
-      })
-
-      {:ok, view, _html} = live(conn, ~p"/scout")
-
-      html = render_click(view, "select_tab", %{"tab" => "spawns"})
-      hotspots = view |> element("#scout-hotspots") |> render()
-
-      assert html =~ "Dark Blood Phantom"
-      assert hotspots =~ "2×"
-      assert hotspots =~ "True Sansha Mutant"
-      assert hotspots =~ "1×"
-    end
-
     test "the window excludes older rows", %{conn: conn} do
       spawn_sighting(%{spawn_name: "Fresh Spawn", observed_at: ago(60)})
       spawn_sighting(%{spawn_name: "Ancient Spawn", observed_at: ago(60 * 24 * 40)})
@@ -857,9 +835,9 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert fresh =~ "999.0M"
     end
 
-    test "the fresh list is bounded by three hours, not by the window selector", %{conn: conn} do
+    test "the 24h list ignores the window selector", %{conn: conn} do
       spawn_sighting(%{spawn_name: "Just Landed", observed_at: ago(60)})
-      spawn_sighting(%{spawn_name: "Hours Ago", observed_at: ago(301)})
+      spawn_sighting(%{spawn_name: "Days Ago", observed_at: ago(60 * 30)})
 
       {:ok, view, _html} = live(conn, ~p"/scout")
       render_click(view, "select_tab", %{"tab" => "spawns"})
@@ -868,18 +846,18 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       log = view |> element("#scout-spawns") |> render()
 
       assert fresh =~ "Just Landed"
-      refute fresh =~ "Hours Ago"
+      refute fresh =~ "Days Ago"
 
       # Still in the (default 7-day) window-bounded log below it.
-      assert log =~ "Hours Ago"
+      assert log =~ "Days Ago"
     end
 
-    test "the tick ages a fresh spawn out with no query", %{conn: conn} do
+    test "the tick ages a spawn out of the 24h list with no query", %{conn: conn} do
       # Mirrors the structures tab's expiring-timer test, scaled to the
-      # fresh list's 3-hour horizon instead of a timer's expiry: insert
+      # list's 24-hour horizon instead of a timer's expiry: insert
       # 1s inside the horizon, let 1.1s of real time pass, and the tick
       # (no query) drops it exactly like an expired timer does.
-      edge = DateTime.utc_now() |> DateTime.add(-10_799, :second) |> DateTime.truncate(:second)
+      edge = DateTime.utc_now() |> DateTime.add(-86_399, :second) |> DateTime.truncate(:second)
       spawn_sighting(%{spawn_name: "Expiring Pop", observed_at: edge})
 
       {:ok, view, _html} = live(conn, ~p"/scout")
@@ -922,24 +900,6 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert detail =~ "20.0M"
       # Not the other spawn logged in the same belt.
       refute detail =~ "30.0M"
-    end
-
-    test "hotspots carry the category and the earliest sighting, not just the latest",
-         %{conn: conn} do
-      first_seen = ago(600)
-      last_seen = ago(30)
-
-      spawn_sighting(%{observed_at: first_seen, spawn_category: "faction"})
-      spawn_sighting(%{observed_at: last_seen, spawn_category: "faction"})
-
-      {:ok, view, _html} = live(conn, ~p"/scout")
-      render_click(view, "select_tab", %{"tab" => "spawns"})
-
-      hotspots = view |> element("#scout-hotspots") |> render()
-
-      assert hotspots =~ "faction"
-      assert hotspots =~ Calendar.strftime(first_seen, "%Y-%m-%d %H:%M")
-      assert hotspots =~ Calendar.strftime(last_seen, "%Y-%m-%d %H:%M")
     end
   end
 
@@ -995,7 +955,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert restored =~ "Highsec Fortizar"
     end
 
-    test "it narrows the spawn log, the fresh list and the hotspots together", %{conn: conn} do
+    test "it narrows the spawn log and the 24h list together", %{conn: conn} do
       spawn_sighting(%{
         solar_system_id: @hs_sys,
         spawn_name: "Highsec Hauler",
@@ -1013,7 +973,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
 
       render_click(view, "toggle_space", %{"type" => "hs"})
 
-      for id <- ~w(#scout-spawns #scout-fresh-spawns #scout-hotspots) do
+      for id <- ~w(#scout-spawns #scout-fresh-spawns) do
         rendered = view |> element(id) |> render()
         refute rendered =~ "Highsec Hauler"
         assert rendered =~ "Hole Drifter"

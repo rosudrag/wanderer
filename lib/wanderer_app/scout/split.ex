@@ -78,10 +78,11 @@ defmodule WandererApp.Scout.Split do
   # Wall-clock guard for step 4, measured on the real Domain graph
   # (189 systems, 2026-10-05): k=2 ran 15.3 s to exhaustion, k=3 5.4 s,
   # k=4 3.7 s -- k=2 is worst because its parts are biggest and its
-  # boundary longest. A human waits on this synchronously from
-  # /scout/refresh, so the loop stops here and keeps the improvement it
-  # already has. 0 disables the guard (tests that assert the full
-  # improvement pass it).
+  # boundary longest. A human waits on this from `/scout/planner`'s
+  # Split control -- in a task since the planner page went async, but a
+  # spinner is still a human waiting -- so the loop stops here and keeps
+  # the improvement it already has. 0 disables the guard (tests that
+  # assert the full improvement pass it).
   @default_rebalance_budget_ms 2_000
 
   @doc """

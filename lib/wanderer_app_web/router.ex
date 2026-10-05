@@ -664,7 +664,7 @@ defmodule WandererAppWeb.Router do
       ] do
       live "/", ScoutIntelLive, :index
       live "/access", ScoutAccessLive, :index
-      live "/refresh", ScoutRefreshLive, :index
+      live "/planner", ScoutPlannerLive, :index
     end
 
     # Not a LiveView, so the live_session's auth gate does not cover it:

@@ -31,6 +31,22 @@ defmodule WandererApp.Api.ScoutSystemCoverage do
   not one. `legs_scanned` is meaningful only for `kind = "grid"`;
   `sig_count` only for `"sigs"`/`"anoms"`.
 
+  ## The clean-tour verdict (`kind = "grid"` only)
+
+  `spawns_found` and `legs_total` are the other half of what makes a
+  `grid` row answer "scouted, clean" rather than just "scouted,
+  somewhere": `spawns_found` counts the SCANNED LOCATIONS since arrival
+  where `obj_Scout.LogScanSummary` resolved a `specialName` (officer,
+  NPC capital, faction, hauler or unclassified special target), and
+  `legs_total` is that pass's `TourOrder.Used` -- so a reader can tell a
+  COMPLETE clean tour (`legs_scanned == legs_total && spawns_found ==
+  0`) from a partial one. Both are nullable and OPTIONAL: an old client
+  posting only `legs_scanned` stores NULL in both, same as every other
+  optional field here. The client never computes or sends a boolean
+  verdict -- `WandererApp.Scout.Planner` derives CLEAN/partial
+  server-side, same ruling that dropped the client-side `event` column
+  from the structure presence payload.
+
   ## No submitter-only attribution, and no map scoping
 
   `character_eve_id` is kept (unlike the sighting tables) because the
@@ -83,6 +99,8 @@ defmodule WandererApp.Api.ScoutSystemCoverage do
       :legs_scanned,
       :sig_count,
       :scanner_complete,
+      :spawns_found,
+      :legs_total,
       :map_id
     ]
 
@@ -138,6 +156,17 @@ defmodule WandererApp.Api.ScoutSystemCoverage do
 
     # Meaningful only for kind = "grid".
     attribute :legs_scanned, :integer
+
+    # Meaningful only for kind = "grid". Count of scanned locations,
+    # since arrival, where at least one special spawn was present --
+    # see module doc "The clean-tour verdict". 0 is the point of the
+    # feature: it means "toured and clean".
+    attribute :spawns_found, :integer
+
+    # Meaningful only for kind = "grid". The tour's total leg count for
+    # this pass (`TourOrder.Used`) -- lets a reader tell a COMPLETE
+    # clean tour from a partial one; see module doc.
+    attribute :legs_total, :integer
 
     # Meaningful only for kind = "sigs" | "anoms".
     attribute :sig_count, :integer

@@ -128,11 +128,11 @@ defmodule WandererApp.Env do
   # WandererAppWeb.Plugs.CheckScoutPresenceDisabled.
   def scout_presence_enabled?(), do: get_key(:scout_presence_enabled, false)
 
-  # CHEWY PATCH: scout refresh-queue ranking + plan endpoint master
-  # switch. Gates both the /scout "Refresh queue" tab and
-  # GET /scout/plan. See WandererApp.Scout.Planner,
+  # CHEWY PATCH: scout planner master switch. Gates both the
+  # /scout/planner page and GET /scout/plan. See
+  # WandererApp.Scout.Planner,
   # WandererAppWeb.Plugs.CheckScoutPlannerDisabled and
-  # WandererAppWeb.ScoutRefreshLive.
+  # WandererAppWeb.ScoutPlannerLive.
   def scout_planner_enabled?(), do: get_key(:scout_planner_enabled, false)
 
   def admins(), do: get_key(:admins, [])

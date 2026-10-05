@@ -7,8 +7,8 @@ defmodule WandererApp.Scout.Planner do
 
   Two consumers:
 
-    * `WandererAppWeb.ScoutRefreshLive` (`/scout` "Refresh queue" tab)
-      calls `rank/1` directly, in-process.
+    * `WandererAppWeb.ScoutPlannerLive` (`/scout/planner`) calls
+      `rank_plan/1` directly, in-process.
     * `WandererAppWeb.ScoutPlanAPIController` (`GET
       .../scout/plan`) calls `plan/1` and renders `json` / `text` /
       `flat`.
@@ -119,6 +119,8 @@ defmodule WandererApp.Scout.Planner do
           },
           legs_scanned: integer() | nil,
           sig_count: integer() | nil,
+          spawns_found: integer() | nil,
+          legs_total: integer() | nil,
           claimed_by: String.t() | nil,
           leg: leg(),
           terms: %{
@@ -203,12 +205,7 @@ defmodule WandererApp.Scout.Planner do
   def rank(opts) do
     with {:ok, resolved} <- resolve_opts(opts, @default_rank_limit),
          {:ok, pool} <- build_candidate_pool(resolved) do
-      stops =
-        pool.stops
-        |> Enum.sort_by(& &1.score, :desc)
-        |> Enum.take(resolved.limit)
-
-      {:ok, build_result(resolved, pool.candidates, stops)}
+      {:ok, build_result(resolved, pool.candidates, rank_stops(pool, resolved))}
     end
   end
 
@@ -222,33 +219,66 @@ defmodule WandererApp.Scout.Planner do
   def plan(opts) do
     with {:ok, resolved} <- resolve_opts(opts, @default_plan_limit),
          {:ok, pool} <- build_candidate_pool(resolved) do
-      # The origin is dropped here and ONLY here. `rank/1` keeps it --
-      # "the system you are sitting in has never been swept" is a true
-      # and useful row on the queue page. A ROUTE cannot carry it: the
-      # client pushes the first stop with `ISXBob.Travel:SetDestination`,
-      # and a destination equal to the current system leaves EVE with no
-      # route at all, so `${ISXBob.Travel.NextRouteSystemID}` reads NULL,
-      # obj_Scout declares the route exhausted and asks for another plan
-      # -- the same plan -- every pacing window, without ever moving.
-      remaining =
-        pool.stops
-        |> Enum.reject(&(&1.solar_system_id == resolved.origin))
-        |> Map.new(&{&1.solar_system_id, &1})
-
-      stops =
-        do_walk(
-          remaining,
-          pool.gate_graph,
-          pool.combined_graph,
-          resolved.origin,
-          resolved.max_jumps,
-          resolved.limit,
-          resolved.weights,
-          []
-        )
-
-      {:ok, build_result(resolved, pool.candidates, stops)}
+      {:ok, build_result(resolved, pool.candidates, plan_stops(pool, resolved))}
     end
+  end
+
+  @doc """
+  `rank/1` and `plan/1` over ONE candidate pool.
+
+  `/scout/planner` needs both at once -- the table is the ranking, the
+  copy box and the "Set route" button are the plan -- and calling them
+  separately paid for the whole pool twice: a BFS ball, a metadata read,
+  a coverage read and a frontier pass each, per control change, with a
+  human waiting. The pool is identical for both (same resolved opts), so
+  the second build was pure duplicated work.
+
+  Only the limit default differs between the two entry points, and this
+  one takes `rank/1`'s; every caller of this function passes an explicit
+  `:limit` anyway.
+  """
+  @spec rank_plan(opts()) :: {:ok, %{rank: result(), plan: result()}} | {:error, atom()}
+  def rank_plan(opts) do
+    with {:ok, resolved} <- resolve_opts(opts, @default_rank_limit),
+         {:ok, pool} <- build_candidate_pool(resolved) do
+      {:ok,
+       %{
+         rank: build_result(resolved, pool.candidates, rank_stops(pool, resolved)),
+         plan: build_result(resolved, pool.candidates, plan_stops(pool, resolved))
+       }}
+    end
+  end
+
+  defp rank_stops(pool, resolved) do
+    pool.stops
+    |> Enum.sort_by(& &1.score, :desc)
+    |> Enum.take(resolved.limit)
+  end
+
+  defp plan_stops(pool, resolved) do
+    # The origin is dropped here and ONLY here. `rank/1` keeps it --
+    # "the system you are sitting in has never been swept" is a true
+    # and useful row on the queue page. A ROUTE cannot carry it: the
+    # client pushes the first stop with `ISXBob.Travel:SetDestination`,
+    # and a destination equal to the current system leaves EVE with no
+    # route at all, so `${ISXBob.Travel.NextRouteSystemID}` reads NULL,
+    # obj_Scout declares the route exhausted and asks for another plan
+    # -- the same plan -- every pacing window, without ever moving.
+    remaining =
+      pool.stops
+      |> Enum.reject(&(&1.solar_system_id == resolved.origin))
+      |> Map.new(&{&1.solar_system_id, &1})
+
+    do_walk(
+      remaining,
+      pool.gate_graph,
+      pool.combined_graph,
+      resolved.origin,
+      resolved.max_jumps,
+      resolved.limit,
+      resolved.weights,
+      []
+    )
   end
 
   defp build_result(resolved, candidates, stops) do
@@ -465,6 +495,8 @@ defmodule WandererApp.Scout.Planner do
       coverage: coverage,
       legs_scanned: kind_row && kind_row.legs_scanned,
       sig_count: kind_row && kind_row.sig_count,
+      spawns_found: kind_row && kind_row.spawns_found,
+      legs_total: kind_row && kind_row.legs_total,
       claimed_by: claimed_by,
       leg: leg,
       terms: terms

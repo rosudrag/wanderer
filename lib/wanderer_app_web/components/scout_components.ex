@@ -34,10 +34,10 @@ defmodule WandererAppWeb.ScoutComponents do
 
   alias WandererApp.Scout.{Status, Unanchor}
 
-  # A faction spawn seen within this long is probably still sitting in
-  # that belt. Mirrored by `ScoutIntelLive`'s read, which is what makes
-  # the fresh list a *list*; this copy is the one the copy renders from.
-  @fresh_seconds 3 * 3_600
+  # A faction spawn seen within this long is worth flying to. Mirrored by
+  # `ScoutIntelLive`'s read, which is what makes the list a *list*; this
+  # copy is the one the copy renders from.
+  @fresh_seconds 24 * 3_600
 
   # ---------------------------------------------------------------------
   # Containers
@@ -280,6 +280,168 @@ defmodule WandererAppWeb.ScoutComponents do
   defp space_tone(:wh), do: "bg-violet-500/15 border-violet-500/40 text-violet-300"
   defp space_tone(:pochven), do: "bg-red-700/20 border-red-700/50 text-red-300"
   defp space_tone(_), do: "bg-neutral-700/40 border-neutral-600 text-gray-300"
+
+  attr :label, :string, required: true
+  attr :hint, :string, default: nil
+  attr :class, :string, default: nil
+  slot :inner_block, required: true
+
+  @doc """
+  One labelled control in a toolbar.
+
+  `min-w-0` is the load-bearing class: the toolbars are grids now, and a
+  grid child defaults to `min-width: auto`, so one `w-48` input inside
+  one unconstrained cell stops the whole bar from ever wrapping and the
+  page grows a horizontal scrollbar at every width below a desktop's.
+  """
+  def field(assigns) do
+    ~H"""
+    <div class={["min-w-0", @class]}>
+      <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5 truncate">
+        {@label}
+      </label>
+      {render_slot(@inner_block)}
+      <p :if={@hint} class="mt-0.5 text-[10px] text-gray-500 truncate">{@hint}</p>
+    </div>
+    """
+  end
+
+  attr :id, :string, default: nil
+  slot :inner_block, required: true
+
+  @doc """
+  The empty state for something that is NOT a table.
+
+  `empty/1` renders a `<tr>`; dropped into a `<div>` — which the sweep
+  mode did, twice — the browser discards it, so the one sentence telling
+  a reader to pick a scope never appeared at all.
+  """
+  def note(assigns) do
+    ~H"""
+    <p
+      id={@id}
+      class="mb-5 rounded-lg border border-dashed border-neutral-800 bg-neutral-950/40 px-3 py-5 text-center text-sm text-gray-500"
+    >
+      {render_slot(@inner_block)}
+    </p>
+    """
+  end
+
+  attr :busy, :boolean, required: true
+  attr :label, :string, default: "computing"
+
+  @doc """
+  The page is recomputing, and the numbers below are the previous
+  answer.
+
+  `/scout/planner` computes a BFS ball, a coverage read and a route per
+  control change — a second or more on a real region. Blanking the
+  tables for that second made every click feel like a page load; keeping
+  them and saying so does not.
+  """
+  def busy(assigns) do
+    ~H"""
+    <span
+      :if={@busy}
+      class="flex items-center gap-1.5 text-[11px] text-orange-300 whitespace-nowrap"
+      role="status"
+    >
+      <span class="loading loading-spinner loading-xs"></span>
+      {@label}…
+    </span>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :label, :string, required: true
+  attr :scope, :string, required: true
+  attr :query, :string, required: true
+  attr :matches, :list, required: true
+  attr :selected, :list, required: true
+  attr :max, :integer, default: nil
+  attr :placeholder, :string, default: "Search regions…"
+  attr :title, :string, default: nil
+
+  @doc """
+  Region scope: type a NAME, click to add, click a chip to drop it.
+
+  Both scope controls used to be a text box taking `ids, comma-separated`,
+  which is only usable by someone who has already memorised that Domain
+  is `10000043` — nothing in this app ever showed that mapping. The
+  vocabulary comes from `WandererApp.Scout.Regions`, cached, so typing
+  costs no query.
+  """
+  def region_picker(assigns) do
+    ~H"""
+    <div class="min-w-0">
+      <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5 truncate">
+        {@label}
+      </label>
+      <div class="relative" phx-click-away="close_region_search" phx-value-scope={@scope}>
+        <form phx-change="search_regions" phx-submit="search_regions">
+          <input type="hidden" name="scope" value={@scope} />
+          <input
+            type="text"
+            name="q"
+            id={@id}
+            value={@query}
+            phx-debounce="200"
+            autocomplete="off"
+            placeholder={@placeholder}
+            title={@title}
+            class="input input-sm input-bordered bg-neutral-950/60 w-full"
+          />
+        </form>
+        <div
+          :if={@matches != []}
+          id={"#{@id}-options"}
+          class="absolute z-20 mt-1 w-full min-w-[14rem] rounded-lg border border-neutral-700 bg-neutral-900 shadow-lg max-h-64 overflow-auto"
+        >
+          <button
+            :for={region <- @matches}
+            type="button"
+            phx-click="add_region"
+            phx-value-scope={@scope}
+            phx-value-id={region.region_id}
+            id={"#{@id}-option-#{region.region_id}"}
+            class="flex w-full items-baseline justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-neutral-800"
+          >
+            <span class="truncate">{region.region_name}</span>
+            <span class="font-mono text-[10px] text-gray-500">{region.region_id}</span>
+          </button>
+        </div>
+      </div>
+      <div :if={@selected != []} class="flex flex-wrap gap-1 mt-1">
+        <button
+          :for={region <- @selected}
+          type="button"
+          phx-click="remove_region"
+          phx-value-scope={@scope}
+          phx-value-id={region.region_id}
+          id={"#{@id}-chip-#{region.region_id}"}
+          title="Drop this region from the scope"
+          class="badge badge-sm gap-1 border-0 bg-neutral-800 text-gray-200 hover:bg-neutral-700"
+        >
+          {region.region_name} ✕
+        </button>
+      </div>
+      <p class="mt-0.5 text-[10px] text-gray-500 truncate">
+        <%= cond do %>
+          <% @selected == [] and @max -> %>
+            none yet — pick up to {@max}
+          <% @selected == [] -> %>
+            every region
+          <% @max && length(@selected) >= @max -> %>
+            {length(@selected)} of {@max} — drop one to add another
+          <% @max -> %>
+            {length(@selected)} of {@max}
+          <% true -> %>
+            {length(@selected)} selected
+        <% end %>
+      </p>
+    </div>
+    """
+  end
 
   # ---------------------------------------------------------------------
   # Cells
@@ -684,6 +846,50 @@ defmodule WandererAppWeb.ScoutComponents do
     </div>
     """
   end
+
+  attr :stop, :map, required: true
+
+  @doc """
+  CHEWY PATCH (scout coverage ledger): the clean-tour verdict a `grid`
+  coverage row now carries alongside its own age in `coverage_ladder/1`
+  -- `spawns_found` (count of scanned locations with at least one
+  special spawn since arrival) and `legs_total` (that pass's leg
+  count), both from `WandererApp.Api.ScoutSystemCoverage`. Renders an
+  em dash whenever `stop.spawns_found` is `nil`: either this stop's
+  selected kind is not `:grid`, or no `grid` row exists yet for this
+  system -- both cases the operator has no verdict to read, not a zero.
+  One muted column: the server derives CLEAN vs partial, the client
+  never sends a boolean, and this is not an alert the way the
+  unanchored badge is.
+  """
+  def grid_verdict(assigns) do
+    ~H"""
+    <span class="text-[11px] text-gray-400 whitespace-nowrap" title={verdict_title(@stop)}>
+      {verdict_text(@stop)}
+    </span>
+    """
+  end
+
+  defp verdict_text(%{spawns_found: nil}), do: "—"
+
+  defp verdict_text(%{spawns_found: found}) when found > 0,
+    do: "#{found} spawn#{if found == 1, do: "", else: "s"}"
+
+  defp verdict_text(%{spawns_found: 0} = stop) do
+    if grid_tour_complete?(stop), do: "clean", else: partial_text(stop)
+  end
+
+  defp partial_text(%{legs_scanned: scanned, legs_total: total}),
+    do: "partial (#{scanned || 0}/#{total})"
+
+  defp verdict_title(%{spawns_found: nil}), do: "No grid-tour verdict for this kind/system yet"
+
+  defp verdict_title(%{spawns_found: found, legs_scanned: scanned, legs_total: total}) do
+    "spawns_found=#{found}, legs_scanned=#{scanned || "?"}/#{total || "?"}"
+  end
+
+  defp grid_tour_complete?(%{legs_total: nil}), do: true
+  defp grid_tour_complete?(%{legs_scanned: scanned, legs_total: total}), do: scanned == total
 
   attr :terms, :map, required: true
 

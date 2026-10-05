@@ -121,6 +121,13 @@ defmodule WandererApp.Scout.Coverage do
          legs_scanned: int(row, ["legs_scanned"]),
          sig_count: int(row, ["sig_count"]),
          scanner_complete: bool(row, ["scanner_complete"]),
+         # Meaningful only for kind = "grid" -- see
+         # WandererApp.Api.ScoutSystemCoverage's module doc "The
+         # clean-tour verdict". Absent/unparseable -> nil, same as every
+         # other optional field here; a non-grid row or an old client
+         # that never sends these keys stores NULL in both.
+         spawns_found: int(row, ["spawns_found"]),
+         legs_total: int(row, ["legs_total"]),
          map_id: map_id
        }}
     end

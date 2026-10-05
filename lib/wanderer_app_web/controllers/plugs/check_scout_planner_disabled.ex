@@ -10,8 +10,8 @@ defmodule WandererAppWeb.Plugs.CheckScoutPlannerDisabled do
   the same 404 a genuinely nonexistent route would give. Mirrors
   `CheckScoutCoverageDisabled` / `CheckScoutPresenceDisabled`.
 
-  The same flag separately gates `WandererAppWeb.ScoutRefreshLive` (the
-  `/scout` "Refresh queue" tab), which checks
+  The same flag separately gates `WandererAppWeb.ScoutPlannerLive` (the
+  `/scout/planner` page), which checks
   `WandererApp.Env.scout_planner_enabled?/0` directly in `mount/3` rather
   than through a plug, since a disabled LiveView redirects with a flash
   instead of 404ing.

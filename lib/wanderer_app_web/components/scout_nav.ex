@@ -46,11 +46,11 @@ defmodule WandererAppWeb.ScoutNav do
           navigate={~p"/scout"}
           class={[
             "h-full w-full text-gray-400 hover:text-white block p-3 relative",
-            @active_tab in [:scout, :scout_access, :scout_refresh] &&
+            @active_tab in [:scout, :scout_access, :scout_planner] &&
               "border-r-4 text-white border-r-orange-400"
           ]}
           aria-current={
-            if @active_tab in [:scout, :scout_access, :scout_refresh], do: "true", else: "false"
+            if @active_tab in [:scout, :scout_access, :scout_planner], do: "true", else: "false"
           }
         >
           <%!-- Not `hero-viewfinder-circle-solid`: that is the Map entry's

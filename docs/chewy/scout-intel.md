@@ -319,7 +319,7 @@ Two filter rules, both deliberate and both tested:
 - **Its own horizon** (`Alerts.horizon_days/0`, 7 days), not the window
   selector — an unanchored structure stays unanchored until somebody moves
   it, so "24 hours or 90 days" is the wrong question, and the live timer
-  table and "Still out there" already ignore that selector for the same
+  table and the spawns tab's 24h list already ignore that selector for the same
   reason.
 - **The search box does not narrow it**, though the system and space
   filters do. The search is tab vocabulary — on the spawns tab it is belt
@@ -413,7 +413,7 @@ flag covers all of it.
 |Tab|What it leads with|
 |---|---|
 |Structures|**Unanchored**, then live reinforcement timers (soonest first, colour-coded: red under an hour, amber under six), then **Unanchoring**, **Anchoring** and **Abandoned** (latest sighting per structure whose `status` is in that family — see "Merged status" above), and last, at the bottom and deliberately quiet, the ingest log: the latest observation **per structure** folded by Postgres `DISTINCT ON (structure_id)`. Any row drills down into that structure's full history on click|
-|Spawns|"Still out there" — the latest sighting **per system + location + spawn name** within the last 3 hours, folded by Postgres `DISTINCT ON (solar_system_id, location_name, spawn_name)`, same trick as the structures tab's fold — then the hotspot aggregate (`GROUP BY` system + location + spawn, with a count, an ISK sum, `first_seen`/`last_seen`, and a representative `spawn_category`/`location_type` picked via `max/1`) over the flat reverse-chronological log, then every sighting of *that* spawn at *that* location on click|
+|Spawns|"Seen in the last 24h" — the latest sighting **per system + location + spawn name** within the last 24 hours, folded by Postgres `DISTINCT ON (solar_system_id, location_name, spawn_name)`, same trick as the structures tab's fold — then the flat reverse-chronological ingest log, and every sighting of *that* spawn at *that* location on click. There is no aggregate between the two: a hotspot table ("this belt has had 7 spawns in 30 days") shipped once and never changed what anyone did next, while costing a `GROUP BY` on every read of the tab|
 
 **Boards are findings; the log is the tape.** Everything above the ingest
 log answers "what should a fleet do right now"; the flat log answers "what
@@ -433,17 +433,17 @@ Seven properties that are deliberate, not incidental:
 - **It ticks.** `now` is re-assigned every 30s and timers that ran out drop
   out of the live table. No query: a 30s poll per open page would be a
   database round trip to display arithmetic.
-- **"Still out there" ticks too, the same way.** It is independent of the
+- **The 24h list ticks too, the same way.** It is independent of the
   window selector above it — a spawn seen 20 minutes ago inside a 24-hour
   window and a spawn seen 20 minutes ago inside a 90-day window are the same
-  "still probably there" — and it ages out on the 30s `:tick` with no
+  "probably still there" — and it ages out on the 30s `:tick` with no
   query, exactly like an expired reinforcement timer: rows older than
-  `@fresh_seconds` (3 hours) are dropped from the already-loaded list
+  `@fresh_seconds` (24 hours) are dropped from the already-loaded list
   rather than re-queried.
 - **A spawn has no id.** `{solar_system_id, location_name, spawn_name}`
   is its identity — the same triple `ScoutSpawnSighting`'s
-  `:uniq_sighting` upserts the ingest on — so both "Still out there" and
-  Hotspots drill down on click into every sighting of that spawn at that
+  `:uniq_sighting` upserts the ingest on — so both the 24h list and the
+  ingest log drill down on click into every sighting of that spawn at that
   location (`ScoutSpawnSighting.history/4`), passed as three values
   rather than one id. This is the one asymmetry with structures, which
   do carry a `structure_id` and drill down on that single value.
@@ -465,7 +465,7 @@ Seven properties that are deliberate, not incidental:
 Filtering is one search box (an ILIKE in Postgres over the four strings a
 reader would type), a space-type chip row, and a system filter set by clicking
 any system cell and cleared by the chip in the toolbar. All three apply to
-every table on the tab, including the timer table and "Still out there" —
+every table on the tab, including the timer table and the 24h spawn list —
 `since` deliberately does not: a running timer is running however old the
 sighting that found it.
 
@@ -553,8 +553,8 @@ exists for, so it is one click and it holds across tab switches.
   drifter holes) for W-space.
 - **It is a subquery, not an Elixir filter.** One `solar_system_id IN (SELECT
   … WHERE system_class = ANY($1))` per read, applied to the `Ash.Query` rather
-  than carried as an action argument, so the two resources, `Stats.spawn_hotspots/2`
-  (schemaless Ecto) and the CSV export share one implementation and the page's
+  than carried as an action argument, so both resources and the CSV export
+  share one implementation and the page's
   `limit` still bounds what reaches the BEAM.
 - **`:other` is the complement, so the selection is total.** Abyssal/Zarzakh
   classes and any system missing from the static table live there, expressed

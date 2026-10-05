@@ -3,7 +3,7 @@ defmodule WandererApp.Scout.Stats do
   CHEWY PATCH: the aggregate reads behind `WandererAppWeb.ScoutIntelLive`
   that an Ash read action cannot express.
 
-  Three of them, all schemaless Ecto against the two scout tables:
+  Two of them, both schemaless Ecto against the two scout tables:
 
     * `last_observed_at/0` — how fresh the log is. Without it a dead
       eveknob client and a quiet region render identically, which is the
@@ -12,11 +12,6 @@ defmodule WandererApp.Scout.Stats do
     * `totals/0` — "nothing ever reported" vs "nothing in this window".
       Only called when a table came back empty, because `count(*)` on an
       append-only table is a sequential scan.
-
-    * `spawn_hotspots/2` — `GROUP BY system, location, spawn` with a
-      count and an ISK sum. Ash has no general group-by, and folding the
-      window in Elixir would reintroduce exactly the unbounded read that
-      the page's `limit` exists to prevent.
 
   The table names are literals rather than the resources' `postgres do
   table ... end`, which is a real coupling: renaming a table means
@@ -27,7 +22,6 @@ defmodule WandererApp.Scout.Stats do
   import Ecto.Query
 
   alias WandererApp.Repo
-  alias WandererApp.Scout.Space
 
   @spawns "scout_spawn_sightings_v1"
 
@@ -40,9 +34,6 @@ defmodule WandererApp.Scout.Stats do
   # observation clock.
   @structures "scout_structures_v1"
   @structures_observed_at :last_confirmed_at
-
-  # A hotspot list is read, not scrolled.
-  @max_hotspots 100
 
   @doc """
   Newest observation in each log, or `nil` for an empty one. Cheap: both
@@ -66,70 +57,6 @@ defmodule WandererApp.Scout.Stats do
       spawns: Repo.one(from(s in @spawns, select: count())),
       structures: Repo.one(from(s in @structures, select: count()))
     }
-  end
-
-  @doc """
-  Spawns in the window grouped by system + location + spawn name, most
-  frequent first.
-
-  Takes the same optional `:system_id`, `:q` and `:space` filters as the
-  page's other reads (`:space` being a `WandererApp.Scout.Space`
-  selection), so the aggregate always describes the same rows the flat
-  table below it is showing.
-
-  Besides the grouping columns and `sightings`/`last_seen`/`isk_value`,
-  each row also carries `first_seen` (earliest sighting in the group, same
-  UTC treatment as `last_seen`), and `spawn_category`/`location_type` —
-  pulled via `max/1` because, although neither is in the `GROUP BY`, both
-  are effectively constant per group, and `max/1` is the standard trick
-  for picking a representative value of a column that isn't part of the
-  grouping key.
-  """
-  @spec spawn_hotspots(DateTime.t(), keyword()) :: [map()]
-  def spawn_hotspots(since, opts \\ []) do
-    from(s in @spawns,
-      where: s.observed_at >= ^since,
-      group_by: [s.solar_system_id, s.solar_system_name, s.location_name, s.spawn_name],
-      order_by: [desc: count(s.id), desc: max(s.observed_at)],
-      limit: @max_hotspots,
-      select: %{
-        solar_system_id: s.solar_system_id,
-        solar_system_name: s.solar_system_name,
-        location_name: s.location_name,
-        spawn_name: s.spawn_name,
-        sightings: count(s.id),
-        last_seen: max(s.observed_at),
-        first_seen: min(s.observed_at),
-        spawn_category: max(s.spawn_category),
-        location_type: max(s.location_type),
-        isk_value: sum(s.isk_value)
-      }
-    )
-    |> hotspot_system(opts[:system_id])
-    |> hotspot_search(opts[:q])
-    |> Space.filter_ecto(opts[:space] || Space.all())
-    |> Repo.all()
-    |> Enum.map(&%{&1 | last_seen: to_utc(&1.last_seen), first_seen: to_utc(&1.first_seen)})
-  end
-
-  defp hotspot_system(query, nil), do: query
-  defp hotspot_system(query, system_id), do: where(query, [s], s.solar_system_id == ^system_id)
-
-  defp hotspot_search(query, nil), do: query
-
-  defp hotspot_search(query, q) do
-    where(
-      query,
-      [s],
-      fragment(
-        "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
-        s.spawn_name,
-        s.location_name,
-        s.solar_system_name,
-        s.spawn_category,
-        ^q
-      )
-    )
   end
 
   defp max_observed_at(table, column \\ :observed_at) do

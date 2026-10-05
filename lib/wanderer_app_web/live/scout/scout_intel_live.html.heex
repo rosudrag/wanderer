@@ -72,12 +72,12 @@
 
       <.link
         :if={WandererApp.Env.scout_planner_enabled?()}
-        navigate={~p"/scout/refresh"}
+        navigate={~p"/scout/planner"}
         role="tab"
-        id="scout-tab-refresh"
+        id="scout-tab-planner"
         class="tab"
       >
-        Refresh
+        Planner
       </.link>
     </div>
 
@@ -179,11 +179,11 @@
     />
   </div>
 
-  <div :if={@tab == :spawns} class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+  <div :if={@tab == :spawns} class="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-5">
     <.stat
-      label="Still out there"
+      label={"Seen last #{fresh_window_label()}"}
       value={to_string(length(@fresh_spawns))}
-      hint={"last #{fresh_window_label()}"}
+      hint="latest per spawn"
       tone={if @fresh_spawns != [], do: :good, else: :neutral}
     />
     <.stat
@@ -191,7 +191,6 @@
       value={count_label(@spawns, @more?)}
       hint={window_label(@days, @windows)}
     />
-    <.stat label="Hotspots" value={to_string(length(@hotspots))} />
     <.stat label="Richest sighting" value={isk(richest(@spawns))} />
   </div>
 
@@ -511,10 +510,10 @@
 
   <div :if={@tab == :spawns}>
     <.panel
-      title="Still out there"
+      title={"Seen in the last #{fresh_window_label()}"}
       count={length(@fresh_spawns)}
       tone={if @fresh_spawns != [], do: :good, else: :neutral}
-      hint={"latest per spawn, last #{fresh_window_label()}, ignores the window"}
+      hint="latest sighting per spawn, ignores the window selector"
     >
       <.grid id="scout-fresh-spawns">
         <thead>
@@ -554,53 +553,6 @@
           <.empty :if={@fresh_spawns == []} cols={6}>
             Nothing spawned in the last {fresh_window_label()}.
           </.empty>
-        </tbody>
-      </.grid>
-    </.panel>
-
-    <.panel title="Hotspots" count={length(@hotspots)} hint="grouped by system + location + spawn">
-      <.grid id="scout-hotspots">
-        <thead>
-          <tr>
-            <th class="w-20">Sightings</th>
-            <th>Spawn</th>
-            <th>System</th>
-            <th>Location</th>
-            <th class="w-24 text-right">Value</th>
-            <th class="w-36">First</th>
-            <th class="w-36">Last</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            :for={row <- @hotspots}
-            id={"scout-hotspot-#{row.solar_system_id}-#{:erlang.phash2({row.location_name, row.spawn_name})}"}
-          >
-            <td class="font-mono tabular-nums text-gray-200">{row.sightings}×</td>
-            <td>
-              <.subject
-                name={row.spawn_name}
-                badge={row.spawn_category}
-                click="show_spawn"
-                phx-value-system={row.solar_system_id}
-                phx-value-location={row.location_name}
-                phx-value-spawn={row.spawn_name}
-              />
-            </td>
-            <td><.sys row={row} systems={@systems} truesec={false} /></td>
-            <td class="text-gray-400 text-xs">
-              {row.location_name}
-              <span :if={row.location_type} class="text-gray-600">· {row.location_type}</span>
-            </td>
-            <td class="font-mono tabular-nums text-right whitespace-nowrap">
-              {isk(row.isk_value)}
-            </td>
-            <td class="font-mono text-xs text-gray-500 whitespace-nowrap">
-              {at(row.first_seen)}
-            </td>
-            <td class="font-mono text-xs text-gray-400 whitespace-nowrap">{at(row.last_seen)}</td>
-          </tr>
-          <.empty :if={@hotspots == []} cols={7}>Nothing to group in this window.</.empty>
         </tbody>
       </.grid>
     </.panel>

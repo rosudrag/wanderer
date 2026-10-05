@@ -18,16 +18,18 @@ defmodule WandererAppWeb.ScoutIntelLive do
       the table is append-only precisely so that two rows an hour apart
       mean something.
 
-    * **Spawns** leads with a fresh list — the latest sighting per
-      system + location + spawn seen within the last few hours,
-      ticking and ageing out exactly like the structure timers below,
-      because a faction spawn reported recently is probably still
-      sitting in that belt. Below it, the hotspot aggregate (`GROUP BY`
-      system + location + spawn) over the flat reverse-chronological
-      log, and below that a per-spawn history on demand, keyed on
-      system + location + spawn name rather than an id — there is no
-      spawn id, the belt and the name ARE the identity, which is
-      exactly the `:uniq_sighting` identity the resource upserts on.
+    * **Spawns** leads with a 24-hour list — the latest sighting per
+      system + location + spawn seen in the last 24 hours, ticking and
+      ageing out exactly like the structure timers below, because a
+      faction spawn reported today is the only one worth flying to.
+      Below it, nothing but the flat reverse-chronological ingest log,
+      and a per-spawn history on demand, keyed on system + location +
+      spawn name rather than an id — there is no spawn id, the belt and
+      the name ARE the identity, which is exactly the `:uniq_sighting`
+      identity the resource upserts on. (There used to be a hotspot
+      aggregate between the two; "this belt has had 7 spawns in 30 days"
+      never changed what anyone did next, and it cost a `GROUP BY` on
+      every read.)
 
   Four things this page does that a plain table does not:
 
@@ -84,10 +86,9 @@ defmodule WandererAppWeb.ScoutIntelLive do
   # it costs no query.
   @tick :timer.seconds(30)
 
-  # A faction spawn seen within the last three hours is probably still
-  # sitting in that belt; older than that is history, which is what the
-  # window-bounded log below the fresh list is for.
-  @fresh_seconds 3 * 3_600
+  # A faction spawn seen today is worth a trip; older than that is
+  # history, which is what the window-bounded log below the list is for.
+  @fresh_seconds 24 * 3_600
 
   @impl true
   def mount(_params, _session, socket) do
@@ -508,7 +509,6 @@ defmodule WandererAppWeb.ScoutIntelLive do
       archived_structures: by_archived(archived_structures),
       more?: more_structures?,
       spawns: [],
-      hotspots: [],
       fresh_spawns: []
     )
     |> assign_systems([
@@ -524,13 +524,6 @@ defmodule WandererAppWeb.ScoutIntelLive do
   defp load_tab(socket, :spawns, since, now, filters, limit) do
     {spawns, more?} =
       read(ScoutSpawnSighting, :search, Map.put(filters, :since, since), limit)
-
-    hotspots =
-      Stats.spawn_hotspots(since,
-        system_id: filters.system_id,
-        q: filters.q,
-        space: filters.space
-      )
 
     {fresh_spawns, _more} =
       read(
@@ -554,7 +547,6 @@ defmodule WandererAppWeb.ScoutIntelLive do
     socket
     |> assign(
       spawns: by_recent(spawns),
-      hotspots: hotspots,
       more?: more?,
       active_timers: [],
       structures: [],
@@ -564,7 +556,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
       archived_structures: [],
       fresh_spawns: fresh_spawns
     )
-    |> assign_systems([spawns, hotspots, fresh_spawns])
+    |> assign_systems([spawns, fresh_spawns])
   end
 
   # Asks for one row past the page so the UI can say "there are more"
