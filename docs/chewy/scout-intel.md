@@ -483,10 +483,25 @@ sentence in another.
 |`panel/1`|A section is a bordered card with a title, a **row count**, and a one-line hint — not an `<h2>` over a paragraph of prose over a full-bleed table, which is what made the page read as a wall|
 |`log_panel/1`|The flat ingest log at the bottom of a tab, rendered as what it is: dashed border, monospace label, muted body. It is NOT a `panel/1` — giving the tape the same weight as a finding ended the page on its least actionable table|
 |`stat/1`|The strip under the toolbar: timers running (and how many inside the hour), anchoring, unanchoring, rows in the window. Counted from the rows the page already holds — never a second query — and capped reads say `250+`, the same string the panel chip shows|
-|`sys/1`|Name, then **one** qualifier: the class title in w-space and Pochven, the security status everywhere else. `map_solar_system_v2` titles nullsec `0.0` and lowsec `L`, so showing both rendered `1DQ1-A 0.0 -0.4` and `J110145 C5 -1.0`. Falls back to the static map's `security` when the client logged no truesec|
+|`sys/1`|Name, then **one** qualifier: the class title in w-space and Pochven, the security status everywhere else. `map_solar_system_v2` titles nullsec `0.0` and lowsec `L`, so showing both rendered `1DQ1-A 0.0 -0.4` and `J110145 C5 -1.0`. Falls back to the static map's `security` when the client logged no truesec. Under that line, muted, the **region** — see below|
 |`status/1`|Coloured by family, and **quiet** for the steady tier: when every row shouts, the reinforced one stops standing out|
 |`seen/1`, `countdown_cell/1`|Age first (what you act on), timestamp under it (what you paste in fleet chat)|
 |`empty/1`|One empty state, so every table says nothing the same way|
+
+Every row on this page has a system, and therefore a region: `sys/1` renders
+it as a muted second line (`ScoutComponents.region/2`), and the toolbar's
+system chip and the unanchored alert's tooltips render the one-line form
+`Jita, The Forge` (`system_region/2`). It costs no query — `assign_systems/2`
+already resolves each `solar_system_id` through `CachedInfo.get_system_static_info!/1`,
+whose struct carries `region_name` beside the name and class title this page
+was already reading. Nothing is stored and no static table was added: the
+region is derived from the system every time, so a row logged before the
+static map knew the system still renders a region once it does. It is NOT a
+column of its own — every table here already has a System column and none has
+width to spare, and the region is context for the name above it rather than
+something a reader scans down. `/scout/planner`'s tables keep their separate
+`Region` column: those rows come from `Planner`/`Sweep`, which select
+`region_name` in the query itself.
 
 One column is deliberately absent: **shield / armor / hull**. It is stored,
 exported in the CSV and used by `Merge.changed_fields/0` to decide whether a

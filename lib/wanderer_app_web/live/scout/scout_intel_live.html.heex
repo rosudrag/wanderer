@@ -135,7 +135,7 @@
       class="btn btn-sm btn-outline btn-warning gap-1"
       title="Clear the system filter"
     >
-      {system(%{solar_system_id: @system_id, solar_system_name: nil}, @systems)} ✕
+      {system_region(%{solar_system_id: @system_id, solar_system_name: nil}, @systems)} ✕
     </button>
 
     <button
@@ -722,6 +722,9 @@
               Map.put(@spawn_detail, :solar_system_name, nil),
               @systems
             )}
+            <span :if={region(@spawn_detail, @systems)}>
+              · {region(@spawn_detail, @systems)}
+            </span>
           </p>
         </div>
         <button phx-click="close_spawn" class="btn btn-sm btn-ghost">✕</button>

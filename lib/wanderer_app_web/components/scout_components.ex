@@ -176,7 +176,7 @@ defmodule WandererAppWeb.ScoutComponents do
           phx-click="filter_system"
           phx-value-id={row.solar_system_id}
           class="badge badge-sm border border-error/50 bg-error/10 text-gray-100 hover:bg-error/25 gap-1"
-          title={"#{row.structure_name || row.structure_id} — #{@horizon_days}-day horizon, not the window selector"}
+          title={"#{row.structure_name || row.structure_id} — #{system_region(row, @systems)} — #{@horizon_days}-day horizon, not the window selector"}
         >
           {system(row, @systems)}
           <span class="text-error/80 font-mono">{ago(row.last_confirmed_at, @now)}</span>
@@ -512,43 +512,55 @@ defmodule WandererAppWeb.ScoutComponents do
   attr :truesec, :boolean, default: true
 
   @doc """
-  The system cell: click-to-filter name, then ONE qualifier.
+  The system cell: click-to-filter name, then ONE qualifier, then the
+  region.
 
   The qualifier is the class title in w-space and Pochven ("C5",
   "Pochven") and the security status everywhere else — never both.
   `map_solar_system_v2` titles nullsec "0.0" and lowsec "L", so showing
   the pair rendered "1DQ1-A 0.0 -0.4" and "J110145 C5 -1.0": one of the
   two is always noise, and which one depends on the space.
+
+  The region goes on a second, muted line rather than in a column of
+  its own: every table on this page already has a System column and
+  none of them has width to spare, and the region is context for the
+  name above it, not something a reader scans down.
   """
   def sys(assigns) do
     assigns =
       assigns
       |> assign(:class_title, hole_class(assigns.row, assigns.systems))
       |> assign(:sec, sec_value(assigns.row, assigns.systems))
+      |> assign(:region, region(assigns.row, assigns.systems))
 
     ~H"""
-    <div class="flex items-center gap-1.5 whitespace-nowrap">
-      <button
-        phx-click="filter_system"
-        phx-value-id={@row.solar_system_id}
-        class="link link-hover decoration-dotted underline-offset-2"
-        title="Filter the whole page to this system"
-      >
-        {system(@row, @systems)}
-      </button>
-      <span
-        :if={@class_title}
-        class="badge badge-xs border-0 bg-violet-500/15 text-violet-300 font-mono"
-      >
-        {@class_title}
-      </span>
-      <span
-        :if={is_nil(@class_title) and @truesec and security(@sec)}
-        class={["font-mono text-[11px]", security_class(@sec)]}
-        title="Security status"
-      >
-        {security(@sec)}
-      </span>
+    <div class="min-w-0">
+      <div class="flex items-center gap-1.5 whitespace-nowrap">
+        <button
+          phx-click="filter_system"
+          phx-value-id={@row.solar_system_id}
+          class="link link-hover decoration-dotted underline-offset-2"
+          title="Filter the whole page to this system"
+        >
+          {system(@row, @systems)}
+        </button>
+        <span
+          :if={@class_title}
+          class="badge badge-xs border-0 bg-violet-500/15 text-violet-300 font-mono"
+        >
+          {@class_title}
+        </span>
+        <span
+          :if={is_nil(@class_title) and @truesec and security(@sec)}
+          class={["font-mono text-[11px]", security_class(@sec)]}
+          title="Security status"
+        >
+          {security(@sec)}
+        </span>
+      </div>
+      <div :if={@region} class="text-[11px] text-gray-500 truncate" title="Region">
+        {@region}
+      </div>
     </div>
     """
   end
@@ -1236,6 +1248,30 @@ defmodule WandererAppWeb.ScoutComponents do
     case Map.get(systems, row.solar_system_id) do
       %{class_title: title} when is_binary(title) and title != "" -> title
       _ -> nil
+    end
+  end
+
+  @doc false
+  # The region, from the same cached static-info struct the name comes
+  # from -- so it costs nothing beyond what `assign_systems/2` already
+  # resolved. `nil` only when the static map has no row for the id the
+  # client logged; every real system has a region, and regions do not
+  # change.
+  def region(row, systems) do
+    case Map.get(systems, row.solar_system_id) do
+      %{region_name: name} when is_binary(name) and name != "" -> name
+      _ -> nil
+    end
+  end
+
+  @doc false
+  # "Jita, The Forge" on one line -- for the places with room for a
+  # string but not for a second line: tooltips, and the one-line chips
+  # the toolbar and the unanchored alert render.
+  def system_region(row, systems) do
+    case region(row, systems) do
+      nil -> system(row, systems)
+      name -> system(row, systems) <> ", " <> name
     end
   end
 
