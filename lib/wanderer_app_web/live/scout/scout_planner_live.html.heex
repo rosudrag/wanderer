@@ -287,6 +287,7 @@
         <span :if={@characters == []} class="text-[11px] text-gray-500">
           No tracked character on this account to set a route on.
         </span>
+        <.route_outcome status={@route_status} scope={:rank} />
       </div>
 
       <.panel
@@ -579,6 +580,7 @@
         >
           Set full route
         </button>
+        <.route_outcome status={@route_status} scope={:sweep} />
       </div>
 
       <%!-- The split sits ABOVE the route table: on a 189-system sweep the
@@ -631,6 +633,7 @@
             >
               Set route
             </button>
+            <.route_outcome status={@route_status} scope={{:part, part.index}} />
           </div>
         </div>
         <div class="p-3 pt-0">

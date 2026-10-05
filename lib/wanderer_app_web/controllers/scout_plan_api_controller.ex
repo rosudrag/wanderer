@@ -142,10 +142,15 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
         chain: truthy?(Map.get(params, "chain"))
       ]
 
+      # `push/2` answers a result map now, not a bare id list: the bot
+      # gets the accepted count on the header as before, and an ESI
+      # refusal or an unusable token is an error with its reason rather
+      # than a plan the pilot never received.
       with {:ok, result} <- Planner.plan(opts),
-           {:ok, pushed} <- PlanWaypoints.push(result.stops, character_eve_id) do
-        render_result(conn, Map.put(result, :pushed, pushed), format)
+           {:ok, push} <- PlanWaypoints.push(result.stops, character_eve_id) do
+        render_result(conn, Map.put(result, :pushed, push.pushed), format)
       else
+        {:error, {:token, reason}} -> error(conn, "token: #{inspect(reason)}")
         {:error, reason} -> error(conn, to_string(reason))
       end
     else

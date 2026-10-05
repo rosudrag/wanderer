@@ -39,7 +39,10 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     character = insert(:character, %{user_id: user.id, name: "Refresh Reader"})
     Application.put_env(:wanderer_app, :bootstrap_admin_character, character.name)
 
-    %{conn: build_conn() |> Plug.Test.init_test_session(%{"user_id" => user.id})}
+    %{
+      conn: build_conn() |> Plug.Test.init_test_session(%{"user_id" => user.id}),
+      character: character
+    }
   end
 
   test "the planner page mounts with no origin chosen", %{conn: conn} do
@@ -195,6 +198,75 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
       assert :binary.match(html, "scout-sweep-split-panel") <
                :binary.match(html, "scout-sweep-table-panel")
     end
+  end
+
+  # CHEWY PATCH: what `Set route` is allowed to claim. The push reported
+  # success unconditionally -- `WandererApp.Character.set_autopilot_waypoint/3`
+  # discards ESI's answer -- so "Route set on X: N waypoints" appeared
+  # for a refused token and for a pilot who was not logged in, which is
+  # exactly how "I set a route for Molden Heath and never got it in
+  # game" looked from this page. The outcome now renders BESIDE the
+  # button and stays there, so these assertions read the page, not a
+  # toast.
+  describe "what Set route reports" do
+    setup %{character: character} do
+      {:ok, _pid} = FakeWaypointEsi.start_link()
+      Application.put_env(:wanderer_app, :esi_module, FakeWaypointEsi)
+
+      {:ok, character} =
+        WandererApp.Api.Character.update(character, %{
+          access_token: "test-access-token",
+          expires_at: DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_unix()
+        })
+
+      Cachex.del(:character_cache, character.id)
+      WandererApp.Cache.delete("scout:planner:adjacency")
+
+      put_system(990_600_001, "Outcomealpha")
+      put_system(990_600_002, "Outcomebravo")
+      put_jump(990_600_001, 990_600_002)
+
+      on_exit(fn -> Application.delete_env(:wanderer_app, :esi_module) end)
+
+      :ok
+    end
+
+    test "an ESI refusal is named on the page, not reported as a route", %{conn: conn} do
+      FakeWaypointEsi.script(online: true, waypoints: {:error, :forbidden})
+
+      html = push_plan(conn)
+
+      assert html =~ "ESI refused the first"
+      assert html =~ "403"
+      refute html =~ "Route set on"
+    end
+
+    test "a pilot whose client is not running is reported as such", %{conn: conn} do
+      FakeWaypointEsi.script(online: false, waypoints: {:ok, ""})
+
+      html = push_plan(conn)
+
+      assert html =~ "not logged in"
+      refute html =~ "Route set on"
+    end
+
+    test "a route EVE accepted says so, with the count", %{conn: conn} do
+      FakeWaypointEsi.script(online: true, waypoints: {:ok, ""})
+
+      html = push_plan(conn)
+
+      assert html =~ "Route set on"
+      assert html =~ "waypoint"
+    end
+  end
+
+  defp push_plan(conn) do
+    {:ok, live, _html} = live(conn, ~p"/scout/planner")
+
+    render_click(live, "select_origin", %{"id" => "990600001", "name" => "Outcomealpha"})
+    render_async(live)
+
+    render_click(live, "set_route", %{})
   end
 
   # A sweep's own task starts the split task from `handle_async/3`, so

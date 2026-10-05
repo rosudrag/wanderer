@@ -143,6 +143,23 @@ can be hundreds of rows, so any control that produces one must ALSO report its o
 to itself ("3 parts, longest 94 jumps"), and the panel it fills belongs ABOVE the long table, not
 after it. The same trap applies to any future per-row action on these pages.
 
+**A `Set route` push reports what ESI actually said, and three things made that impossible.**
+Reported 2026-10-05: "I just tried to set planned route for Molden Heath and i wasnt getting it
+ingame". The page said "Route set: N waypoints" every time, and the server log held nothing at all.
+Upstream's `WandererApp.Character.set_autopilot_waypoint/3` DISCARDS ESI's answer and returns `:ok`
+— right for the map's fire-and-forget destination button, a lie for a route — so
+`WandererApp.Scout.PlanWaypoints` calls `WandererApp.Esi.set_autopilot_waypoint/4` itself. Reading
+the answer needed two more fixes: `do_post_esi/3` counted only 200/201 as success, and **204 is the
+only success `/ui/autopilot/waypoint` documents**, so a route EVE accepted came back
+`{:error, "Unexpected status: 204"}`; and the POST path has no refresh-on-403 retry (`do_get_retry/5`
+is the GET path's), so an expired token — normal for a pilot not currently tracked on an open map —
+403s on every stop silently. The push now opens with one authenticated GET
+(`/characters/{id}/online`), which refreshes the token through the GET path as a side effect and
+answers the other question nothing could: EVE applies waypoints to a RUNNING client only, so a route
+pushed at a logged-out pilot is accepted and discarded. Outcome, reason and stop number render
+beside the button (`ScoutComponents.route_outcome/1`) and go to the log as one line per push. Any
+future ESI write from this app inherits all three traps.
+
 **Scout structure intel is deduplicated twice, and both halves are load-bearing.** The eveknob
 client re-reports every structure on grid on every pass. Reads fold
 (`DISTINCT ON (structure_id) ORDER BY observed_at DESC`) — the live timer table was missing that

@@ -129,6 +129,11 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            security_types: Enum.reject(Space.types(), fn {key, _label} -> key == :other end),
            characters: characters,
            character_eve_id: characters |> List.first() |> character_eve_id(),
+           # What the last `Set route` did, kept on the page until the
+           # next one (`ScoutComponents.route_outcome/1`). The push's
+           # result is invisible from here -- it is in a game client --
+           # so a toast that fades was the entire feedback.
+           route_status: nil,
            now: DateTime.utc_now(),
            result: nil,
            stops: [],
@@ -362,30 +367,18 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   # goes out with that character's own token
   # (`WandererApp.Scout.PlanWaypoints`, design section 6 mode A).
   #
-  # The pushed count is reported, never assumed: the push halts on the
-  # first ESI refusal rather than skipping a stop, so a short route is a
-  # PREFIX of the plan and the flash has to say so.
+  # The outcome is reported, never assumed. Three things could make a
+  # route not arrive and the page said "Route set" for all of them: ESI
+  # refusing a stop, the character's access token having expired (the
+  # POST path has no refresh retry, so every stop 403s), and the pilot
+  # not being logged in -- EVE applies waypoints to a RUNNING client
+  # only. `PlanWaypoints.push/2` now answers all three, and
+  # `route_outcome/1` keeps the answer on the page beside the button
+  # instead of in a toast that fades.
   def handle_event("set_route", _params, socket) do
     %{plan_stops: plan_stops, character_eve_id: character_eve_id} = socket.assigns
 
-    case PlanWaypoints.push(plan_stops, character_eve_id) do
-      {:ok, pushed} ->
-        gate_count = Enum.count(plan_stops, &(&1.leg == :gate))
-        name = character_name(socket.assigns.characters, character_eve_id)
-
-        {:noreply, put_flash(socket, :info, push_message(length(pushed), gate_count, name))}
-
-      {:error, :no_gate_stops} ->
-        {:noreply, put_flash(socket, :error, "This plan has no gate-reachable stops to fly.")}
-
-      {:error, :unknown_character} ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "Pick a character this instance tracks before setting a route."
-         )}
-    end
+    push_route(socket, :rank, plan_stops, character_eve_id, "This plan")
   end
 
   # The page's other write, and the quiet one: destroys the stored coverage row for
@@ -530,29 +523,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
          eve_id when not is_nil(eve_id) <- Map.get(socket.assigns.sweep_pilots, index) do
       stops = Enum.map(part.order, &%{solar_system_id: &1, leg: :gate})
 
-      case PlanWaypoints.push(stops, eve_id) do
-        {:ok, pushed} ->
-          name = character_name(socket.assigns.characters, eve_id)
-
-          {:noreply,
-           put_flash(
-             socket,
-             :info,
-             push_message(length(pushed), length(stops), name) <> " (part #{index + 1})"
-           )}
-
-        {:error, :no_gate_stops} ->
-          {:noreply,
-           put_flash(socket, :error, "Part #{index + 1} has no gate-reachable stops to fly.")}
-
-        {:error, :unknown_character} ->
-          {:noreply,
-           put_flash(
-             socket,
-             :error,
-             "Pick a character this instance tracks before setting part #{index + 1}'s route."
-           )}
-      end
+      push_route(socket, {:part, index}, stops, eve_id, "Part #{index + 1}")
     else
       _ ->
         {:noreply,
@@ -572,23 +543,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     else
       stops = Enum.map(result.waypoints, &%{solar_system_id: &1, leg: :gate})
 
-      case PlanWaypoints.push(stops, character_eve_id) do
-        {:ok, pushed} ->
-          name = character_name(socket.assigns.characters, character_eve_id)
-
-          {:noreply, put_flash(socket, :info, push_message(length(pushed), length(stops), name))}
-
-        {:error, :no_gate_stops} ->
-          {:noreply, put_flash(socket, :error, "This sweep has no gate-reachable stops to fly.")}
-
-        {:error, :unknown_character} ->
-          {:noreply,
-           put_flash(
-             socket,
-             :error,
-             "Pick a character this instance tracks before setting a route."
-           )}
-      end
+      push_route(socket, :sweep, stops, character_eve_id, "This sweep")
     end
   end
 
@@ -844,12 +799,97 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     end
   end
 
-  defp push_message(pushed, pushed, name),
-    do: "Route set on #{name}: #{pushed} #{plural(pushed, "waypoint", "waypoints")}."
+  # One place every `Set route` button reports through: the push, then
+  # the SAME sentence in the toast and in `route_outcome/1` beside the
+  # button, keyed to `scope` so a part's result cannot read as the whole
+  # sweep's.
+  defp push_route(socket, scope, stops, character_eve_id, label) do
+    name = character_name(socket.assigns.characters, character_eve_id)
 
-  defp push_message(pushed, gate_count, name),
-    do:
-      "ESI accepted only #{pushed} of #{gate_count} stops -- #{name}'s route is the first part of this plan, not all of it."
+    status =
+      stops
+      |> PlanWaypoints.push(character_eve_id)
+      |> push_status(name, label)
+      |> Map.put(:scope, scope)
+
+    {:noreply,
+     socket
+     |> assign(route_status: status)
+     |> put_flash(if(status.level == :error, do: :error, else: :info), status.text)}
+  end
+
+  defp push_status({:error, :no_gate_stops}, _name, label),
+    do: %{level: :error, text: "#{label} has no gate-reachable stops to fly."}
+
+  defp push_status({:error, :unknown_character}, _name, _label),
+    do: %{
+      level: :error,
+      text: "Pick a character this instance tracks before setting a route."
+    }
+
+  # The token case is the one a reader can fix, so it says how: this
+  # instance refreshes an expired token on the preflight call, and the
+  # only way that still fails is a revoked or never-granted grant.
+  defp push_status({:error, {:token, reason}}, name, _label),
+    do: %{
+      level: :error,
+      text:
+        "EVE would not accept #{name}'s token (#{esi_reason(reason)}). " <>
+          "Nothing was sent. Re-authorise that character on the Characters page, then try again."
+    }
+
+  defp push_status({:ok, %{pushed: [], total: total, error: error}}, name, _label)
+       when not is_nil(error),
+       do: %{
+         level: :error,
+         text:
+           "ESI refused the first of #{total} stops (system #{error.solar_system_id}): " <>
+             "#{esi_reason(error.reason)}. #{name}'s in-game route is unchanged."
+       }
+
+  # A partial push is a real route, just not this one: the stops that
+  # landed are a valid prefix, which is why the push halts instead of
+  # skipping the refused stop.
+  defp push_status({:ok, %{pushed: pushed, total: total, error: error}}, name, _label)
+       when not is_nil(error),
+       do: %{
+         level: :warn,
+         text:
+           "Stopped at stop #{error.index + 1} of #{total} (system #{error.solar_system_id}): " <>
+             "#{esi_reason(error.reason)}. #{name} has the first " <>
+             "#{length(pushed)} #{plural(length(pushed), "waypoint", "waypoints")} only."
+       }
+
+  # ESI accepts a waypoint for a character whose client is not running
+  # and discards it. That is exactly the "I set it and nothing happened"
+  # report this page could not explain, so it is a warning, not a tick.
+  defp push_status({:ok, %{pushed: pushed, online?: false}}, name, _label),
+    do: %{
+      level: :warn,
+      text:
+        "EVE accepted #{length(pushed)} #{plural(length(pushed), "waypoint", "waypoints")}, " <>
+          "but reports #{name} as not logged in — waypoints only reach a running client, " <>
+          "so this route went nowhere. Log that character in and set it again."
+    }
+
+  defp push_status({:ok, %{pushed: pushed}}, name, _label),
+    do: %{
+      level: :ok,
+      text:
+        "Route set on #{name}: #{length(pushed)} " <>
+          "#{plural(length(pushed), "waypoint", "waypoints")} at " <>
+          "#{Calendar.strftime(DateTime.utc_now(), "%H:%M:%S")}Z."
+    }
+
+  defp esi_reason(:forbidden), do: "ESI answered 403 Forbidden"
+  defp esi_reason(:timeout), do: "ESI timed out"
+  defp esi_reason(:pool_timeout), do: "no HTTP connection was available"
+  defp esi_reason(:error_limited), do: "ESI rate-limited this instance"
+  defp esi_reason(:no_token), do: "this instance holds no access token for it"
+  defp esi_reason(reason) when is_binary(reason), do: reason
+  defp esi_reason(reason) when is_atom(reason), do: to_string(reason)
+  defp esi_reason(%{__exception__: true} = error), do: Exception.message(error)
+  defp esi_reason(reason), do: inspect(reason)
 
   defp parse_security_key(type) when type in ~w(hs ls ns wh pochven),
     do: String.to_existing_atom(type)

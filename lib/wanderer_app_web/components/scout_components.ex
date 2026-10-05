@@ -352,6 +352,41 @@ defmodule WandererAppWeb.ScoutComponents do
     """
   end
 
+  attr :status, :map, default: nil
+  attr :scope, :any, required: true
+
+  @doc """
+  CHEWY PATCH (scout planner): what the last `Set route` on THIS button
+  did, inline beside it.
+
+  Pushing a route is the one control on `/scout` whose result is not on
+  the page at all — it is in another process, in the game client — so a
+  toast that fades is the whole feedback, and "I set a route and it
+  never arrived" is indistinguishable from "ESI refused stop 1". This
+  renders the outcome, with its reason, until the next push: how many
+  waypoints of how many landed, whether the pilot's client was even
+  running, and what ESI said when it stopped.
+
+  `scope` keys it to one button (`:rank`, `:sweep`, `{:part, i}`) so a
+  part's result cannot read as the whole sweep's.
+  """
+  def route_outcome(assigns) do
+    ~H"""
+    <p
+      :if={@status && @status.scope == @scope}
+      class={[
+        "text-[11px] leading-snug max-w-[26rem]",
+        @status.level == :ok && "text-emerald-300",
+        @status.level == :warn && "text-amber-300",
+        @status.level == :error && "text-rose-300"
+      ]}
+      role="status"
+    >
+      {@status.text}
+    </p>
+    """
+  end
+
   attr :id, :string, required: true
   attr :label, :string, required: true
   attr :scope, :string, required: true

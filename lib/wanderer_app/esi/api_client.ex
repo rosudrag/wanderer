@@ -656,7 +656,13 @@ defmodule WandererApp.Esi.ApiClient do
       Req.new(req_options_for_pool(pool) ++ req_opts)
       |> Req.post(url: url)
       |> case do
-        {:ok, %{status: status, body: body}} when status in [200, 201] ->
+        # CHEWY PATCH: 204 is a SUCCESS, and for `/ui/autopilot/waypoint`
+        # it is the ONLY success ESI documents (`meta/openapi.json`:
+        # "204 - Open window request received"). Without it a route that
+        # EVE accepted came back `{:error, "Unexpected status: 204"}`,
+        # which the map's fire-and-forget button discards and the scout
+        # planner could not distinguish from a refusal.
+        {:ok, %{status: status, body: body}} when status in [200, 201, 204] ->
           {:ok, body}
 
         {:ok, %{status: 504}} ->

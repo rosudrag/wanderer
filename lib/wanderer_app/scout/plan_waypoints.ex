@@ -32,29 +32,66 @@ defmodule WandererApp.Scout.PlanWaypoints do
   Only `leg == :gate` stops are ever pushed (design section 6, mode A):
   EVE's own route planner cannot express a wormhole, so a chain stop
   silently becomes a k-space detour the long way round.
+
+  ## Why a preflight call
+
+  `WandererApp.Character.set_autopilot_waypoint/3` discards ESI's answer
+  and returns `:ok` unconditionally -- correct for the map's
+  fire-and-forget button, useless for a route, where this page told the
+  reader "Route set: 86 waypoints" whether ESI wrote the route, refused
+  the token or was never reached. So the push calls
+  `WandererApp.Esi.set_autopilot_waypoint/4` itself and reads the result.
+
+  Reading the result is only half of it: the POST path has NO
+  refresh-on-403 retry (`do_get_retry/5` is the GET path's), so an
+  EXPIRED access token -- normal for a character not currently tracked on
+  an open map -- is a silent 403 on every stop. The preflight is one
+  authenticated GET (`/characters/{id}/online`), which goes through
+  `get_character_auth_data/3` and therefore refreshes and persists the
+  token before the first waypoint, and answers the second question this
+  page could not answer either: EVE applies waypoints only to a RUNNING
+  client, so a route pushed at a logged-out pilot is accepted by ESI
+  (204) and lands nowhere.
   """
 
   require Logger
 
   alias WandererApp.Api.Character
 
+  @type result :: %{
+          pushed: [integer()],
+          total: non_neg_integer(),
+          online?: boolean() | nil,
+          error: nil | %{index: non_neg_integer(), solar_system_id: integer(), reason: term()}
+        }
+
+  # Same `:esi_module` test-injection idiom as
+  # `WandererApp.CachedInfo.get_character_names/2`: the failure handling
+  # here is the whole point of the module, and asserting it against live
+  # ESI would mean writing a real route onto a real pilot from a test
+  # run.
+  defp esi, do: Application.get_env(:wanderer_app, :esi_module, WandererApp.Esi)
+
   @doc """
   Pushes `stops` onto `character_eve_id`'s autopilot, in order.
 
-  Returns `{:ok, pushed_solar_system_ids}` -- possibly a PREFIX of the
-  gate stops if ESI refused partway -- or `{:error, reason}` when the
-  character is unknown to this instance or holds no usable token.
+  Returns `{:ok, result}` where `:pushed` may be a PREFIX of the gate
+  stops and `:error` carries the stop ESI refused, or `{:error, reason}`
+  when there was nothing to fly, the character is unknown to this
+  instance, or its token could not be made usable.
   """
   @spec push([map()], String.t() | integer()) ::
-          {:ok, [integer()]} | {:error, :unknown_character | :no_gate_stops}
+          {:ok, result()}
+          | {:error, :unknown_character | :no_gate_stops | {:token, term()}}
   def push(stops, character_eve_id) do
     gate_stops = Enum.filter(stops, &(&1.leg == :gate))
 
     # Stops first, character second: "there is nothing to fly" is true
     # regardless of who asked, and answering it costs no query.
     with :ok <- require_stops(gate_stops),
-         {:ok, character} <- fetch_character(character_eve_id) do
-      {:ok, do_push(gate_stops, character.id)}
+         {:ok, character} <- fetch_character(character_eve_id),
+         {:ok, token, online?} <- preflight(character) do
+      {:ok, do_push(gate_stops, character, token, online?)}
     end
   end
 
@@ -68,39 +105,98 @@ defmodule WandererApp.Scout.PlanWaypoints do
   defp require_stops([]), do: {:error, :no_gate_stops}
   defp require_stops(_stops), do: :ok
 
-  defp do_push(gate_stops, character_id) do
-    gate_stops
-    |> Enum.with_index()
-    |> Enum.reduce_while([], fn {stop, index}, pushed ->
-      case set_waypoint(character_id, stop.solar_system_id, index == 0) do
-        :ok ->
-          {:cont, [stop.solar_system_id | pushed]}
-
-        {:error, reason} ->
-          Logger.warning(
-            "[scout planner] waypoint push stopped at #{stop.solar_system_id} " <>
-              "(stop #{index + 1}): #{inspect(reason)}"
-          )
-
-          {:halt, pushed}
-      end
-    end)
-    |> Enum.reverse()
+  # One authenticated GET that refreshes an expired token as a side
+  # effect (`get_character_auth_data/3` routes an expired token through
+  # `do_get_retry/5`) and reports whether the pilot's client is running.
+  defp preflight(%{id: id, eve_id: eve_id}) do
+    with {:ok, %{access_token: token}} when is_binary(token) <-
+           WandererApp.Character.get_character(id),
+         {:ok, body} <-
+           esi().get_character_online(eve_id,
+             access_token: token,
+             character_id: id,
+             refresh_token?: true
+           ) do
+      {:ok, current_token(id, token), online_flag(body)}
+    else
+      {:ok, _no_token} -> {:error, {:token, :no_token}}
+      {:error, reason} -> {:error, {:token, reason}}
+      {:error, reason, _headers} -> {:error, {:token, reason}}
+      other -> {:error, {:token, other}}
+    end
+  rescue
+    error -> {:error, {:token, error}}
   end
 
-  # `WandererApp.Character.set_autopilot_waypoint/3` answers `:ok`
-  # unconditionally (it is fire-and-forget for the map's own button), and
-  # it MATCHES on the character lookup, so a character with no cached
-  # token raises rather than returning. Both are wrong for a route, where
-  # stop 3 failing changes what stop 4 means -- so the rescue is the
-  # error channel this module needs, not defensive padding.
-  defp set_waypoint(character_id, destination_id, first?) do
-    WandererApp.Character.set_autopilot_waypoint(character_id, destination_id,
-      add_to_beginning: false,
-      clear_other_waypoints: first?
-    )
+  defp online_flag(%{"online" => online?}) when is_boolean(online?), do: online?
+  defp online_flag(_body), do: nil
 
-    :ok
+  # The refresh above rewrites the cached character, so the token to push
+  # with is the one in the cache NOW, not the one read before the call.
+  defp current_token(character_id, fallback) do
+    case WandererApp.Character.get_character(character_id) do
+      {:ok, %{access_token: token}} when is_binary(token) -> token
+      _other -> fallback
+    end
+  end
+
+  defp do_push(gate_stops, character, token, online?) do
+    total = length(gate_stops)
+
+    {pushed, error} =
+      gate_stops
+      |> Enum.with_index()
+      |> Enum.reduce_while({[], nil}, fn {stop, index}, {pushed, _error} ->
+        case set_waypoint(token, stop.solar_system_id, index == 0) do
+          :ok ->
+            {:cont, {[stop.solar_system_id | pushed], nil}}
+
+          {:error, reason} ->
+            {:halt,
+             {pushed,
+              %{index: index, solar_system_id: stop.solar_system_id, reason: reason}}}
+        end
+      end)
+
+    result = %{
+      pushed: Enum.reverse(pushed),
+      total: total,
+      online?: online?,
+      error: error
+    }
+
+    log(character, result)
+
+    result
+  end
+
+  # The push left no trace in the server log at all, which is why the
+  # first report of "I set a route and nothing happened" had nothing to
+  # read. One line per push, at `warning` when it was not whole.
+  defp log(character, %{pushed: pushed, total: total, online?: online?, error: error}) do
+    message =
+      "[scout planner] waypoint push for #{character.name} (#{character.eve_id}): " <>
+        "#{length(pushed)}/#{total} stops, online=#{inspect(online?)}" <>
+        if error, do: ", stopped at #{error.solar_system_id}: #{inspect(error.reason)}", else: ""
+
+    if error || online? == false,
+      do: Logger.warning(message),
+      else: Logger.info(message)
+  end
+
+  # `WandererApp.Esi.set_autopilot_waypoint/4` answers ESI's own result
+  # (204 included, since `do_post_esi/3` counts it as success). The
+  # rescue stays because a token that vanished between the preflight and
+  # here raises rather than returning.
+  defp set_waypoint(access_token, destination_id, first?) do
+    case esi().set_autopilot_waypoint(false, first?, destination_id,
+           access_token: access_token
+         ) do
+      {:ok, _body} -> :ok
+      {:error, reason} -> {:error, reason}
+      {:error, reason, _headers} -> {:error, reason}
+      other -> {:error, other}
+    end
   rescue
     error -> {:error, error}
   end
