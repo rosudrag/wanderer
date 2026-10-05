@@ -253,6 +253,13 @@ instead (`test/integration/scout_plan_api_test.exs` flips `:scout_planner_enable
   resolved through a junction cannot find `..\common\deploy-functions.ps1`. The old manual
   `ssh ex44 "sudo …"` fetch/build/install/compose sequence this file used to prescribe is OBSOLETE —
   do not reintroduce it.
+- **Run `deploy.ps1` with `pwsh` (7.x), never `powershell` (5.1), from an agent shell.** The script
+  sets `$ErrorActionPreference = "Stop"`, and under 5.1 a native command's stderr becomes an error
+  record whenever the host's streams are redirected — which they always are for a tool-invoked
+  shell. `docker compose pull` writes its progress to stderr, so the deploy aborted at `[4/5]` with
+  exit 1 while the same command over plain `ssh` returned 0 (observed 2026-10-05, `-Build` died the
+  same way at `[1/3]` on `git fetch`). PowerShell 7 does not promote native stderr, so
+  `pwsh -NoProfile -ExecutionPolicy Bypass -File <wrapper>.ps1` runs it to completion.
 - **A new `WANDERER_*` in `.env` does not reach the container on its own.** `infra/docker-compose.yml`
   names every app env var explicitly — deliberately, so the deploy repo's `SSH_KEY_PATH`/`SERVER_HOST`
   can never leak in via `env_file`. Miss the `environment:` entry and the deploy reports success while
