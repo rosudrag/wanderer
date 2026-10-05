@@ -242,6 +242,17 @@ defmodule WandererAppWeb.ScoutComponents do
   attr :key, :atom, required: true
   attr :label, :string, required: true
   attr :selected, :boolean, required: true
+  # CHEWY PATCH (scout planner security focus): a page may render more
+  # than one of these rows -- the planner renders one per MODE, rank and
+  # sweep, over two separate assigns -- so the event name and the DOM id
+  # are per-instance. They default to the intel page's originals, which
+  # is every other call site. Hardcoding them cost a shipped bug: the
+  # sweep row fired `toggle_space`, which mutated the RANK filter, so
+  # "sweep Metropolis lowsec only" was unreachable from the UI and
+  # `toggle_sweep_space` was dead code.
+  attr :event, :string, default: "toggle_space"
+  attr :id, :string, default: nil
+  attr :title, :string, default: nil
 
   @doc """
   One space-type chip. Selected chips carry EVE's own colour for that
@@ -252,15 +263,11 @@ defmodule WandererAppWeb.ScoutComponents do
   def space_chip(assigns) do
     ~H"""
     <button
-      phx-click="toggle_space"
+      phx-click={@event}
       phx-value-type={@key}
-      id={"scout-space-#{@key}"}
+      id={@id || "scout-space-#{@key}"}
       aria-pressed={to_string(@selected)}
-      title={
-        if @key == :other,
-          do: "Abyssal, Zarzakh, and systems missing from the static map",
-          else: "Show or hide #{@label} space everywhere on this page"
-      }
+      title={@title || default_chip_title(@key, @label)}
       class={[
         "btn btn-sm join-item border",
         if(@selected,
@@ -273,6 +280,11 @@ defmodule WandererAppWeb.ScoutComponents do
     </button>
     """
   end
+
+  defp default_chip_title(:other, _label),
+    do: "Abyssal, Zarzakh, and systems missing from the static map"
+
+  defp default_chip_title(_key, label), do: "Show or hide #{label} space everywhere on this page"
 
   defp space_tone(:hs), do: "bg-sky-500/15 border-sky-500/40 text-sky-300"
   defp space_tone(:ls), do: "bg-amber-500/15 border-amber-500/40 text-amber-300"

@@ -203,6 +203,8 @@
               :for={{key, label} <- @security_types}
               key={key}
               label={label}
+              id={"scout-planner-space-#{key}"}
+              title={"Rank #{label} systems — unticked space is not ranked at all"}
               selected={key in @security}
             />
           </div>
@@ -479,6 +481,9 @@
               :for={{key, label} <- @security_types}
               key={key}
               label={label}
+              event="toggle_sweep_space"
+              id={"scout-sweep-space-#{key}"}
+              title={"Visit #{label} systems on this sweep — unticked space is never a stop, but the route may still pass through it"}
               selected={key in @sweep_security}
             />
           </div>
@@ -491,6 +496,15 @@
         >
           All space ✕
         </button>
+        <%!-- CHEWY PATCH: the band filter picks STOPS, not the graph the
+              route runs over -- "sweep Metropolis lowsec" still drives
+              through its highsec, which is the whole point of routing
+              over the full k-space graph. Said here because the stop
+              table alone cannot show it: the transit systems are not
+              rows. --%>
+        <span class="text-[11px] text-gray-500" id="scout-sweep-security-note">
+          visiting {security_summary(@sweep_security)}; the route still transits whatever it must
+        </span>
       </div>
     </div>
 
@@ -694,7 +708,9 @@
     <.panel
       id="scout-region-heat-panel"
       title="Region heat"
-      hint={"coverage of " <> to_string(@sweep_kind) <> " by region, worst first -- click a row to sweep it"}
+      hint={
+        "#{@sweep_kind} coverage of #{security_summary(@sweep_security)} by region, worst first -- click a row to sweep it"
+      }
       class={@heat_loading? && "opacity-50"}
     >
       <.grid id="scout-region-heat-table">
@@ -738,7 +754,8 @@
             Measuring every region…
           </.empty>
           <.empty :if={(@region_heat || []) == [] and not @heat_loading?} cols={6}>
-            No coverage has ever been recorded, so no region has heat yet.
+            No region holds {security_summary(@sweep_security)}, or no coverage has ever been
+            recorded there.
           </.empty>
         </tbody>
       </.grid>

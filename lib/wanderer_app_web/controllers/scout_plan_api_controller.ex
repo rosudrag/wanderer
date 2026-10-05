@@ -73,16 +73,25 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
   defp rank_plan(conn, params) do
     with {:ok, origin} <- fetch_origin(params),
          {:ok, kind} <- fetch_kind(params),
-         {:ok, format} <- fetch_format(params) do
-      opts = [
-        origin: origin,
-        kind: kind,
-        limit: fetch_limit(params),
-        max_jumps: fetch_max_jumps(params),
-        regions: fetch_regions(params),
-        map_id: conn.assigns[:map_id],
-        chain: truthy?(Map.get(params, "chain"))
-      ]
+         {:ok, format} <- fetch_format(params),
+         {:ok, security} <- fetch_security(params) do
+      # CHEWY PATCH (security focus): `security=ls` was read for
+      # `mode=sweep` only, so the same parameter on the same endpoint
+      # was silently ignored in rank mode -- `Planner.rank/1` has always
+      # taken the option, and the page has always exposed it. The wire
+      # format is unchanged (`#plan 1`, 7 columns): this narrows which
+      # systems are candidates, not what a row looks like.
+      opts =
+        [
+          origin: origin,
+          kind: kind,
+          limit: fetch_limit(params),
+          max_jumps: fetch_max_jumps(params),
+          regions: fetch_regions(params),
+          map_id: conn.assigns[:map_id],
+          chain: truthy?(Map.get(params, "chain"))
+        ]
+        |> maybe_put_opt(:security, security)
 
       case Planner.plan(opts) do
         {:ok, result} -> render_result(conn, result, format)
@@ -102,10 +111,11 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
     with {:ok, scope} <- fetch_sweep_scope(params),
          {:ok, kind} <- fetch_kind(params),
          {:ok, format} <- fetch_format(params),
-         {:ok, start} <- fetch_sweep_start(params) do
+         {:ok, start} <- fetch_sweep_start(params),
+         {:ok, security} <- fetch_security(params) do
       opts =
         [scope: scope, kind: kind, start: start, compress: fetch_compress(params)]
-        |> maybe_put_opt(:security, fetch_security(params))
+        |> maybe_put_opt(:security, security)
 
       case Sweep.sweep(opts) do
         {:ok, result} -> render_sweep_result(conn, result, format)
@@ -298,18 +308,29 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
     end
   end
 
-  # Absent => `nil`, so `maybe_put_opt/3` leaves `Sweep.sweep/1` to use
-  # its own default (Planner's `[:hs, :ls, :ns]`) rather than this
-  # controller re-stating it and the two drifting.
+  # Absent => `{:ok, nil}`, so `maybe_put_opt/3` leaves the planner to
+  # use its own default (`[:hs, :ls, :ns]`) rather than this controller
+  # re-stating it and the two drifting.
+  #
+  # An unrecognised band is a 422, never a quiet narrowing: dropping
+  # junk tokens meant `security=bogus` resolved to NO bands and answered
+  # an empty plan with a 200, and `security=ls,lowsec` would have meant
+  # `ls` without saying so. Same contract as `kind` above.
   defp fetch_security(%{"security" => value}) when is_binary(value) and value != "" do
-    value
-    |> String.split(",", trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.map(&security_key/1)
-    |> Enum.reject(&is_nil/1)
+    keys =
+      value
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.map(&security_key/1)
+
+    if keys == [] or Enum.any?(keys, &is_nil/1) do
+      {:error, "security must be a comma-separated subset of: hs, ls, ns, wh, pochven"}
+    else
+      {:ok, keys}
+    end
   end
 
-  defp fetch_security(_params), do: nil
+  defp fetch_security(_params), do: {:ok, nil}
 
   defp security_key(key) when key in ~w(hs ls ns wh pochven), do: String.to_existing_atom(key)
   defp security_key(_key), do: nil

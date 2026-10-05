@@ -259,7 +259,7 @@ defmodule WandererApp.ScoutSweepTest do
     end
   end
 
-  describe "region_heat/1 -- grouped coverage per region" do
+  describe "region_heat/2 -- grouped coverage per region" do
     test "excludes wormhole-class systems and buckets covered/stale/unseen" do
       region_id = 991_601
 
@@ -291,11 +291,52 @@ defmodule WandererApp.ScoutSweepTest do
       assert row.median_age_s >= 3000
       assert row.median_age_s <= 37_000
     end
+
+    # CHEWY PATCH (security focus): the heat table is how a region is
+    # picked for a sweep, so it has to count the bands that sweep will
+    # actually visit. "Metropolis" whole is 158 systems; "Metropolis
+    # lowsec" is 50, and ranking regions by the first number sends a
+    # lowsec-only scout at the region with the most unscouted HIGHSEC.
+    test "counts only the requested security bands" do
+      region_id = 991_602
+
+      hs = 991_600_801
+      ls1 = 991_600_802
+      ls2 = 991_600_803
+      pochven = 991_600_804
+
+      put_system_in_region(hs, "BH", region_id, "Band Heat", 7, "0.9")
+      put_system_in_region(ls1, "BL1", region_id, "Band Heat", 8, "0.3")
+      put_system_in_region(ls2, "BL2", region_id, "Band Heat", 8, "0.2")
+      put_system_in_region(pochven, "BP", region_id, "Band Heat", 25, "-1.0")
+
+      put_coverage(ls1, :sigs, DateTime.utc_now())
+
+      assert %{systems: 2, covered: 1, unseen: 1} =
+               heat_row(Sweep.region_heat(:sigs, [:ls]), region_id)
+
+      assert %{systems: 3} = heat_row(Sweep.region_heat(:sigs, [:hs, :ls]), region_id)
+      assert %{systems: 1} = heat_row(Sweep.region_heat(:sigs, [:pochven]), region_id)
+
+      # Default = the planner's own default bands, so the page's first
+      # paint and `rank/1` agree about what k-space means.
+      assert %{systems: 3} = heat_row(Sweep.region_heat(:sigs), region_id)
+
+      # A region row is a k-space row: wormhole space has no class here,
+      # so a wh-only selection has nothing to count anywhere.
+      assert Sweep.region_heat(:sigs, [:wh]) == []
+    end
   end
 
   # -----------------------------------------------------------------
   # Fixture helpers
   # -----------------------------------------------------------------
+
+  defp heat_row(rows, region_id) do
+    row = Enum.find(rows, &(&1.region_id == region_id))
+    refute is_nil(row)
+    row
+  end
 
   defp put_system(solar_system_id, name, region_name, system_class, security) do
     put_system_in_region(solar_system_id, name, 1, region_name, system_class, security)

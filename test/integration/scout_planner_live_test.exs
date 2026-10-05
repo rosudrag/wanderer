@@ -200,6 +200,93 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     end
   end
 
+  # CHEWY PATCH (scout planner security focus): "I would like to scout
+  # Metropolis, specifically the lowsec systems". `Sweep.sweep/1` has
+  # taken a `security:` band list since it shipped, and the sweep
+  # toolbar rendered chips for it -- but `space_chip/1` hardcoded
+  # `phx-click="toggle_space"`, the RANK mode's event, so every click in
+  # sweep mode mutated the rank filter, the chip never even changed
+  # colour, and `handle_event("toggle_sweep_space", ...)` was
+  # unreachable code. The whole feature was one attribute away from
+  # working and looked like it did nothing.
+  describe "sweep security bands" do
+    setup do
+      WandererApp.Cache.delete("scout:planner:adjacency")
+
+      # Alternating chain: odd = highsec, even = lowsec, so a band
+      # filter has to drop interleaved systems rather than a suffix.
+      for {id, name, class, sec} <- [
+            {990_600_001, "Bandhs1", 7, "0.9"},
+            {990_600_002, "Bandls2", 8, "0.3"},
+            {990_600_003, "Bandhs3", 7, "0.8"},
+            {990_600_004, "Bandls4", 8, "0.2"}
+          ] do
+        put_system(id, name, 2, "Band Region", class, sec)
+      end
+
+      for {a, b} <- [
+            {990_600_001, 990_600_002},
+            {990_600_002, 990_600_003},
+            {990_600_003, 990_600_004}
+          ] do
+        put_jump(a, b)
+      end
+
+      reset_region_cache()
+
+      :ok
+    end
+
+    test "unticking High in sweep mode drops highsec stops and keeps the rest", %{conn: conn} do
+      {:ok, live, _html} = live(conn, ~p"/scout/planner")
+
+      render_click(live, "switch_mode", %{"mode" => "sweep"})
+      render_click(live, "add_region", %{"scope" => "sweep", "id" => "2"})
+      html = sweep_html(live)
+
+      assert html =~ "Bandhs1"
+      assert html =~ "Bandls2"
+
+      live |> element("#scout-sweep-space-hs") |> render_click()
+      filtered = sweep_html(live)
+
+      refute filtered =~ "Bandhs1"
+      refute filtered =~ "Bandhs3"
+      assert filtered =~ "Bandls2"
+      assert filtered =~ "Bandls4"
+
+      # The route still runs over the full graph: the two dropped
+      # highsec systems sit BETWEEN the two kept lowsec ones, so the
+      # jump count has to account for driving through them.
+      assert filtered =~ "Total jumps"
+
+      # And the toolbar says which space the numbers are about, beside
+      # the chips rather than below a 189-row table.
+      assert filtered =~ "scout-sweep-security-note"
+
+      # The precise signature of the bug: the sweep chip must not have
+      # written the RANK mode's filter, which is what one shared
+      # `phx-click="toggle_space"` did.
+      rank_html = render_click(live, "switch_mode", %{"mode" => "rank"})
+      assert rank_html =~ ~r/id="scout-planner-space-hs"[^>]*aria-pressed="true"/
+    end
+
+    test "the region heat table counts only the ticked bands", %{conn: conn} do
+      {:ok, live, _html} = live(conn, ~p"/scout/planner")
+
+      render_click(live, "switch_mode", %{"mode" => "sweep"})
+      html = sweep_html(live)
+
+      assert html =~ "Band Region"
+      assert heat_systems(html, 2) == 4
+
+      live |> element("#scout-sweep-space-hs") |> render_click()
+      filtered = sweep_html(live)
+
+      assert heat_systems(filtered, 2) == 2
+    end
+  end
+
   # CHEWY PATCH: what `Set route` is allowed to claim. The push reported
   # success unconditionally -- `WandererApp.Character.set_autopilot_waypoint/3`
   # discards ESI's answer -- so "Route set on X: N waypoints" appeared
@@ -281,21 +368,36 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
   # it reads -- a cache populated by an earlier test would hide them.
   defp reset_region_cache, do: WandererApp.Cache.delete("scout:planner:regions")
 
-  defp put_system(solar_system_id, name) do
+  defp put_system(solar_system_id, name),
+    do: put_system(solar_system_id, name, 1, "Refresh Region", 7, "0.9")
+
+  defp put_system(solar_system_id, name, region_id, region_name, system_class, security) do
     {:ok, _system} =
       WandererApp.Api.MapSolarSystem
       |> Ash.Changeset.for_create(:create, %{
         solar_system_id: solar_system_id,
         solar_system_name: name,
         solar_system_name_lc: String.downcase(name),
-        region_id: 1,
-        region_name: "Refresh Region",
+        region_id: region_id,
+        region_name: region_name,
         constellation_id: 1,
         constellation_name: "Refresh Constellation",
-        system_class: 7,
-        security: "0.9"
+        system_class: system_class,
+        security: security
       })
       |> Ash.create(authorize?: false)
+  end
+
+  # The `Systems` cell of one region-heat row -- the first
+  # `tabular-nums` cell after that row's id.
+  defp heat_systems(html, region_id) do
+    [_match, count] =
+      Regex.run(
+        ~r/id="scout-heat-#{region_id}".*?<td class="text-right tabular-nums">\s*(\d+)/s,
+        html
+      )
+
+    String.to_integer(count)
   end
 
   defp put_jump(from_id, to_id) do

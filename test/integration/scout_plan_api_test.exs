@@ -35,6 +35,11 @@ defmodule WandererAppWeb.ScoutPlanAPITest do
   # empty and the push has nothing to send.
   @isolated 990_200_009
 
+  # The one lowsec system in the fixture, three gates out through
+  # highsec -- a band filter has to keep it and drop the two highsec
+  # systems that lead to it.
+  @lowsec 990_200_004
+
   setup do
     WandererApp.Cache.delete("scout:planner:adjacency")
     Application.put_env(:wanderer_app, :scout_planner_enabled, true)
@@ -43,9 +48,11 @@ defmodule WandererAppWeb.ScoutPlanAPITest do
     put_system(@origin, "Planalpha", "1.0")
     put_system(@one_jump, "Planbravo", "0.9")
     put_system(@two_jumps, "Plancharlie", "0.8")
+    put_system(@lowsec, "Plandelta", "0.3", 8)
 
     put_jump(@origin, @one_jump)
     put_jump(@one_jump, @two_jumps)
+    put_jump(@two_jumps, @lowsec)
 
     user = insert(:user)
     character = insert(:character, %{user_id: user.id})
@@ -124,6 +131,34 @@ defmodule WandererAppWeb.ScoutPlanAPITest do
     end
   end
 
+  # CHEWY PATCH (security focus): "scout Metropolis, specifically the
+  # lowsec". `security=` was read for `mode=sweep` only, so the same
+  # parameter on the same endpoint was silently ignored in rank mode
+  # even though `Planner.rank/1` has always taken the option. Silently,
+  # which is the part worth a test: the caller got a full-band plan and
+  # nothing said so.
+  describe "security= (one band, either mode)" do
+    test "rank mode narrows the candidates to the requested bands", %{conn: conn, map: map} do
+      lines =
+        conn
+        |> get(~p"/api/maps/#{map.id}/scout/plan?origin=#{@origin}&format=text&security=ls")
+        |> response(200)
+        |> String.split("\n", trim: true)
+        |> tl()
+
+      assert Enum.any?(lines, &String.contains?(&1, "Plandelta"))
+      refute Enum.any?(lines, &String.contains?(&1, "Planbravo"))
+      refute Enum.any?(lines, &String.contains?(&1, "Plancharlie"))
+    end
+
+    test "an unrecognised band is refused, never a quiet narrowing", %{conn: conn, map: map} do
+      conn =
+        get(conn, ~p"/api/maps/#{map.id}/scout/plan?origin=#{@origin}&format=text&security=bogus")
+
+      assert response(conn, 422)
+    end
+  end
+
   # The ESI call itself is not exercised here: `WandererApp.Esi` delegates
   # straight to `ApiClient` with no behaviour seam, so a passing push would
   # mean a real HTTP request to CCP from a test run. What IS asserted is
@@ -191,7 +226,7 @@ defmodule WandererAppWeb.ScoutPlanAPITest do
     end
   end
 
-  defp put_system(solar_system_id, name, security) do
+  defp put_system(solar_system_id, name, security, system_class \\ 7) do
     {:ok, _system} =
       MapSolarSystem
       |> Ash.Changeset.for_create(:create, %{
@@ -202,7 +237,7 @@ defmodule WandererAppWeb.ScoutPlanAPITest do
         region_name: "Plan Region",
         constellation_id: 1,
         constellation_name: "Plan Constellation",
-        system_class: 7,
+        system_class: system_class,
         security: security
       })
       |> Ash.create(authorize?: false)

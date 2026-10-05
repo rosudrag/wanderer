@@ -36,7 +36,6 @@ defmodule WandererApp.Scout.Sweep do
   alias WandererApp.Api.{MapSolarSystem, ScoutSystemCoverage}
   alias WandererApp.Repo
   alias WandererApp.Scout.Planner
-  alias WandererApp.SystemClass
 
   @type scope :: {:regions, [integer()]} | {:systems, [integer()]}
 
@@ -119,7 +118,8 @@ defmodule WandererApp.Scout.Sweep do
   # Never summed into a reported `jumps` total -- see `path_cost/2`.
   @unreachable 1_000_000
 
-  @wh_classes SystemClass.wormhole_classes()
+  # `@heat_classes` (region_heat/2) carries the class ids this module
+  # still needs; wormhole classes are not among them.
   @map_solar_system_table "map_solar_system_v2"
   @coverage_table "scout_system_coverage_v1"
 
@@ -252,10 +252,20 @@ defmodule WandererApp.Scout.Sweep do
        %{
          scope: scope,
          kind: kind,
-         security: opts |> Map.get(:security, Planner.default_security()) |> Planner.normalize_security(),
-         avoid: opts |> Map.get(:avoid, []) |> List.wrap() |> Enum.filter(&is_integer/1) |> MapSet.new(),
+         security:
+           opts |> Map.get(:security, Planner.default_security()) |> Planner.normalize_security(),
+         avoid:
+           opts
+           |> Map.get(:avoid, [])
+           |> List.wrap()
+           |> Enum.filter(&is_integer/1)
+           |> MapSet.new(),
          exclude:
-           opts |> Map.get(:exclude, []) |> List.wrap() |> Enum.filter(&is_integer/1) |> MapSet.new(),
+           opts
+           |> Map.get(:exclude, [])
+           |> List.wrap()
+           |> Enum.filter(&is_integer/1)
+           |> MapSet.new(),
          include_fresh: Map.get(opts, :include_fresh, false) == true,
          start: fetch_start(opts),
          compress: Map.get(opts, :compress, true) != false
@@ -316,7 +326,9 @@ defmodule WandererApp.Scout.Sweep do
         metadata =
           in_scope
           |> Enum.map(&build_candidate(&1, coverage_by_id, resolved, now))
-          |> Enum.reject(fn {_id, meta} -> not resolved.include_fresh and meta.reason == :fresh end)
+          |> Enum.reject(fn {_id, meta} ->
+            not resolved.include_fresh and meta.reason == :fresh
+          end)
           |> Map.new()
 
         if map_size(metadata) > @max_scope_systems do
@@ -605,7 +617,8 @@ defmodule WandererApp.Scout.Sweep do
     head ++ Enum.reverse(middle) ++ tail
   end
 
-  defp edge_cost(dist_matrix, a, b), do: dist_matrix |> Map.get(a, %{}) |> Map.get(b, @unreachable)
+  defp edge_cost(dist_matrix, a, b),
+    do: dist_matrix |> Map.get(a, %{}) |> Map.get(b, @unreachable)
 
   # Reported route cost: real known legs only. A genuinely unreachable
   # pair (sentinel-scored during ranking so it is never preferred) does
@@ -615,7 +628,9 @@ defmodule WandererApp.Scout.Sweep do
   defp path_cost(order, dist_matrix) do
     order
     |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.reduce(0, fn [a, b], acc -> acc + (dist_matrix |> Map.get(a, %{}) |> Map.get(b, 0)) end)
+    |> Enum.reduce(0, fn [a, b], acc ->
+      acc + (dist_matrix |> Map.get(a, %{}) |> Map.get(b, 0))
+    end)
   end
 
   # ---------------------------------------------------------------------
@@ -774,25 +789,58 @@ defmodule WandererApp.Scout.Sweep do
   end
 
   # ---------------------------------------------------------------------
-  # region_heat/1 -- Ash has no general GROUP BY (see `WandererApp.Scout.
+  # region_heat/2 -- Ash has no general GROUP BY (see `WandererApp.Scout.
   # Stats`'s moduledoc); one schemaless Ecto query, same idiom, joining
   # `map_solar_system_v2` to `scout_system_coverage_v1` for `kind`.
   #
-  # "systems" is a k-space count -- wormhole-class systems are excluded
-  # (design doc section 1's "5069 k-space systems" is this same filter),
-  # which is also why a single TTL (`Planner.ttl_seconds(kind, nil)`,
-  # i.e. never wormhole-halved) is correct for every row in one pass.
+  # CHEWY PATCH (security focus): the counts are restricted to the SAME
+  # security bands `sweep/1` is about to use, so "sweep Metropolis
+  # lowsec" reads a lowsec heat row (50 systems) rather than the whole
+  # region's 158 and a ranking that is mostly highsec the operator
+  # already said they do not care about.
+  #
+  # This is the one place in this module that buckets space from
+  # `system_class` instead of `Planner.classify_space/2`: it aggregates
+  # every k-space system in the game and must not drag 5k rows through
+  # the BEAM to classify them. The two rules agree -- checked against
+  # the live static map, zero rows where `system_class in (7,8,9)`
+  # disagrees with the truesec rule -- and `WandererApp.Scout.Space`
+  # already buckets the rest of `/scout` by class id for the same
+  # reason.
+  #
+  # Wormhole space has no class id here on purpose: a region row is a
+  # k-space row (which is also what lets one un-halved
+  # `Planner.ttl_seconds(kind, nil)` be correct for the whole pass), so
+  # a wh-only band selection yields no classes and no rows at all.
   # ---------------------------------------------------------------------
 
-  @spec region_heat(Planner.kind()) :: [region_heat_row()]
-  def region_heat(kind) when kind in @kinds do
+  @heat_classes %{hs: [7], ls: [8], ns: [9], pochven: [25], wh: []}
+
+  @spec region_heat(Planner.kind(), [Planner.security_key()] | nil) :: [region_heat_row()]
+  def region_heat(kind, security \\ nil)
+
+  def region_heat(kind, security) when kind in @kinds do
+    case heat_class_ids(security) do
+      [] -> []
+      class_ids -> run_region_heat(kind, class_ids)
+    end
+  end
+
+  defp heat_class_ids(security) do
+    (security || Planner.default_security())
+    |> Planner.normalize_security()
+    |> Enum.flat_map(&Map.fetch!(@heat_classes, &1))
+    |> Enum.uniq()
+  end
+
+  defp run_region_heat(kind, class_ids) do
     ttl = Planner.ttl_seconds(kind, nil)
     now = NaiveDateTime.utc_now()
     cutoff = NaiveDateTime.add(now, -trunc(ttl), :second)
     kind_str = Atom.to_string(kind)
 
     from(ms in @map_solar_system_table,
-      where: (ms.system_class not in ^@wh_classes or is_nil(ms.system_class)) and not is_nil(ms.region_id),
+      where: ms.system_class in ^class_ids and not is_nil(ms.region_id),
       left_join: cov in ^@coverage_table,
       on: cov.solar_system_id == ms.solar_system_id and cov.kind == ^kind_str,
       group_by: [ms.region_id, ms.region_name],

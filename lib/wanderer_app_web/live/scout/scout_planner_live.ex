@@ -166,6 +166,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            split_token: 0,
            region_heat: nil,
            region_heat_kind: nil,
+           region_heat_security: nil,
            heat_loading?: false,
            heat_token: 0
          )
@@ -429,6 +430,9 @@ defmodule WandererAppWeb.ScoutPlannerLive do
 
   def handle_event("select_sweep_kind", _params, socket), do: {:noreply, socket}
 
+  # The region heat table counts the SAME bands the sweep will visit
+  # (`Sweep.region_heat/2`), so a band change invalidates it exactly
+  # like a kind change does -- `maybe_load_region_heat/1` compares both.
   def handle_event("toggle_sweep_space", %{"type" => type}, socket) do
     case parse_security_key(type) do
       nil ->
@@ -438,13 +442,21 @@ defmodule WandererAppWeb.ScoutPlannerLive do
         security = toggle_security(socket.assigns.sweep_security, key)
 
         {:noreply,
-         socket |> assign(sweep_security: security) |> load_sweep() |> persist_filters()}
+         socket
+         |> assign(sweep_security: security)
+         |> load_sweep()
+         |> maybe_load_region_heat()
+         |> persist_filters()}
     end
   end
 
   def handle_event("reset_sweep_space", _params, socket) do
     {:noreply,
-     socket |> assign(sweep_security: @security_keys) |> load_sweep() |> persist_filters()}
+     socket
+     |> assign(sweep_security: @security_keys)
+     |> load_sweep()
+     |> maybe_load_region_heat()
+     |> persist_filters()}
   end
 
   def handle_event("toggle_sweep_compress", _params, socket) do
@@ -1171,22 +1183,36 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     end)
   end
 
-  # Loaded once per kind, not on every keystroke: a region's heat
-  # changes on a human timescale (coverage rows arriving), so recompute
-  # only on entering sweep mode or changing `kind`, not on every scope
-  # edit -- `force: true` is select_sweep_kind/3's escape hatch.
+  # Loaded once per (kind, security band set), not on every keystroke: a
+  # region's heat changes on a human timescale (coverage rows arriving),
+  # so recompute only on entering sweep mode, changing `kind`, or
+  # changing which space is counted -- not on every scope edit.
+  # `force: true` is select_sweep_kind/3's escape hatch.
   defp maybe_load_region_heat(socket, opts \\ []) do
     force = Keyword.get(opts, :force, false)
 
-    %{mode: mode, sweep_kind: kind, region_heat: heat, region_heat_kind: heat_kind} =
-      socket.assigns
+    %{
+      mode: mode,
+      sweep_kind: kind,
+      sweep_security: security,
+      region_heat: heat,
+      region_heat_kind: heat_kind,
+      region_heat_security: heat_security
+    } = socket.assigns
 
-    if connected?(socket) and mode == :sweep and (force or is_nil(heat) or heat_kind != kind) do
+    stale? = is_nil(heat) or heat_kind != kind or heat_security != Enum.sort(security)
+
+    if connected?(socket) and mode == :sweep and (force or stale?) do
       token = socket.assigns.heat_token + 1
 
       socket
-      |> assign(heat_token: token, heat_loading?: true, region_heat_kind: kind)
-      |> start_async({:heat, token}, fn -> Sweep.region_heat(kind) end)
+      |> assign(
+        heat_token: token,
+        heat_loading?: true,
+        region_heat_kind: kind,
+        region_heat_security: Enum.sort(security)
+      )
+      |> start_async({:heat, token}, fn -> Sweep.region_heat(kind, security) end)
     else
       socket
     end
@@ -1216,6 +1242,18 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   # negligible beside it, same as the design doc's own estimate.
   defp sweep_hours(systems) do
     :erlang.float_to_binary(systems * 5 / 60, decimals: 1) <> "h"
+  end
+
+  # The band set in words, for the two places that must say which space
+  # a number counts: the sweep toolbar's inline note and the region heat
+  # panel's hint. Reads the chip labels rather than a second spelling of
+  # them, in chip order, so "Low" here is the chip the operator clicked.
+  defp security_summary(security) do
+    case Enum.filter(Space.types(), fn {key, _label} -> key in security end) do
+      [] -> "no space at all"
+      [{_key, label}] -> "#{label} only"
+      labels -> labels |> Enum.map(&elem(&1, 1)) |> Enum.join(", ")
+    end
   end
 
   defp start_name(start_id, stops) do
