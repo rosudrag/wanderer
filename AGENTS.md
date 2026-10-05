@@ -33,7 +33,7 @@ This file is OURS — upstream has no `AGENTS.md`, so it never conflicts on a me
 
 | Feature | Env var | Entry point |
 |---|---|---|
-| Tracking survives the browser being closed | `WANDERER_PERSIST_TRACKING` | `lib/wanderer_app/map/persistent_tracking.ex` (+ 4 one-line hooks in `map_server_impl.ex`, `map_pool.ex`, `map_manager.ex`) |
+| Tracking survives the browser being closed | `WANDERER_PERSIST_TRACKING` | `lib/wanderer_app/map/persistent_tracking.ex` (+ 5 one-line hooks in `map_server_impl.ex`, `map_pool.ex`, `map_manager.ex`, `live/map/map_characters_live.ex`). The DB flag `map_character_settings_v1.tracked` becomes the authority, so BOTH untrack paths must write it: the tracking dialog already does (`TrackingUtils` → `MapCharacterSettingsRepo.untrack/1`), the map's Characters page did not — it only dropped the `tracking_start_time` cache key, so `resume/1` re-tracked the character at the next map server start and the button silently reverted. `persist_untrack/1` closes that; any new untrack surface inherits the same obligation |
 | Map beautifier (auto-layout: Dotlan-geometry k-space, tidy-tree wormhole chains) | `WANDERER_MAP_BEAUTIFIER` | `assets/js/hooks/Mapper/components/map/layout/` + `components/map/hooks/useBeautify.ts`, `lib/wanderer_app/map/bulk_reposition.ex` (+ `update_system_positions_bulk` event) |
 | Direction-aware placement for newly added systems | `WANDERER_TIDY_INSERT` | `lib/wanderer_app/map/map_position_calculator.ex` |
 | Agent dev access: log in and seed a map with no EVE account | `WANDERER_DEV_AUTH_TOKEN` (unset = endpoint is a plain 404; **never set in production**) | `lib/wanderer_app_web/controllers/dev_auth_controller.ex`, `lib/wanderer_app/dev/seed.ex`, `dev/` (compose stack, README, smoke script) |

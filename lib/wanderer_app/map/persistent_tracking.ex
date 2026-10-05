@@ -81,6 +81,45 @@ defmodule WandererApp.Map.PersistentTracking do
   def keep_map_running?(map_id), do: enabled?() and tracked_character_ids(map_id) != []
 
   @doc """
+  Clears the DB tracking flag for an untrack that only cleared runtime state.
+
+  There are two untrack paths upstream and only one of them writes the DB: the
+  tracking dialog goes through `TrackingUtils` (which calls
+  `MapCharacterSettingsRepo.untrack/1`), while the map's Characters page calls
+  `Map.Server.untrack_characters/2`, which drops the
+  `character:<id>:map:<id>:tracking_start_time` cache key and nothing else.
+
+  Upstream that is harmless — the key stays gone until someone re-tracks. Here
+  the DB row is the authority, so `resume/1` re-tracks the character on the
+  next map server start and the button silently reverts. Measured on `yugen`:
+  two characters resumed with no presence at boot, one of which then added 983
+  systems.
+
+  No-op unless the flag is on, so upstream behaviour is unchanged.
+  """
+  def persist_untrack(%{tracked: true} = settings) do
+    if enabled?() do
+      case WandererApp.MapCharacterSettingsRepo.untrack(settings) do
+        {:ok, _} ->
+          Logger.info(fn ->
+            "[PersistentTracking] Map #{settings.map_id} - cleared DB tracking flag for " <>
+              "character #{settings.character_id} after a UI untrack"
+          end)
+
+        error ->
+          Logger.error(
+            "[PersistentTracking] Failed to clear DB tracking flag for " <>
+              "character #{settings.character_id}: #{inspect(error)}"
+          )
+      end
+    end
+
+    :ok
+  end
+
+  def persist_untrack(_settings), do: :ok
+
+  @doc """
   Starts tracking for every DB-tracked character on a map that just started.
 
   Upstream only ever starts tracking from a presence join, so without this a

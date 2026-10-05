@@ -84,6 +84,10 @@ defmodule WandererAppWeb.MapCharactersLive do
         character_setting ->
           case character_setting.tracked do
             true ->
+              # CHEWY PATCH: this path clears runtime state only, so under
+              # WANDERER_PERSIST_TRACKING the DB flag would re-track on the next
+              # map server start. No-op unless the flag is on.
+              WandererApp.Map.PersistentTracking.persist_untrack(character_setting)
               WandererApp.Map.Server.untrack_characters(map_id, [character_setting.character_id])
 
               socket |> put_flash(:info, "Character untracked!") |> load_characters()
