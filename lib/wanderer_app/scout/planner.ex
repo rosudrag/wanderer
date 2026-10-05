@@ -190,6 +190,14 @@ defmodule WandererApp.Scout.Planner do
   # Public API
   # ---------------------------------------------------------------------
 
+  @doc """
+  The default k-space security bands (`#{inspect(@default_security)}`),
+  shared with `WandererApp.Scout.Sweep` so a sweep's unscoped security
+  filter matches `rank/1`/`plan/1` rather than restating the list.
+  """
+  @spec default_security() :: [security_key()]
+  def default_security, do: @default_security
+
   @doc "Every in-scope system, newest-need first. See moduledoc."
   @spec rank(opts()) :: {:ok, result()} | {:error, atom()}
   def rank(opts) do
@@ -307,7 +315,13 @@ defmodule WandererApp.Scout.Planner do
     end
   end
 
-  defp normalize_security(values) do
+  @doc """
+  Normalizes a security-bucket list (atoms or strings) to valid
+  `security_key()`s, dropping anything unrecognised. Public, shared with
+  `Sweep`'s `security:` option.
+  """
+  @spec normalize_security([term()] | term()) :: [security_key()]
+  def normalize_security(values) do
     values
     |> List.wrap()
     |> Enum.map(&normalize_security_key/1)
@@ -335,7 +349,7 @@ defmodule WandererApp.Scout.Planner do
   # ---------------------------------------------------------------------
 
   defp build_candidate_pool(resolved) do
-    gate_graph = adjacency()
+    gate_graph = graph()
 
     combined_graph =
       if resolved.chain and resolved.map_id, do: combined_graph(gate_graph, resolved.map_id)
@@ -498,19 +512,23 @@ defmodule WandererApp.Scout.Planner do
   # tell a wormhole from Delve); everything else from the parsed float.
   # ---------------------------------------------------------------------
 
-  defp parse_security(nil), do: nil
-  defp parse_security(value) when is_float(value), do: value
+  @doc "Parses the `security` string column once; public, shared with `Sweep`."
+  @spec parse_security(String.t() | float() | nil) :: float() | nil
+  def parse_security(nil), do: nil
+  def parse_security(value) when is_float(value), do: value
 
-  defp parse_security(value) when is_binary(value) do
+  def parse_security(value) when is_binary(value) do
     case Float.parse(value) do
       {parsed, _rest} -> parsed
       :error -> nil
     end
   end
 
-  defp parse_security(_value), do: nil
+  def parse_security(_value), do: nil
 
-  defp classify_space(system_class, security) do
+  @doc "Buckets a system into a `security_key()`; public, shared with `Sweep`."
+  @spec classify_space(integer() | nil, float() | nil) :: space()
+  def classify_space(system_class, security) do
     cond do
       SystemClass.wormhole?(system_class) -> :wh
       system_class == @pochven_class -> :pochven
@@ -521,7 +539,13 @@ defmodule WandererApp.Scout.Planner do
     end
   end
 
-  defp ttl_seconds(kind, system_class) do
+  @doc """
+  TTL for `kind`, halved in wormhole space (`@wormhole_ttl_factor`). Public
+  so `Sweep`'s freshness filter and `region_heat/1` use the SAME ladder
+  `rank/1`/`plan/1` do, not a restated copy.
+  """
+  @spec ttl_seconds(kind(), integer() | nil) :: number()
+  def ttl_seconds(kind, system_class) do
     base = Map.fetch!(@default_ttls, kind)
     if SystemClass.wormhole?(system_class), do: base * @wormhole_ttl_factor, else: base * 1.0
   end
@@ -593,15 +617,24 @@ defmodule WandererApp.Scout.Planner do
   # Graph: cached k-space adjacency + per-call chain overlay.
   # ---------------------------------------------------------------------
 
-  defp adjacency do
+  @doc """
+  The cached k-space jump adjacency (`WandererApp.Api.MapSolarSystemJumps`,
+  ~13k undirected edges), built once and cached 24h under
+  `#{inspect(@adjacency_cache_key)}` -- see moduledoc. Public because
+  `WandererApp.Scout.Sweep` routes over the SAME graph (never an induced
+  per-region subgraph -- see the sweep design doc section 3) and must
+  reuse this cache rather than rebuild it.
+  """
+  @spec graph() :: %{integer() => MapSet.t(integer())}
+  def graph do
     case WandererApp.Cache.get(@adjacency_cache_key) do
       nil ->
-        graph = build_adjacency()
-        WandererApp.Cache.put(@adjacency_cache_key, graph, ttl: @adjacency_cache_ttl)
-        graph
+        built = build_adjacency()
+        WandererApp.Cache.put(@adjacency_cache_key, built, ttl: @adjacency_cache_ttl)
+        built
 
-      graph ->
-        graph
+      cached ->
+        cached
     end
   end
 

@@ -80,6 +80,64 @@ defmodule WandererAppWeb.ScoutRefreshLiveTest do
     refute intel_html =~ ~s(href="/scout/refresh")
   end
 
+  # CHEWY PATCH (scout sweep): the SAME page's second mode -- design doc
+  # `docs/design/wanderer-scout-region-sweeps.md` sections 3-5. A
+  # straight 6-system chain, one region, so `Split.split/3` has enough
+  # nodes to actually produce 3 parts.
+  describe "sweep mode" do
+    setup do
+      WandererApp.Cache.delete("scout:planner:adjacency")
+
+      for {id, name} <- [
+            {990_500_001, "Sweeplive1"},
+            {990_500_002, "Sweeplive2"},
+            {990_500_003, "Sweeplive3"},
+            {990_500_004, "Sweeplive4"},
+            {990_500_005, "Sweeplive5"},
+            {990_500_006, "Sweeplive6"}
+          ] do
+        put_system(id, name)
+      end
+
+      for {a, b} <- [
+            {990_500_001, 990_500_002},
+            {990_500_002, 990_500_003},
+            {990_500_003, 990_500_004},
+            {990_500_004, 990_500_005},
+            {990_500_005, 990_500_006}
+          ] do
+        put_jump(a, b)
+      end
+
+      :ok
+    end
+
+    test "switching to sweep mode and setting a scope renders start suggestions", %{
+      conn: conn
+    } do
+      {:ok, live, _html} = live(conn, ~p"/scout/refresh")
+
+      render_click(live, "switch_mode", %{"mode" => "sweep"})
+      html = render_change(live, "update_sweep_regions", %{"regions" => "1"})
+
+      assert html =~ "Start points"
+      assert html =~ "Sweeplive1" or html =~ "Sweeplive6"
+    end
+
+    test "k=3 renders three per-part pilot pickers and an Assign all button", %{conn: conn} do
+      {:ok, live, _html} = live(conn, ~p"/scout/refresh")
+
+      render_click(live, "switch_mode", %{"mode" => "sweep"})
+      render_change(live, "update_sweep_regions", %{"regions" => "1"})
+      html = render_change(live, "update_sweep_k", %{"k" => "3"})
+
+      assert html =~ "scout-sweep-part-0-character"
+      assert html =~ "scout-sweep-part-1-character"
+      assert html =~ "scout-sweep-part-2-character"
+      assert html =~ "Assign all"
+    end
+  end
+
   defp put_system(solar_system_id, name) do
     {:ok, _system} =
       WandererApp.Api.MapSolarSystem

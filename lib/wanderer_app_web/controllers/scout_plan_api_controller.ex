@@ -37,9 +37,11 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
 
   alias WandererApp.Scout.Planner
   alias WandererApp.Scout.PlanWaypoints
+  alias WandererApp.Scout.Sweep
 
   @kinds ~w(visit anoms sigs grid)
   @formats ~w(json text flat)
+  @modes ~w(rank sweep)
 
   @default_limit 10
   @max_limit 100
@@ -47,7 +49,28 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
   @default_max_jumps 25
   @max_max_jumps 40
 
+  # Section 9's cross-region note: a scope beyond this is the same
+  # algorithm over a bigger candidate set (~450 systems at 3 regions)
+  # but nobody has measured or asked for it, so the HTTP surface
+  # enforces the cap `WandererApp.Scout.Sweep.sweep/1` itself documents
+  # as a caller responsibility.
+  @max_sweep_regions 3
+
+  # `mode=rank` (absent = rank) keeps answering `#plan 1`, 7 columns,
+  # byte-for-byte what it always has -- `obj_ScoutPlanner.iss` already
+  # parses that shape and must keep working unmodified. `mode=sweep` is
+  # a different question (design doc "whole-region sweeps" section 3)
+  # and answers `#plan 2`: the bot refusing an unknown version is
+  # correct there, not a bug to route around.
   def plan(conn, params) do
+    case fetch_mode(params) do
+      {:ok, :sweep} -> sweep_plan(conn, params)
+      {:ok, :rank} -> rank_plan(conn, params)
+      {:error, message} -> error(conn, message)
+    end
+  end
+
+  defp rank_plan(conn, params) do
     with {:ok, origin} <- fetch_origin(params),
          {:ok, kind} <- fetch_kind(params),
          {:ok, format} <- fetch_format(params) do
@@ -63,6 +86,29 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
 
       case Planner.plan(opts) do
         {:ok, result} -> render_result(conn, result, format)
+        {:error, reason} -> error(conn, to_string(reason))
+      end
+    else
+      {:error, message} -> error(conn, message)
+    end
+  end
+
+  # `mode=sweep` -- a MEMBERSHIP over one to three regions (design doc
+  # "whole-region sweeps" section 3), not a ball: `origin`, `limit` and
+  # `max_jumps` are ball concepts from `rank_plan/2` above and are
+  # simply ignored here. `scope` (required) and `start` (optional, a
+  # forced start system) take their place.
+  defp sweep_plan(conn, params) do
+    with {:ok, scope} <- fetch_sweep_scope(params),
+         {:ok, kind} <- fetch_kind(params),
+         {:ok, format} <- fetch_format(params),
+         {:ok, start} <- fetch_sweep_start(params) do
+      opts =
+        [scope: scope, kind: kind, start: start, compress: fetch_compress(params)]
+        |> maybe_put_opt(:security, fetch_security(params))
+
+      case Sweep.sweep(opts) do
+        {:ok, result} -> render_sweep_result(conn, result, format)
         {:error, reason} -> error(conn, to_string(reason))
       end
     else
@@ -190,6 +236,82 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
   defp truthy?(value) when value in ["1", "true", "yes"], do: true
   defp truthy?(_value), do: false
 
+  defp fetch_mode(%{"mode" => mode}) when mode in @modes, do: {:ok, String.to_existing_atom(mode)}
+
+  defp fetch_mode(%{"mode" => _other}),
+    do: {:error, "unknown mode, expected one of #{Enum.join(@modes, ", ")}"}
+
+  defp fetch_mode(_params), do: {:ok, :rank}
+
+  # `scope=region:10000002` or `scope=region:10000002,10000003` -- unlike
+  # `fetch_regions/1` above (rank's optional narrowing of a ball), a
+  # sweep's scope IS the candidate set, so it is required, and more than
+  # `@max_sweep_regions` ids is a 422, not a silent cap: a sweep that
+  # quietly dropped half its ask would report a route shorter than the
+  # operator thinks they asked for.
+  defp fetch_sweep_scope(%{"scope" => "region:" <> rest}) do
+    ids =
+      rest
+      |> String.split(",", trim: true)
+      |> Enum.flat_map(fn s ->
+        case s |> String.trim() |> Integer.parse() do
+          {n, ""} -> [n]
+          _ -> []
+        end
+      end)
+
+    cond do
+      ids == [] ->
+        {:error, "scope is required, e.g. scope=region:10000002"}
+
+      length(ids) > @max_sweep_regions ->
+        {:error, "scope may name at most #{@max_sweep_regions} regions"}
+
+      true ->
+        {:ok, {:regions, ids}}
+    end
+  end
+
+  defp fetch_sweep_scope(_params),
+    do: {:error, "scope is required, e.g. scope=region:10000002"}
+
+  defp fetch_sweep_start(%{"start" => start}) when is_binary(start) and start != "" do
+    case Integer.parse(start) do
+      {value, ""} when value > 0 -> {:ok, value}
+      _ -> {:error, "start must be a positive integer"}
+    end
+  end
+
+  defp fetch_sweep_start(_params), do: {:ok, nil}
+
+  # Default true (contract: `Sweep.sweep/1`'s own default) -- only an
+  # explicit `0`/`false` turns it off.
+  defp fetch_compress(params) do
+    case Map.get(params, "compress") do
+      value when value in ["0", "false"] -> false
+      _ -> true
+    end
+  end
+
+  # Absent => `nil`, so `maybe_put_opt/3` leaves `Sweep.sweep/1` to use
+  # its own default (Planner's `[:hs, :ls, :ns]`) rather than this
+  # controller re-stating it and the two drifting.
+  defp fetch_security(%{"security" => value}) when is_binary(value) and value != "" do
+    value
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.map(&security_key/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp fetch_security(_params), do: nil
+
+  defp security_key(key) when key in ~w(hs ls ns wh pochven), do: String.to_existing_atom(key)
+  defp security_key(_key), do: nil
+
+  defp maybe_put_opt(opts, _key, nil), do: opts
+  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
   # ---------------------------------------------------------------------
   # Rendering
   # ---------------------------------------------------------------------
@@ -254,6 +376,77 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
   defp sanitize_name(_name), do: ""
 
   defp format_score(score), do: :erlang.float_to_binary(score / 1, decimals: 2)
+
+  # ---------------------------------------------------------------------
+  # Rendering -- `mode=sweep` ("#plan 2"). A different wire version, not
+  # an extension of `#plan 1`: `obj_ScoutPlanner.iss` refuses a header
+  # version it does not know, which is the correct behaviour for a
+  # sweep it cannot parse (design doc "only crossroads become
+  # waypoints" section) -- so this never reuses `header_line/1` or
+  # `row_line/1` above, even though the shapes rhyme.
+  # ---------------------------------------------------------------------
+
+  defp render_sweep_result(conn, result, "json"), do: json(conn, %{data: result})
+
+  defp render_sweep_result(conn, result, "text") do
+    conn
+    |> put_resp_content_type("text/plain")
+    |> send_resp(200, sweep_text_body(result))
+  end
+
+  defp render_sweep_result(conn, result, "flat") do
+    conn
+    |> put_resp_content_type("text/plain")
+    |> send_resp(200, sweep_flat_body(result))
+  end
+
+  defp sweep_text_body(result) do
+    [sweep_header_line(result) | Enum.map(result.stops, &sweep_row_line/1)]
+    |> Enum.join("\n")
+    |> Kernel.<>("\n")
+  end
+
+  defp sweep_flat_body(result) do
+    sweep_header_line(result) <> ";" <> Enum.map_join(result.stops, ";", &sweep_row_line/1)
+  end
+
+  defp sweep_header_line(result) do
+    "#plan 2 scope=#{scope_token(result.scope)} kind=#{result.kind} start=#{result.start} " <>
+      "systems=#{result.systems} jumps=#{result.jumps} compressed=#{bool_flag(result.compressed?)} " <>
+      "generated=#{DateTime.to_iso8601(result.generated_at)}"
+  end
+
+  defp scope_token({:regions, ids}), do: "region:" <> Enum.join(ids, ",")
+  defp scope_token({:systems, ids}), do: "systems:" <> Enum.join(ids, ",")
+  defp scope_token(other), do: inspect(other)
+
+  defp bool_flag(true), do: "1"
+  defp bool_flag(_value), do: "0"
+
+  # `sysid|name|score_or_blank|reason|age_s|jumps|leg|wp` -- one column
+  # longer than `#plan 1`'s row, and the eighth column is the whole
+  # reason this is a new version: a reader (or the bot) must be able to
+  # tell a pushed WAYPOINT from a system the route only flies through
+  # (design doc "only crossroads become waypoints" section). `score` is
+  # blank -- a sweep orders by route cost, not by `Planner`'s need/
+  # frontier/value score, so there is none to print. `leg` is always
+  # `gate`: `Sweep.sweep/1`'s graph is the full k-space adjacency with
+  # no chain overlay (contract, `WandererApp.Scout.Sweep.distances/1`),
+  # so a sweep never produces an `:advisory` wormhole leg the way a
+  # chain-aware rank plan can.
+  defp sweep_row_line(stop) do
+    [
+      stop.solar_system_id,
+      sanitize_name(stop.name),
+      "",
+      stop.reason,
+      stop.age_s,
+      stop.jumps_from_prev,
+      "gate",
+      bool_flag(stop.waypoint?)
+    ]
+    |> Enum.join("|")
+  end
 
   defp error(conn, message),
     do: conn |> put_status(:unprocessable_entity) |> json(%{error: message})

@@ -47,7 +47,7 @@ defmodule WandererAppWeb.ScoutRefreshLive do
 
   alias WandererApp.Api.{MapSolarSystem, ScoutSystemCoverage}
   alias WandererApp.Identity.ScoutAccess
-  alias WandererApp.Scout.{Planner, PlanWaypoints, Space}
+  alias WandererApp.Scout.{Planner, PlanWaypoints, Space, Sweep, Split, Assignments}
 
   @kinds ~w(visit anoms sigs grid)
   @default_kind :sigs
@@ -63,6 +63,13 @@ defmodule WandererAppWeb.ScoutRefreshLive do
 
   @security_keys [:hs, :ls, :ns, :wh, :pochven]
   @default_security [:hs, :ls, :ns]
+
+  # Section 9's cross-region note: a scope beyond this is the same
+  # algorithm over a bigger candidate set but nobody has measured or
+  # asked for it -- see `ScoutPlanAPIController`'s own copy of this
+  # cap, which enforces the same limit on the wire.
+  @max_sweep_regions 3
+  @max_split_k 6
 
   @impl true
   def mount(_params, _session, socket) do
@@ -108,7 +115,24 @@ defmodule WandererAppWeb.ScoutRefreshLive do
            stops: [],
            candidates: 0,
            generated_at: nil,
-           plan_error: nil
+           plan_error: nil,
+           # Sweep mode (design doc "whole-region sweeps") -- a second
+           # mode on this SAME page, not a second route: `mode` only
+           # picks which filter bar and result panel render below.
+           mode: :rank,
+           sweep_regions_q: "",
+           sweep_regions: [],
+           sweep_kind: @default_kind,
+           sweep_security: @default_security,
+           sweep_compress: true,
+           sweep_start: nil,
+           sweep_k: 1,
+           sweep_result: nil,
+           sweep_error: nil,
+           sweep_parts: [],
+           sweep_pilots: %{},
+           region_heat: nil,
+           region_heat_kind: nil
          )
          |> load()}
     end
@@ -296,6 +320,243 @@ defmodule WandererAppWeb.ScoutRefreshLive do
   end
 
   # -------------------------------------------------------------------
+  # Sweep mode (design doc "whole-region sweeps") -- a second mode on
+  # this same page: scope is a MEMBERSHIP (regions), not a ball, and a
+  # sweep drives its own route, start-point suggestions, region heat
+  # table and k-way split instead of `rank/1`'s single ranked list.
+  # -------------------------------------------------------------------
+
+  def handle_event("switch_mode", %{"mode" => mode}, socket) when mode in ~w(rank sweep) do
+    {:noreply,
+     socket
+     |> assign(mode: String.to_existing_atom(mode))
+     |> maybe_load_region_heat()
+     |> persist_filters()}
+  end
+
+  def handle_event("switch_mode", _params, socket), do: {:noreply, socket}
+
+  def handle_event("update_sweep_regions", %{"regions" => text}, socket) do
+    ids = text |> parse_region_ids() |> Enum.take(@max_sweep_regions)
+
+    {:noreply,
+     socket
+     |> assign(sweep_regions_q: text, sweep_regions: ids)
+     |> load_sweep()
+     |> persist_filters()}
+  end
+
+  def handle_event("select_sweep_kind", %{"kind" => kind}, socket) when kind in @kinds do
+    {:noreply,
+     socket
+     |> assign(sweep_kind: String.to_existing_atom(kind))
+     |> load_sweep()
+     |> maybe_load_region_heat(force: true)
+     |> persist_filters()}
+  end
+
+  def handle_event("select_sweep_kind", _params, socket), do: {:noreply, socket}
+
+  def handle_event("toggle_sweep_space", %{"type" => type}, socket) do
+    case parse_security_key(type) do
+      nil ->
+        {:noreply, socket}
+
+      key ->
+        security = toggle_security(socket.assigns.sweep_security, key)
+
+        {:noreply,
+         socket |> assign(sweep_security: security) |> load_sweep() |> persist_filters()}
+    end
+  end
+
+  def handle_event("reset_sweep_space", _params, socket) do
+    {:noreply,
+     socket |> assign(sweep_security: @security_keys) |> load_sweep() |> persist_filters()}
+  end
+
+  def handle_event("toggle_sweep_compress", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(sweep_compress: !socket.assigns.sweep_compress)
+     |> load_sweep()
+     |> persist_filters()}
+  end
+
+  def handle_event("select_sweep_start", %{"id" => id}, socket) do
+    case Integer.parse(to_string(id)) do
+      {value, ""} ->
+        {:noreply, socket |> assign(sweep_start: value) |> load_sweep() |> persist_filters()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("clear_sweep_start", _params, socket) do
+    {:noreply, socket |> assign(sweep_start: nil) |> load_sweep() |> persist_filters()}
+  end
+
+  def handle_event("update_sweep_k", %{"k" => k}, socket) do
+    case Integer.parse(k) do
+      {value, ""} when value >= 1 and value <= @max_split_k ->
+        {:noreply, socket |> assign(sweep_k: value) |> load_split() |> persist_filters()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # A heat row is the cheapest way into a sweep: picking the scope stops
+  # being guesswork (design doc "which region to sweep at all" section),
+  # so clicking one sets the scope AND switches into sweep mode in one
+  # step.
+  def handle_event("select_region_heat", %{"id" => id}, socket) do
+    case Integer.parse(to_string(id)) do
+      {value, ""} ->
+        {:noreply,
+         socket
+         |> assign(mode: :sweep, sweep_regions_q: to_string(value), sweep_regions: [value])
+         |> load_sweep()
+         |> persist_filters()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event(
+        "select_part_character",
+        %{"part" => idx, "character_eve_id" => eve_id},
+        socket
+      ) do
+    with {index, ""} <- Integer.parse(idx),
+         true <- Enum.any?(socket.assigns.characters, &(&1.eve_id == eve_id)) do
+      {:noreply,
+       assign(socket, sweep_pilots: Map.put(socket.assigns.sweep_pilots, index, eve_id))}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # Pushes ONE split part's route -- `Split.split/3`'s `order` field,
+  # already a route over that part's own systems, not the whole sweep.
+  # Every stop in a sweep route is gate-reachable k-space
+  # (`Sweep.distances/1`'s contract: the full k-space graph, no chain
+  # overlay), so every stop is pushable the way `PlanWaypoints` already
+  # filters rank's stops -- `leg: :gate` on each one.
+  def handle_event("set_part_route", %{"part" => idx}, socket) do
+    with {index, ""} <- Integer.parse(idx),
+         part when not is_nil(part) <-
+           Enum.find(socket.assigns.sweep_parts, &(&1.index == index)),
+         eve_id when not is_nil(eve_id) <- Map.get(socket.assigns.sweep_pilots, index) do
+      stops = Enum.map(part.order, &%{solar_system_id: &1, leg: :gate})
+
+      case PlanWaypoints.push(stops, eve_id) do
+        {:ok, pushed} ->
+          name = character_name(socket.assigns.characters, eve_id)
+
+          {:noreply,
+           put_flash(
+             socket,
+             :info,
+             push_message(length(pushed), length(stops), name) <> " (part #{index + 1})"
+           )}
+
+        {:error, :no_gate_stops} ->
+          {:noreply,
+           put_flash(socket, :error, "Part #{index + 1} has no gate-reachable stops to fly.")}
+
+        {:error, :unknown_character} ->
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             "Pick a character this instance tracks before setting part #{index + 1}'s route."
+           )}
+      end
+    else
+      _ ->
+        {:noreply,
+         put_flash(socket, :error, "Pick a pilot for this part before setting its route.")}
+    end
+  end
+
+  # The whole-sweep push -- `result.waypoints` is already the compressed
+  # (or full) ordered id list, so unlike rank mode's `set_route/2` there
+  # is no second pass to keep in sync with: this button and the sweep
+  # table above it read the same field.
+  def handle_event("set_sweep_route", _params, socket) do
+    %{sweep_result: result, character_eve_id: character_eve_id} = socket.assigns
+
+    if is_nil(result) do
+      {:noreply, socket}
+    else
+      stops = Enum.map(result.waypoints, &%{solar_system_id: &1, leg: :gate})
+
+      case PlanWaypoints.push(stops, character_eve_id) do
+        {:ok, pushed} ->
+          name = character_name(socket.assigns.characters, character_eve_id)
+
+          {:noreply,
+           put_flash(socket, :info, push_message(length(pushed), length(stops), name))}
+
+        {:error, :no_gate_stops} ->
+          {:noreply, put_flash(socket, :error, "This sweep has no gate-reachable stops to fly.")}
+
+        {:error, :unknown_character} ->
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             "Pick a character this instance tracks before setting a route."
+           )}
+      end
+    end
+  end
+
+  # The one call that makes a split STOP competing with itself: every
+  # part's systems land in `scout_assignments_v1` under one
+  # `assignment_id` in a single call, rather than each part's own
+  # `Set route` silently leaving every other part's systems unclaimed
+  # for anyone else who runs a sweep over the same scope.
+  def handle_event("assign_all_parts", _params, socket) do
+    %{sweep_parts: parts, sweep_pilots: pilots, sweep_kind: kind} = socket.assigns
+
+    assignments =
+      parts
+      |> Enum.map(fn part ->
+        case Map.get(pilots, part.index) do
+          nil -> nil
+          eve_id -> %{character_eve_id: eve_id, system_ids: part.system_ids}
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    cond do
+      parts == [] ->
+        {:noreply, put_flash(socket, :error, "Nothing to assign -- run a sweep first.")}
+
+      length(assignments) != length(parts) ->
+        {:noreply, put_flash(socket, :error, "Pick a pilot for every part before assigning.")}
+
+      true ->
+        case Assignments.assign(assignments, kind: kind) do
+          {:ok, %{rows: rows}} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :info,
+               "Assigned #{rows} #{plural(rows, "system", "systems")} across #{length(parts)} #{plural(length(parts), "part", "parts")}."
+             )}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Could not assign: #{reason}.")}
+        end
+    end
+  end
+
+  # -------------------------------------------------------------------
   # Sticky filters -- same `LocalStorageSetting` idiom as `ScoutIntelLive`
   # (`lib/wanderer_app_web/live/scout/scout_intel_live.ex`), own key so
   # the two pages' saved state never collides, everything re-validated
@@ -308,7 +569,7 @@ defmodule WandererAppWeb.ScoutRefreshLive do
 
   def handle_event("ls_restore_#{@filter_store}", %{"value" => value}, socket) do
     case restore_filters(socket, value) do
-      {:ok, socket} -> {:noreply, load(socket)}
+      {:ok, socket} -> {:noreply, socket |> load() |> load_sweep() |> maybe_load_region_heat()}
       :unchanged -> {:noreply, socket}
     end
   end
@@ -321,7 +582,14 @@ defmodule WandererAppWeb.ScoutRefreshLive do
       "limit" => socket.assigns.limit,
       "max_jumps" => socket.assigns.max_jumps,
       "regions_q" => socket.assigns.regions_q,
-      "security" => Enum.map(socket.assigns.security, &to_string/1)
+      "security" => Enum.map(socket.assigns.security, &to_string/1),
+      "mode" => to_string(socket.assigns.mode),
+      "sweep_regions_q" => socket.assigns.sweep_regions_q,
+      "sweep_kind" => to_string(socket.assigns.sweep_kind),
+      "sweep_security" => Enum.map(socket.assigns.sweep_security, &to_string/1),
+      "sweep_compress" => socket.assigns.sweep_compress,
+      "sweep_start" => socket.assigns.sweep_start,
+      "sweep_k" => socket.assigns.sweep_k
     }
 
     push_event(socket, "ls_update_#{@filter_store}", %{value: Jason.encode!(state)})
@@ -331,6 +599,7 @@ defmodule WandererAppWeb.ScoutRefreshLive do
     case Jason.decode(value) do
       {:ok, %{} = saved} ->
         regions_q = restore_regions_q(saved)
+        sweep_regions_q = restore_sweep_regions_q(saved)
 
         {:ok,
          assign(socket,
@@ -341,7 +610,15 @@ defmodule WandererAppWeb.ScoutRefreshLive do
            max_jumps: restore_max_jumps(saved, socket.assigns.max_jumps),
            regions_q: regions_q,
            regions: parse_region_ids(regions_q),
-           security: restore_security(saved)
+           security: restore_security(saved),
+           mode: restore_mode(saved, socket.assigns.mode),
+           sweep_regions_q: sweep_regions_q,
+           sweep_regions: sweep_regions_q |> parse_region_ids() |> Enum.take(@max_sweep_regions),
+           sweep_kind: restore_sweep_kind(saved, socket.assigns.sweep_kind),
+           sweep_security: restore_sweep_security(saved),
+           sweep_compress: restore_sweep_compress(saved, socket.assigns.sweep_compress),
+           sweep_start: restore_sweep_start(saved),
+           sweep_k: restore_sweep_k(saved, socket.assigns.sweep_k)
          )}
 
       _ ->
@@ -392,6 +669,47 @@ defmodule WandererAppWeb.ScoutRefreshLive do
   end
 
   defp restore_security(_saved), do: @default_security
+
+  defp restore_mode(%{"mode" => mode}, _default) when mode in ~w(rank sweep),
+    do: String.to_existing_atom(mode)
+
+  defp restore_mode(_saved, default), do: default
+
+  defp restore_sweep_regions_q(%{"sweep_regions_q" => text}) when is_binary(text),
+    do: String.slice(text, 0, 100)
+
+  defp restore_sweep_regions_q(_saved), do: ""
+
+  defp restore_sweep_kind(%{"sweep_kind" => kind}, _default) when kind in @kinds,
+    do: String.to_existing_atom(kind)
+
+  defp restore_sweep_kind(_saved, default), do: default
+
+  defp restore_sweep_security(%{"sweep_security" => saved}) when is_list(saved) do
+    keys =
+      saved
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map(&parse_security_key/1)
+      |> Enum.reject(&is_nil/1)
+
+    if saved == [], do: [], else: if(keys == [], do: @default_security, else: keys)
+  end
+
+  defp restore_sweep_security(_saved), do: @default_security
+
+  defp restore_sweep_compress(%{"sweep_compress" => value}, _default) when is_boolean(value),
+    do: value
+
+  defp restore_sweep_compress(_saved, default), do: default
+
+  defp restore_sweep_start(%{"sweep_start" => id}) when is_integer(id) and id > 0, do: id
+  defp restore_sweep_start(_saved), do: nil
+
+  defp restore_sweep_k(%{"sweep_k" => k}, default) when is_integer(k) do
+    if k >= 1 and k <= @max_split_k, do: k, else: default
+  end
+
+  defp restore_sweep_k(_saved, default), do: default
 
   # -------------------------------------------------------------------
   # Helpers
@@ -526,6 +844,131 @@ defmodule WandererAppWeb.ScoutRefreshLive do
     case Planner.plan(opts) do
       {:ok, %{stops: stops}} -> stops
       {:error, _reason} -> []
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # Sweep reads
+  # -------------------------------------------------------------------
+
+  defp load_sweep(socket) do
+    socket = assign(socket, now: DateTime.utc_now())
+
+    if socket.assigns.sweep_regions == [] do
+      assign(socket, sweep_result: nil, sweep_error: nil, sweep_parts: [], sweep_pilots: %{})
+    else
+      case Sweep.sweep(sweep_opts(socket)) do
+        {:ok, result} ->
+          socket
+          |> assign(sweep_result: result, sweep_error: nil)
+          |> load_split()
+
+        {:error, reason} ->
+          assign(socket,
+            sweep_result: nil,
+            sweep_error: reason,
+            sweep_parts: [],
+            sweep_pilots: %{}
+          )
+      end
+    end
+  end
+
+  # `exclude` is the hard-zero half of `scout_assignments_v1` (design doc
+  # section 5, "the planner then treats assigned-to-someone-else exactly
+  # as it treats avoided"): once "Assign all" claims a part's systems,
+  # the NEXT sweep over the same scope must not re-offer them to a
+  # different pilot, or two splits over the same region keep competing.
+  defp sweep_opts(socket) do
+    [
+      scope: {:regions, socket.assigns.sweep_regions},
+      kind: socket.assigns.sweep_kind,
+      security: socket.assigns.sweep_security,
+      start: socket.assigns.sweep_start,
+      compress: socket.assigns.sweep_compress,
+      exclude: socket.assigns.sweep_kind |> Assignments.active_system_ids() |> MapSet.to_list()
+    ]
+  end
+
+  # k=1 is just the sweep above with nowhere to split; `Split.split/3`
+  # only runs once a second pilot is actually in the picture.
+  defp load_split(socket) do
+    %{sweep_result: result, sweep_k: k} = socket.assigns
+
+    cond do
+      is_nil(result) or k <= 1 ->
+        assign(socket, sweep_parts: [], sweep_pilots: %{})
+
+      true ->
+        system_ids = Enum.map(result.stops, & &1.solar_system_id)
+
+        case Split.split(system_ids, k, []) do
+          {:ok, parts} ->
+            pilots =
+              default_pilots(parts, socket.assigns.characters, socket.assigns.sweep_pilots)
+
+            assign(socket, sweep_parts: parts, sweep_pilots: pilots)
+
+          {:error, _reason} ->
+            assign(socket, sweep_parts: [], sweep_pilots: %{})
+        end
+    end
+  end
+
+  # Keeps an operator's existing picks (changing `k` by one should not
+  # scramble every other part's pilot) and otherwise round-robins the
+  # user's own tracked characters so every part starts with a usable
+  # pilot instead of a blank select.
+  defp default_pilots(parts, characters, existing) do
+    pool_size = max(length(characters), 1)
+
+    Enum.into(parts, %{}, fn part ->
+      eve_id =
+        Map.get(existing, part.index) ||
+          characters |> Enum.at(rem(part.index, pool_size)) |> character_eve_id()
+
+      {part.index, eve_id}
+    end)
+  end
+
+  # Loaded once per kind, not on every keystroke: a region's heat
+  # changes on a human timescale (coverage rows arriving), so recompute
+  # only on entering sweep mode or changing `kind`, not on every scope
+  # edit -- `force: true` is select_sweep_kind/3's escape hatch.
+  defp maybe_load_region_heat(socket, opts \\ []) do
+    force = Keyword.get(opts, :force, false)
+
+    %{mode: mode, sweep_kind: kind, region_heat: heat, region_heat_kind: heat_kind} =
+      socket.assigns
+
+    if mode == :sweep and (force or is_nil(heat) or heat_kind != kind) do
+      rows = kind |> Sweep.region_heat() |> sort_region_heat()
+      assign(socket, region_heat: rows, region_heat_kind: kind)
+    else
+      socket
+    end
+  end
+
+  # Worst-covered first: `unseen + stale` descending, then median age
+  # descending (nil -- no coverage row has ever landed for this region
+  # at all -- sorts as worse than any real age).
+  defp sort_region_heat(rows) do
+    Enum.sort_by(rows, fn row ->
+      {-(row.stale + row.unseen), -(row.median_age_s || 999_999_999)}
+    end)
+  end
+
+  # GUESS, labelled as one in the UI: 5 min/system (design doc "time,
+  # which is the real constraint" section), jump time folded in as
+  # negligible beside it, same as the design doc's own estimate.
+  defp sweep_hours(systems) do
+    :erlang.float_to_binary(systems * 5 / 60, decimals: 1) <> "h"
+  end
+
+  defp start_name(start_id, stops) do
+    case Enum.find(stops, &(&1.solar_system_id == start_id)) do
+      nil -> to_string(start_id)
+      stop -> stop.name
     end
   end
 end

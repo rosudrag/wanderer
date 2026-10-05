@@ -63,5 +63,8 @@ defmodule WandererApp.Api do
     # WandererApp.Scout.Snapshot.
     resource WandererApp.Api.ScoutStructure
     resource WandererApp.Api.ScoutStructureEvent
+    # CHEWY PATCH: scout region sweeps, workload split. See
+    # WandererApp.Scout.Assignments.
+    resource WandererApp.Api.ScoutAssignment
   end
 end

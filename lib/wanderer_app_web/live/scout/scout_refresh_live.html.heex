@@ -26,6 +26,36 @@
     </div>
   </div>
 
+  <%!-- CHEWY PATCH (scout sweep): a second MODE on this same page, not
+        a second route -- `rank` is the existing ball/origin ranking
+        below, `sweep` is the whole-region route, start points, region
+        heat and k-way split. --%>
+  <div class="flex items-center gap-2 mb-4">
+    <div role="tablist" class="tabs tabs-boxed tabs-sm bg-neutral-950/60">
+      <button
+        type="button"
+        phx-click="switch_mode"
+        phx-value-mode="rank"
+        role="tab"
+        id="scout-refresh-mode-rank"
+        class={["tab", @mode == :rank && "tab-active"]}
+      >
+        Rank
+      </button>
+      <button
+        type="button"
+        phx-click="switch_mode"
+        phx-value-mode="sweep"
+        role="tab"
+        id="scout-refresh-mode-sweep"
+        class={["tab", @mode == :sweep && "tab-active"]}
+      >
+        Sweep
+      </button>
+    </div>
+  </div>
+
+  <div :if={@mode == :rank}>
   <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-3">
     <h1 class="text-xl font-semibold tracking-tight">Scout Refresh Queue</h1>
 
@@ -297,4 +327,335 @@
       </tbody>
     </.grid>
   </.panel>
+  </div>
+
+  <%!-- CHEWY PATCH (scout sweep): design doc "whole-region sweeps" --
+        scope is a MEMBERSHIP over up to 3 regions, not a ball, so there
+        is no origin/limit/max_jumps here; `compress` is an explicit,
+        labelled option rather than a silent optimisation (section 6:
+        ESI exposes no way to verify a pilot's autopilot preference). --%>
+  <div :if={@mode == :sweep}>
+    <div class="flex flex-wrap items-end gap-2 mb-4 p-2 rounded-lg border border-neutral-800 bg-neutral-900/30">
+      <div>
+        <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">
+          Scope (regions)
+        </label>
+        <form phx-change="update_sweep_regions">
+          <input
+            type="text"
+            name="regions"
+            id="scout-sweep-regions"
+            value={@sweep_regions_q}
+            phx-debounce="300"
+            autocomplete="off"
+            placeholder="up to 3 region ids"
+            title="Region ids this sweep covers -- at most 3 (~450 systems), the matrix cap"
+            class="input input-sm input-bordered bg-neutral-950/60 w-48"
+          />
+        </form>
+      </div>
+
+      <div>
+        <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">
+          Kind
+        </label>
+        <form phx-change="select_sweep_kind">
+          <select
+            name="kind"
+            class="select select-sm select-bordered bg-neutral-950/60 w-28 py-0"
+            title="Coverage ladder kind — visit/anoms/sigs/grid"
+          >
+            <option
+              :for={k <- ~w(visit anoms sigs grid)}
+              value={k}
+              selected={k == to_string(@sweep_kind)}
+            >
+              {String.capitalize(k)}
+            </option>
+          </select>
+        </form>
+      </div>
+
+      <div class="join" id="scout-sweep-security">
+        <.space_chip
+          :for={{key, label} <- @security_types}
+          key={key}
+          label={label}
+          selected={key in @sweep_security}
+        />
+      </div>
+      <button
+        :if={length(@sweep_security) < length(@security_types)}
+        phx-click="reset_sweep_space"
+        id="scout-sweep-security-reset"
+        class="btn btn-sm btn-ghost text-gray-400"
+      >
+        All space ✕
+      </button>
+
+      <label
+        class="flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer"
+        title="Assumes the client routes shortest-path with no avoidance list -- ESI exposes no way to read a pilot's autopilot preference, so a wrong assumption here produces a route with holes in it, not a slower one"
+      >
+        <input
+          type="checkbox"
+          checked={@sweep_compress}
+          phx-click="toggle_sweep_compress"
+          class="checkbox checkbox-xs"
+        />
+        Compress waypoints (assumes shortest-path routing, no avoidance list)
+      </label>
+
+      <div>
+        <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">
+          Split (k)
+        </label>
+        <form phx-change="update_sweep_k">
+          <input
+            type="number"
+            name="k"
+            min="1"
+            max="6"
+            value={@sweep_k}
+            title="Divide this sweep's systems across k pilots, 1-6"
+            class="input input-sm input-bordered bg-neutral-950/60 w-16"
+          />
+        </form>
+      </div>
+    </div>
+
+    <.empty :if={@sweep_regions == [] and is_nil(@sweep_error)} cols={1}>
+      Pick a scope above, or a region from the heat table below, to sweep it.
+    </.empty>
+
+    <.panel :if={@sweep_error} id="scout-sweep-error-panel" title="Sweep">
+      <.empty cols={1}>{plan_error_message(@sweep_error)}</.empty>
+    </.panel>
+
+    <div :if={@sweep_result}>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <.stat label="Systems" value={to_string(@sweep_result.systems)} />
+        <.stat label="Total jumps" value={to_string(@sweep_result.jumps)} />
+        <.stat
+          label="Waypoints"
+          value={to_string(length(@sweep_result.waypoints))}
+          hint={if @sweep_result.compressed?, do: "after compression", else: "uncompressed"}
+        />
+        <.stat
+          label="Estimated time"
+          value={sweep_hours(@sweep_result.systems)}
+          hint="guess: 5 min/system, jump time not counted"
+        />
+      </div>
+
+      <.panel id="scout-sweep-starts-panel" title="Start points" hint="top 3 by route cost">
+        <div class="flex flex-wrap items-center gap-2 p-2">
+          <button
+            :for={s <- @sweep_result.starts}
+            type="button"
+            phx-click="select_sweep_start"
+            phx-value-id={s.solar_system_id}
+            id={"scout-sweep-start-#{s.solar_system_id}"}
+            class={[
+              "btn btn-sm gap-1",
+              if(s.solar_system_id == @sweep_result.start, do: "btn-primary", else: "btn-outline")
+            ]}
+          >
+            {s.name}
+            <span class="font-mono text-[11px] opacity-80">{s.jumps}j</span>
+          </button>
+          <button
+            :if={@sweep_start}
+            type="button"
+            phx-click="clear_sweep_start"
+            id="scout-sweep-start-clear"
+            class="btn btn-sm btn-ghost text-gray-400"
+          >
+            Auto-pick best ✕
+          </button>
+        </div>
+      </.panel>
+
+      <div class="flex items-center gap-2 mb-3">
+        <form phx-change="select_character" class="flex items-center gap-2">
+          <select
+            name="character_eve_id"
+            id="scout-sweep-character"
+            title="Whose autopilot the full route is written to, through ESI"
+            class="select select-sm select-bordered bg-neutral-950/60 py-0"
+          >
+            <option
+              :for={character <- @characters}
+              value={character.eve_id}
+              selected={character.eve_id == @character_eve_id}
+            >
+              {character.name}
+            </option>
+          </select>
+        </form>
+        <button
+          type="button"
+          phx-click="set_sweep_route"
+          id="scout-sweep-set-route"
+          disabled={@characters == []}
+          title="Replaces this character's in-game route with the full sweep, in order"
+          class="btn btn-sm btn-primary"
+        >
+          Set full route
+        </button>
+      </div>
+
+      <.panel
+        id="scout-sweep-table-panel"
+        title="Sweep route"
+        count={length(@sweep_result.stops)}
+        hint={to_string(@sweep_kind) <> " coverage"}
+      >
+        <.grid id="scout-sweep-table">
+          <thead>
+            <tr>
+              <th class="text-right">#</th>
+              <th>System</th>
+              <th>Region</th>
+              <th>Class / Sec</th>
+              <th>Coverage</th>
+              <th>Reason</th>
+              <th class="text-right">Jumps</th>
+              <th>WP</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr :for={stop <- @sweep_result.stops} id={"scout-sweep-#{stop.solar_system_id}"}>
+              <td class="text-right text-xs text-gray-500">{stop.order}</td>
+              <td>
+                <div class="flex items-center gap-1.5 whitespace-nowrap">
+                  {stop.name}
+                  <.space_badge space={stop.space} />
+                </div>
+              </td>
+              <td class="text-xs text-gray-400">{stop.region_name || "—"}</td>
+              <td><.sweep_class_cell stop={stop} /></td>
+              <td><.coverage_ladder coverage={stop.coverage} kind={@sweep_kind} now={@now} /></td>
+              <td><.reason_badge reason={stop.reason} /></td>
+              <td class="text-right tabular-nums">{stop.jumps_from_prev}</td>
+              <td><.waypoint_badge waypoint?={stop.waypoint?} /></td>
+            </tr>
+            <.empty :if={@sweep_result.stops == []} cols={8}>
+              Nothing in this scope needs scouting right now.
+            </.empty>
+          </tbody>
+        </.grid>
+      </.panel>
+
+      <.panel
+        :if={@sweep_k > 1 and @sweep_parts != []}
+        id="scout-sweep-split-panel"
+        title={"Split across #{@sweep_k} pilots"}
+        hint="makespan, not total jumps -- parts fly in parallel"
+      >
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 p-3">
+          <div
+            :for={part <- @sweep_parts}
+            id={"scout-sweep-part-#{part.index}"}
+            class="rounded-lg border border-neutral-800 bg-neutral-950/40 p-3"
+          >
+            <div class="text-xs uppercase tracking-wider text-gray-500 mb-1">
+              Part {part.index + 1}
+            </div>
+            <div class="text-sm text-gray-200 mb-2">
+              {length(part.system_ids)} systems · {part.jumps} jumps · starts {start_name(
+                part.start,
+                @sweep_result.stops
+              )}
+            </div>
+            <form phx-change="select_part_character" class="flex items-center gap-2 mb-2">
+              <input type="hidden" name="part" value={part.index} />
+              <select
+                name="character_eve_id"
+                id={"scout-sweep-part-#{part.index}-character"}
+                class="select select-sm select-bordered bg-neutral-950/60 py-0"
+              >
+                <option
+                  :for={character <- @characters}
+                  value={character.eve_id}
+                  selected={character.eve_id == Map.get(@sweep_pilots, part.index)}
+                >
+                  {character.name}
+                </option>
+              </select>
+            </form>
+            <button
+              type="button"
+              phx-click="set_part_route"
+              phx-value-part={part.index}
+              id={"scout-sweep-part-#{part.index}-set-route"}
+              disabled={@characters == []}
+              class="btn btn-sm btn-primary"
+            >
+              Set route
+            </button>
+          </div>
+        </div>
+        <div class="p-3 pt-0">
+          <button
+            type="button"
+            phx-click="assign_all_parts"
+            id="scout-sweep-assign-all"
+            class="btn btn-sm btn-outline"
+          >
+            Assign all
+          </button>
+        </div>
+      </.panel>
+    </div>
+
+    <.panel
+      id="scout-region-heat-panel"
+      title="Region heat"
+      hint={"coverage of " <> to_string(@sweep_kind) <> " by region, worst first -- click a row to sweep it"}
+    >
+      <.grid id="scout-region-heat-table">
+        <thead>
+          <tr>
+            <th>Region</th>
+            <th class="text-right">Systems</th>
+            <th>Coverage</th>
+            <th class="text-right">Stale</th>
+            <th class="text-right">Unseen</th>
+            <th class="text-right">Median age</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={row <- @region_heat || []} id={"scout-heat-#{row.region_id}"}>
+            <td>
+              <button
+                type="button"
+                phx-click="select_region_heat"
+                phx-value-id={row.region_id}
+                class="link link-hover decoration-dotted underline-offset-2"
+                title="Sweep this region"
+              >
+                {row.region_name}
+              </button>
+            </td>
+            <td class="text-right tabular-nums">{row.systems}</td>
+            <td>
+              <.heat_bar
+                covered={row.covered}
+                stale={row.stale}
+                unseen={row.unseen}
+                systems={row.systems}
+              />
+            </td>
+            <td class="text-right tabular-nums">{row.stale}</td>
+            <td class="text-right tabular-nums">{row.unseen}</td>
+            <td class="text-right tabular-nums font-mono text-xs">{age_fmt(row.median_age_s)}</td>
+          </tr>
+          <.empty :if={(@region_heat || []) == []} cols={6}>
+            No region heat data yet -- switch to the Sweep tab to load it.
+          </.empty>
+        </tbody>
+      </.grid>
+    </.panel>
+  </div>
 </main>

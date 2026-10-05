@@ -40,6 +40,7 @@ defmodule WandererApp.Scout.Coverage do
   """
 
   alias WandererApp.Api.ScoutSystemCoverage
+  alias WandererApp.Scout.Assignments
 
   # Same upper bound as WandererApp.Scout.Ingest, for the same reason: a
   # bigger single POST is a bug or an abuse, not a batch to accept.
@@ -97,8 +98,10 @@ defmodule WandererApp.Scout.Coverage do
   # ---------------------------------------------------------------------
 
   defp store_row(row, map_id) when is_map(row) do
-    with {:ok, attrs} <- row_attrs(row, map_id) do
-      write(attrs)
+    with {:ok, attrs} <- row_attrs(row, map_id),
+         :ok <- write(attrs) do
+      maybe_complete_assignment(attrs)
+      :ok
     end
   end
 
@@ -147,6 +150,19 @@ defmodule WandererApp.Scout.Coverage do
       {:error, reason} when is_binary(reason) -> {:error, reason}
       {:error, reason} -> {:error, inspect(reason)}
     end
+  end
+
+  # CHEWY PATCH: scout region sweeps, step 5. A stored (or
+  # already-superseded-by-something-newer) coverage row means "coverage
+  # exists for this system+kind" either way, so any active assignment for
+  # it is done -- cheap (one query per ingested row at most, via
+  # `Assignments.complete/2`, which never raises) and never allowed to
+  # fail the ingest it hangs off.
+  defp maybe_complete_assignment(%{solar_system_id: system_id, kind: kind}) do
+    Assignments.complete(system_id, String.to_existing_atom(kind))
+    :ok
+  rescue
+    _ -> :ok
   end
 
   # ---------------------------------------------------------------------

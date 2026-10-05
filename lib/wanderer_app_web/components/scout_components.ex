@@ -598,6 +598,31 @@ defmodule WandererAppWeb.ScoutComponents do
     """
   end
 
+  attr :stop, :map, required: true
+
+  @doc """
+  CHEWY PATCH (scout sweep): the class/security cell for a
+  `WandererApp.Scout.Sweep.sweep_stop`. Unlike `stop_class/1` above
+  (`Planner.rank/1`'s stops, which carry a resolved `class_title`), a
+  sweep stop's contract has no `class_title` -- only `system_class` and
+  `security` -- so this renders the security status alone; the space
+  badge already beside the system name (`space_badge/1`) is what tells
+  wormhole/Pochven space apart on a sweep row, so there is nothing a
+  class title would add here that is not already shown once.
+  """
+  def sweep_class_cell(assigns) do
+    ~H"""
+    <span
+      :if={security(@stop.security)}
+      class={["font-mono text-[11px]", security_class(@stop.security)]}
+      title="Security status"
+    >
+      {security(@stop.security)}
+    </span>
+    <span :if={is_nil(security(@stop.security))} class="text-gray-600">—</span>
+    """
+  end
+
   attr :space, :atom, required: true
 
   @doc "A static space-type badge -- `space_chip/1`'s tone, without the click."
@@ -705,6 +730,66 @@ defmodule WandererAppWeb.ScoutComponents do
     <span :if={@stop.age_s < 0} class="text-gray-700">—</span>
     """
   end
+
+  attr :waypoint?, :boolean, required: true
+
+  @doc """
+  CHEWY PATCH (scout sweep): marks a `WandererApp.Scout.Sweep.sweep_stop`
+  as a pushed WAYPOINT versus a pass-through EVE flies through on the
+  way without any input (design doc "only crossroads become waypoints"
+  section). The distinction is the whole point of compression -- a
+  reader staring at the sweep table must be able to tell which stops
+  are actually sent to ESI.
+  """
+  def waypoint_badge(assigns) do
+    ~H"""
+    <span
+      :if={@waypoint?}
+      class="badge badge-xs border-0 bg-primary/20 text-primary font-mono"
+      title="Pushed as a waypoint"
+    >
+      WP
+    </span>
+    <span
+      :if={!@waypoint?}
+      class="text-gray-700 font-mono text-[11px]"
+      title="Flown through on the way, never pushed on its own"
+    >
+      ·
+    </span>
+    """
+  end
+
+  attr :covered, :integer, required: true
+  attr :stale, :integer, required: true
+  attr :unseen, :integer, required: true
+  attr :systems, :integer, required: true
+
+  @doc """
+  CHEWY PATCH (scout sweep): the region heat table's bar -- fresh /
+  stale / unseen as one proportional strip, because "94 of 189 fresh"
+  is a division a reader would otherwise do in their head on every row
+  of `WandererApp.Scout.Sweep.region_heat/1` (design doc "which region
+  to sweep at all" section).
+  """
+  def heat_bar(assigns) do
+    fresh = max(assigns.systems - assigns.stale - assigns.unseen, 0)
+    assigns = assign(assigns, :fresh, fresh)
+
+    ~H"""
+    <div class="flex items-center gap-1.5 w-32">
+      <div class="flex h-2 w-20 rounded-full overflow-hidden bg-neutral-800">
+        <div class="bg-success/70" style={"width: #{heat_pct(@fresh, @systems)}%"}></div>
+        <div class="bg-warning/70" style={"width: #{heat_pct(@stale, @systems)}%"}></div>
+        <div class="bg-error/70" style={"width: #{heat_pct(@unseen, @systems)}%"}></div>
+      </div>
+      <span class="text-[11px] text-gray-500 font-mono tabular-nums">{@covered}/{@systems}</span>
+    </div>
+    """
+  end
+
+  defp heat_pct(_n, 0), do: 0
+  defp heat_pct(n, total), do: Float.round(n / total * 100, 1)
 
   # ---------------------------------------------------------------------
   # Formatting
@@ -917,6 +1002,15 @@ defmodule WandererAppWeb.ScoutComponents do
     do: :erlang.float_to_binary(value * 1.0, decimals: 2)
 
   def score_fmt(_value), do: "0.00"
+
+  @doc false
+  # CHEWY PATCH (scout sweep): `WandererApp.Scout.Sweep.region_heat/1`'s
+  # `median_age_s` is a plain integer, not a `DateTime` -- `countdown/2`
+  # above needs an expiry to diff against `now`, which this has no use
+  # for, so it gets its own one-line formatter rather than a fake
+  # "expires at" datetime manufactured just to satisfy `countdown/2`.
+  def age_fmt(nil), do: "—"
+  def age_fmt(seconds) when is_integer(seconds), do: format_countdown(seconds)
 
   @doc false
   # `WandererApp.Scout.Planner.rank/1`'s `{:error, reason}` branch, read
