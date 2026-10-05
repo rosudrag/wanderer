@@ -1066,6 +1066,86 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
     end
   end
 
+  # CHEWY PATCH: the paste box. `WandererAppWeb.ScoutDiscord` has its own
+  # unit tests for the format and the 2000-character budget; what is
+  # asserted here is the thing only the page can get wrong — that the
+  # message is built from the rows the reader is actually looking at,
+  # filters included.
+  describe "the Discord paste box" do
+    test "a running timer is pasted as Discord's own live markup", %{conn: conn} do
+      expires = DateTime.utc_now() |> DateTime.add(3, :day) |> DateTime.truncate(:second)
+
+      structure(%{
+        structure_id: 1_000_000_000_900,
+        structure_name: "Discord Keepstar",
+        status: "ArmorReinforced",
+        observed_at: ago(5),
+        timer_expires_at: expires
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      paste = render_click(view, "discord", %{"board" => "timers"})
+
+      assert paste =~ "scout-discord"
+      assert paste =~ "Discord Keepstar"
+      # The countdown is Discord's, so it keeps running in the channel.
+      assert paste =~ "&lt;t:#{DateTime.to_unix(expires)}:R&gt;"
+    end
+
+    test "the paste carries the page's filters", %{conn: conn} do
+      expires = DateTime.utc_now() |> DateTime.add(2, :day) |> DateTime.truncate(:second)
+
+      structure(%{
+        structure_id: 1_000_000_000_901,
+        structure_name: "Jita Timer",
+        solar_system_id: @jita,
+        observed_at: ago(5),
+        timer_expires_at: expires
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_902,
+        structure_name: "Amarr Timer",
+        solar_system_id: @amarr,
+        observed_at: ago(5),
+        timer_expires_at: expires
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+      render_click(view, "filter_system", %{"id" => to_string(@amarr)})
+
+      paste = render_click(view, "discord", %{"board" => "timers"})
+
+      assert paste =~ "Amarr Timer"
+      refute paste =~ "Jita Timer"
+    end
+
+    test "the digest leads with the rarest finding and closes", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_903,
+        structure_name: "Free Fortizar",
+        status: "Unanchored",
+        observed_at: ago(30)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      digest = render_click(view, "discord", %{"board" => "digest"})
+
+      assert digest =~ "Scout report"
+      assert digest =~ "Free Fortizar"
+
+      refute render_click(view, "close_discord", %{}) =~ "scout-discord-text"
+    end
+
+    test "an unknown board is ignored rather than crashing the page", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      refute render_click(view, "discord", %{"board" => "nonsense"}) =~ "scout-discord-text"
+    end
+  end
+
   describe "the permission gate" do
     test "a user without :scout_intel_view is redirected off the page", %{conn: _conn} do
       Application.delete_env(:wanderer_app, :bootstrap_admin_character)

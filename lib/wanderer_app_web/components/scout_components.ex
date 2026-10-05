@@ -51,6 +51,9 @@ defmodule WandererAppWeb.ScoutComponents do
   attr :count, :any, default: nil
   attr :tone, :atom, default: :neutral, values: [:neutral, :urgent, :warn, :good]
   attr :class, :string, default: nil
+  # CHEWY PATCH: the board key `WandererAppWeb.ScoutDiscord` formats this
+  # panel's rows under. Set it and the header grows a "Discord" button.
+  attr :copy, :string, default: nil
   slot :inner_block, required: true
 
   @doc """
@@ -75,6 +78,16 @@ defmodule WandererAppWeb.ScoutComponents do
           {@count}
         </span>
         <span :if={@hint} class="text-xs text-gray-500 truncate hidden md:inline">{@hint}</span>
+        <button
+          :if={@copy}
+          type="button"
+          phx-click="discord"
+          phx-value-board={@copy}
+          class="ml-auto btn btn-xs btn-ghost text-gray-400 shrink-0"
+          title="This board as a message you can paste into Discord — timers stay live there"
+        >
+          Discord
+        </button>
       </header>
       <div class="overflow-x-auto">
         {render_slot(@inner_block)}

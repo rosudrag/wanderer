@@ -573,6 +573,47 @@ and the permission itself — the `/scout` `live_session` gate does not cover it
 (`GROUP BY`, `max(observed_at)`, `count(*)`) as schemaless Ecto. It hard-codes
 the two table names; renaming a table means editing it too.
 
+### Pasting a board into Discord
+
+Every board header carries a **Discord** button, and the toolbar carries
+**Copy for Discord** for the whole tab. Both open one modal holding a
+preformatted message; a `CopyToClipboard` button puts it on the clipboard and
+the reader pastes it into a channel. Nothing is posted from the server: there
+is no webhook, no stored URL and no outbound call, so the feature cannot leak
+intel to a channel nobody remembered configuring.
+
+`WandererAppWeb.ScoutDiscord` owns the format. It reads the rows the socket
+**already holds**, which is what makes the paste match the screen — same
+window, same search, same system chip, same space chips, same sort.
+
+Three things decide the format:
+
+- **Discord's own timestamp markup is the whole point.** `<t:1760000000:R>`
+  renders as a live relative countdown and `<t:…:f>` as an absolute instant,
+  both in each *reader's* timezone and re-rendered on every view. A timer
+  board pasted once keeps counting down in the channel; our own "2h 14m" would
+  be wrong by the time anyone read it, and "22:41" is wrong for everyone not on
+  UTC. Boards with a deadline emit both styles (the countdown is what a reader
+  acts on, the instant is what a fleet forms on); boards without one emit the
+  relative "seen" time only.
+- **2000 characters, and Discord rejects an over-long message rather than
+  cutting it.** Each board is fitted to the budget and, when rows are dropped,
+  says so in the message itself — "_… 37 more not shown_" — because a reader
+  cannot otherwise tell a quiet night from a truncated list. The digest shares
+  the budget **fairly with carry-forward** (`remaining / boards left`, unused
+  room rolls to the next board) rather than greedily: greedy filling let a
+  50-row Unanchored board eat the whole message and leave the timers out.
+- **No code fences, everything escaped.** Timestamps do not render inside a
+  code block, which kills the one feature this exists for, so the message is
+  plain markdown — and therefore every value off the wire is escaped. An EVE
+  structure called `*** |LOOT PINATA| ***` would otherwise italicise half the
+  line and spoiler-tag the rest, and a newline in a name would split one
+  finding into two bullets.
+
+The unanchoring board pastes the derived 7-day bound with its `≤`, and an
+orbital pastes "no estimate" rather than a prediction it is not entitled to —
+the same ruling as the column (see "Predicted max out").
+
 ## Permissions
 
 | | |
@@ -620,6 +661,7 @@ stale cache may cost a wrong icon, never a wrong page.
 |Permission tier|`lib/wanderer_app/identity/scout_access.ex`|
 |Pages|`lib/wanderer_app_web/live/scout/scout_{intel,access}_live.ex`|
 |Panels, cells, formatters|`lib/wanderer_app_web/components/scout_components.ex`|
+|Discord message format|`lib/wanderer_app_web/components/scout_discord.ex`|
 |Sidebar entry|`lib/wanderer_app_web/components/scout_nav.ex`|
 |Tests|`test/integration/scout_intel_test.exs`|
 

@@ -70,6 +70,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
   alias WandererApp.Scout.Space
   alias WandererApp.Scout.Stats
   alias WandererApp.Scout.Unanchor
+  alias WandererAppWeb.ScoutDiscord
 
   @windows [{"24 hours", 1}, {"7 days", 7}, {"30 days", 30}, {"90 days", 90}]
   @default_days 7
@@ -117,6 +118,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
          space_types: Space.types(),
          limit: @page,
          detail: nil,
+         discord: nil,
          spawn_detail: nil,
          systems: %{},
          can_manage_access?: ScoutAccess.superadmin?(socket.assigns.current_user.id)
@@ -131,7 +133,13 @@ defmodule WandererAppWeb.ScoutIntelLive do
   def handle_event("select_tab", %{"tab" => tab}, socket) when tab in ~w(spawns structures) do
     {:noreply,
      socket
-     |> assign(tab: String.to_existing_atom(tab), limit: @page, detail: nil, spawn_detail: nil)
+     |> assign(
+       tab: String.to_existing_atom(tab),
+       limit: @page,
+       detail: nil,
+       spawn_detail: nil,
+       discord: nil
+     )
      |> load()
      |> persist_filters()}
   end
@@ -254,6 +262,29 @@ defmodule WandererAppWeb.ScoutIntelLive do
     do: {:noreply, assign(socket, spawn_detail: nil)}
 
   def handle_event("refresh", _params, socket), do: {:noreply, load(socket)}
+
+  # CHEWY PATCH: the boards, as a message a reader pastes into Discord.
+  #
+  # No query: it formats the rows this socket already holds, which is
+  # also the only way the paste can be guaranteed to match what the
+  # reader is looking at -- same filters, same window, same sort.
+  # `WandererAppWeb.ScoutDiscord` owns the format and the 2000-character
+  # budget.
+  def handle_event("discord", %{"board" => board}, socket) do
+    case ScoutDiscord.parse_board(board) do
+      {:ok, :digest} ->
+        {:noreply, assign(socket, discord: discord_message(:digest, socket))}
+
+      {:ok, board} ->
+        {:noreply, assign(socket, discord: discord_message(board, socket))}
+
+      :error ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_discord", _params, socket),
+    do: {:noreply, assign(socket, discord: nil)}
 
   # The one write this page has. An archive is a reader's judgement --
   # "I flew there, it is not there" -- and it suppresses the row only
@@ -724,6 +755,52 @@ defmodule WandererAppWeb.ScoutIntelLive do
       count -> "#{count} inside the hour"
     end
   end
+
+  defp discord_message(:digest, socket) do
+    ScoutDiscord.message(:digest, discord_sections(socket), discord_opts(socket))
+  end
+
+  defp discord_message(board, socket) do
+    ScoutDiscord.message(board, discord_rows(board, socket), discord_opts(socket))
+  end
+
+  # Urgency order, and only the boards of the tab being read: a digest
+  # pasted from the spawns tab that led with structure timers would not
+  # be the thing the reader just looked at.
+  defp discord_sections(socket) do
+    case socket.assigns.tab do
+      :structures ->
+        Enum.map([:unanchored, :timers, :anchoring, :unanchoring, :abandoned], fn board ->
+          {board, discord_rows(board, socket)}
+        end)
+
+      :spawns ->
+        [
+          {:unanchored, socket.assigns.unanchored_structures},
+          {:spawns, socket.assigns.fresh_spawns}
+        ]
+    end
+  end
+
+  defp discord_rows(:unanchored, socket), do: socket.assigns.unanchored_structures
+  defp discord_rows(:timers, socket), do: socket.assigns.active_timers
+  defp discord_rows(:anchoring, socket), do: socket.assigns.anchoring_structures
+  defp discord_rows(:unanchoring, socket), do: socket.assigns.unanchoring_structures
+  defp discord_rows(:abandoned, socket), do: socket.assigns.abandoned_structures
+  defp discord_rows(:spawns, socket), do: socket.assigns.fresh_spawns
+
+  defp discord_opts(socket) do
+    [
+      systems: socket.assigns.systems,
+      now: socket.assigns.now,
+      url: WandererAppWeb.Endpoint.url() <> "/scout"
+    ]
+  end
+
+  @doc false
+  # Discord's own per-message cap, so the modal's counter and the
+  # formatter's budget can never disagree.
+  def discord_limit, do: ScoutDiscord.limit()
 
   @doc false
   # "250+" when the read came back full: the strip never claims the

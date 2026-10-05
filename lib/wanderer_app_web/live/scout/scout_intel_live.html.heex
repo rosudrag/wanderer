@@ -35,6 +35,14 @@
       >
         Export CSV
       </a>
+      <button
+        phx-click="discord"
+        phx-value-board="digest"
+        class="btn btn-sm btn-ghost"
+        title="Every board on this tab as one message you can paste into Discord"
+      >
+        Copy for Discord
+      </button>
       <button phx-click="refresh" class="btn btn-sm btn-ghost">Refresh</button>
       <.link :if={@can_manage_access?} navigate={~p"/scout/access"} class="btn btn-sm">
         Manage access
@@ -201,6 +209,7 @@
       tone={:urgent}
       class="border-error/60 bg-error/5"
       hint={"last #{unanchored_horizon_days()} days, not the window"}
+      copy="unanchored"
     >
       <.grid id="scout-unanchored">
         <thead>
@@ -243,6 +252,7 @@
       count={length(@active_timers)}
       tone={if urgent_timers(@active_timers, @now) > 0, do: :urgent, else: :neutral}
       hint="ignores the window"
+      copy="timers"
     >
       <.grid id="scout-active-timers">
         <thead>
@@ -284,6 +294,7 @@
       count={length(@anchoring_structures)}
       tone={if @anchoring_structures != [], do: :warn, else: :neutral}
       hint="the anchoring clock the client reports; the window opens when it hits zero"
+      copy="anchoring"
     >
       <.grid id="scout-anchoring">
         <thead>
@@ -328,6 +339,7 @@
       count={length(@unanchoring_structures)}
       tone={if @unanchoring_structures != [], do: :warn, else: :neutral}
       hint="a decommission reports no timer; the deadline is the fixed 7-day window from the first sweep that saw it"
+      copy="unanchoring"
     >
       <.grid id="scout-unanchoring">
         <thead>
@@ -372,6 +384,7 @@
       count={length(@abandoned_structures)}
       tone={if @abandoned_structures != [], do: :good, else: :neutral}
       hint="asset safety off, or unfuelled"
+      copy="abandoned"
     >
       <.grid id="scout-abandoned">
         <thead>
@@ -514,6 +527,7 @@
       count={length(@fresh_spawns)}
       tone={if @fresh_spawns != [], do: :good, else: :neutral}
       hint="latest sighting per spawn, ignores the window selector"
+      copy="spawns"
     >
       <.grid id="scout-fresh-spawns">
         <thead>
@@ -746,5 +760,55 @@
       </div>
     </div>
     <button class="modal-backdrop" phx-click="close_spawn">close</button>
+  </div>
+
+  <%!-- CHEWY PATCH: the paste box. Discord renders `<t:…:R>` as a live
+        countdown in each reader's own timezone, which is the whole
+        reason this is a message rather than a screenshot. --%>
+  <div
+    :if={@discord}
+    class="modal modal-open !bg-black/70"
+    id="scout-discord"
+    phx-window-keydown="close_discord"
+    phx-key="Escape"
+  >
+    <div class="modal-box max-w-2xl bg-neutral-900 border border-neutral-800 p-0">
+      <div class="flex items-start justify-between gap-4 px-4 py-3 border-b border-neutral-800">
+        <div class="min-w-0">
+          <h3 class="font-semibold truncate">{@discord.title} · Discord</h3>
+          <p class="text-xs text-gray-500">
+            {@discord.shown} of {@discord.total} rows · {String.length(@discord.text)}/{discord_limit()} characters · timers stay live once pasted
+          </p>
+        </div>
+        <button phx-click="close_discord" class="btn btn-sm btn-ghost">✕</button>
+      </div>
+
+      <div class="p-4 space-y-3">
+        <textarea
+          id="scout-discord-text"
+          readonly
+          rows="12"
+          class="textarea textarea-bordered w-full bg-neutral-950/60 font-mono text-xs leading-relaxed"
+          onclick="this.select()"
+        ><%= @discord.text %></textarea>
+
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            phx-hook="CopyToClipboard"
+            id="scout-discord-copy"
+            data-url={@discord.text}
+            class="copy-link btn btn-sm btn-primary relative"
+          >
+            Copy
+            <div class="absolute w-[100px] !mr-[-140px] link-copied hidden">Copied</div>
+          </button>
+          <span class="text-xs text-gray-500">
+            Paste it as-is — Discord renders the times in each reader's own timezone.
+          </span>
+        </div>
+      </div>
+    </div>
+    <button class="modal-backdrop" phx-click="close_discord">close</button>
   </div>
 </main>
