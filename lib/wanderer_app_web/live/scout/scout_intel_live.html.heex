@@ -785,9 +785,18 @@
         `push_patch`, not a navigate), so the child does not need
         `sticky: true` either -- its own id in the DOM is enough. --%>
   <div :if={@planner_mounted?} id="scout-planner-pane" class={@tab != :planner && "hidden"}>
+    <%!-- `container:` is NOT optional here. `WandererAppWeb.live_view/1`
+          defaults EVERY LiveView's container to the ROOT page shell's
+          classes (`relative h-screen flex overflow-hidden bg-white`),
+          which is right for a routed page and ruinous for a child: it
+          dropped a white, viewport-tall flex row in the middle of this
+          page and the planner rendered as a squeezed column on a white
+          slab. `{:div, class: ""}` is the same thing the layout already
+          does for its nested `ServerStatusLive`. --%>
     {live_render(@socket, WandererAppWeb.ScoutPlannerLive,
       id: "scout-planner-live",
-      session: %{"user_id" => @current_user.id}
+      session: %{"user_id" => @current_user.id},
+      container: {:div, class: ""}
     )}
   </div>
 </main>

@@ -96,6 +96,26 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     assert render(planner_child(view)) =~ "scout-sweep-no-scope"
   end
 
+  # SHIPPED BROKEN in 1.103.4-chewy.82, reported as "why does it look so
+  # bad?": `WandererAppWeb.live_view/1` gives EVERY LiveView the root
+  # page shell's container classes, so the nested child arrived wrapped
+  # in `relative h-screen flex overflow-hidden bg-white` -- a white,
+  # viewport-tall flex row dropped inside the shell's `<main>`, which
+  # squeezed the planner into a column on a white slab and read as
+  # missing CSS.
+  test "the planner child's container carries none of the root shell's classes", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/scout/planner")
+
+    container = Regex.run(~r/<div id="scout-planner-live"[^>]*>/, html)
+
+    assert container, "the planner child did not render"
+    [container] = container
+
+    refute container =~ "h-screen"
+    refute container =~ "bg-white"
+    refute container =~ "flex"
+  end
+
   # The controls that make a route happen only exist once there IS a
   # route: picking the pilot and pushing it are meaningless with no plan,
   # and the page shipped once with neither control at all.
