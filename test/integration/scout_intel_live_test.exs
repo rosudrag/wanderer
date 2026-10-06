@@ -795,6 +795,34 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert restored =~ "Still Here"
     end
 
+    # PRODUCTION CRASH, 1.103.4-chewy.81: the hook fires once per mount,
+    # and a mount whose URL was `/scout/planner` has no log category at
+    # all -- `@filters` holds entries for `:structures` and `:spawns`
+    # only. A `Map.fetch!` on `:planner` took the whole LiveView down
+    # with `KeyError key :planner not found`, so every deep-link to the
+    # planner died about 100ms after it rendered.
+    test "a restore that lands on the planner category stores and renders nothing", %{conn: conn} do
+      Application.put_env(:wanderer_app, :scout_planner_enabled, true)
+      on_exit(fn -> Application.delete_env(:wanderer_app, :scout_planner_enabled) end)
+
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+
+      html =
+        render_hook(view, "ls_restore_scout_filters", %{
+          "value" =>
+            Jason.encode!(%{
+              "structures" => %{"days" => 1, "q" => "", "system_id" => nil, "space" => ["ns"]},
+              "spawns" => %{"days" => 1, "q" => "", "system_id" => nil, "space" => ["ns"]}
+            })
+        })
+
+      assert html =~ "scout-planner-pane"
+
+      # And the restored values were kept, not dropped: the next
+      # category the reader opens is the one they left.
+      assert render_patch(view, ~p"/scout/structures") =~ "scout-space-reset"
+    end
+
     test "a legacy payload migrates onto the category its tab key names, not the one on screen",
          %{conn: conn} do
       create_solar_system(%{solar_system_id: @hs_sys, system_class: 7, security: "0.9"})

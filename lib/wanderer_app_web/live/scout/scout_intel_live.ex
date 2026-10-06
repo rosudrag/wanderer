@@ -510,24 +510,38 @@ defmodule WandererAppWeb.ScoutIntelLive do
   #     `tab` key names (default structures, same default `restore_tab/2`
   #     always used) -- the OTHER category gets plain defaults, never a
   #     copy of a selection it was never actually true of.
+  #
+  # The hook fires once per MOUNT, and a mount whose URL was
+  # `/scout/planner` has no active log category at all -- `@tab` is
+  # `:planner`, which `@filters` deliberately holds no entry for (the
+  # planner child owns its own key). Restoring then means storing both
+  # categories for the next visit and touching nothing on screen; a
+  # `Map.fetch!` on `:planner` here crashed the LiveView on every
+  # deep-link to the planner, which is how this clause came to exist.
   defp restore_filters(socket, value) when is_binary(value) do
     case Jason.decode(value) do
       {:ok, %{} = saved} ->
         filters = restore_filters_map(saved)
-        active = Map.fetch!(filters, socket.assigns.tab)
-        changed? = active != current_category_filters(socket)
 
-        socket =
-          assign(socket,
-            filters: filters,
-            days: active.days,
-            q: active.q,
-            system_id: active.system_id,
-            space: active.space,
-            limit: @page
-          )
+        case Map.fetch(filters, socket.assigns.tab) do
+          {:ok, active} ->
+            changed? = active != current_category_filters(socket)
 
-        {:ok, socket, changed?}
+            socket =
+              assign(socket,
+                filters: filters,
+                days: active.days,
+                q: active.q,
+                system_id: active.system_id,
+                space: active.space,
+                limit: @page
+              )
+
+            {:ok, socket, changed?}
+
+          :error ->
+            {:ok, assign(socket, filters: filters), false}
+        end
 
       _ ->
         :unchanged
