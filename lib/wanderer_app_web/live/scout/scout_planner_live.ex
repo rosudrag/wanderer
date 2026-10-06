@@ -161,10 +161,18 @@ defmodule WandererAppWeb.ScoutPlannerLive do
         # The pilots this user could push a route onto. A route is set
         # through ESI with ONE character's token (a multi-stop route
         # cannot be set from the game client at all), so the page has to
-        # name which pilot -- there is no sensible default beyond "the
-        # first one you own", and the choice is sticky like every other
+        # name which pilot, and the choice is sticky like every other
         # control here.
-        characters = current_user.characters || []
+        #
+        # Sorted by name, case-insensitively, once here rather than in
+        # each of the three selects that render it (rank's pilot, the
+        # sweep's pilot, and one per split part): the account's own
+        # character order is an insertion order nobody can predict, and
+        # a list you have to scan is the one place on this page where
+        # picking the wrong row writes a route to the wrong pilot.
+        characters =
+          (current_user.characters || [])
+          |> Enum.sort_by(&String.downcase(to_string(&1.name)))
 
         {:ok,
          socket

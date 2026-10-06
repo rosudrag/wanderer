@@ -64,6 +64,35 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     assert html =~ "Search for an origin system to begin."
   end
 
+  # Every pilot select on this page renders `@characters` in one order,
+  # and the account's own order is an insertion order nobody can
+  # predict. Picking the wrong row here writes a route to the wrong
+  # pilot, so the list is sorted by name.
+  test "the pilot select lists characters alphabetically", %{conn: conn, character: character} do
+    for name <- ["zulu Scout", "Alpha Scout", "mike Scout"] do
+      insert(:character, %{user_id: character.user_id, name: name})
+    end
+
+    # The pilot select only exists once there is a route to push, so the
+    # origin has to be picked first -- same flow as the test below.
+    WandererApp.Cache.delete("scout:planner:adjacency")
+    put_system(990_310_001, "Pilotsortalpha")
+    put_system(990_310_002, "Pilotsortbravo")
+    put_jump(990_310_001, 990_310_002)
+
+    {:ok, view, _html} = live(conn, ~p"/scout/planner")
+    planner = planner_child(view)
+
+    render_click(planner, "select_origin", %{"id" => "990310001", "name" => "Pilotsortalpha"})
+    html = render_async(planner)
+
+    names = ["Alpha Scout", "mike Scout", "Refresh Reader", "zulu Scout"]
+    positions = Enum.map(names, &:binary.match(html, &1))
+
+    refute Enum.any?(positions, &(&1 == :nomatch)), "every pilot must render in the select"
+    assert positions == Enum.sort(positions), "pilots render out of alphabetical order"
+  end
+
   # The whole reason the planner is a nested child rather than a routed
   # page: switching category is a `push_patch` on the SHELL, so the child
   # is never torn down. A sweep costs seconds to compute, and remounting
