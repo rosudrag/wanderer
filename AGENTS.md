@@ -175,6 +175,21 @@ can be hundreds of rows, so any control that produces one must ALSO report its o
 to itself ("3 parts, longest 94 jumps"), and the panel it fills belongs ABOVE the long table, not
 after it. The same trap applies to any future per-row action on these pages.
 
+**A sweep a scout repeats every evening must be the SAME sweep, so `sweep_stable` is on by
+default.** Reported 2026-10-06: "i am getting completely different 3 way split in delve than we had
+before. We used to start in RF-K9W / 23G-XC / R5-MM8 ... I need consistent routes so that i do my
+officer and faction scouts". Nothing in the algorithm had changed; three inputs had. A sweep's
+MEMBERSHIP is time-dependent by default — anything inside `Planner.ttl_seconds(kind, class)` of its
+last coverage row is dropped as `:fresh` (so your own bot's coverage erases tomorrow's stops), and
+anything "Assign all" claimed sits in `scout_assignments_v1` for 12h and is excluded outright — and
+`Split`'s rebalance stopped at a 2 s WALL CLOCK, so a loaded box returned a different partition from
+the same stops. Membership change moves the start systems, which is what a human notices. Stable
+mode sets `include_fresh: true`, `exclude: []` and `budget_ms: 0`, making the plan a pure function
+of scope + bands + kind + k. Measured cost of exhaustive balancing on a 189-system graph
+(2026-10-06): k=3 4.8 s, k=4 2.5 s — both already identical to the budgeted answer, so only k=2
+(62 s) actually pays. Any future knob that silently narrows a plan by TIME belongs behind this same
+flag.
+
 **A `Set route` push reports what ESI actually said, and three things made that impossible.**
 Reported 2026-10-05: "I just tried to set planned route for Molden Heath and i wasnt getting it
 ingame". The page said "Route set: N waypoints" every time, and the server log held nothing at all.

@@ -462,6 +462,35 @@
             </span>
           </span>
         </label>
+
+        <%!-- CHEWY PATCH (stable sweeps): the reason the same region gave
+              three different start systems on three different days. A
+              sweep's MEMBERSHIP is normally time-dependent -- anything
+              still fresh for `kind` is dropped, and anything another
+              pilot claimed through "Assign all" is excluded for 12h --
+              so the stop set, and therefore the split and its start
+              systems, drift with the data. Stable mode takes the scope
+              EXACTLY as the region and the bands define it, and runs the
+              balance to exhaustion instead of stopping at a wall clock,
+              so the same scope gives the same parts every time. --%>
+        <label
+          class="flex min-w-0 items-start gap-1.5 text-[11px] text-gray-300 cursor-pointer col-span-2 sm:col-span-1"
+          title="Membership = every system in the scope and the ticked bands, regardless of when it was last scouted or who claimed it; balancing runs to exhaustion rather than stopping at a 2s wall clock. Same scope in, same parts out -- at the cost of a longer split on a big region at k=2."
+        >
+          <input
+            type="checkbox"
+            id="scout-sweep-stable"
+            checked={@sweep_stable}
+            phx-click="toggle_sweep_stable"
+            class="checkbox checkbox-xs mt-0.5"
+          />
+          <span>
+            Stable plan
+            <span class="block text-gray-500">
+              same scope ⇒ same parts; ignores freshness and claims
+            </span>
+          </span>
+        </label>
       </div>
 
       <div class="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-neutral-800/70">

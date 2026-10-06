@@ -209,6 +209,11 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            sweep_kind: @default_kind,
            sweep_security: @default_security,
            sweep_compress: true,
+           # CHEWY PATCH (stable sweeps): on by default. A plan a scout
+           # repeats every evening is worth more than a plan that skips
+           # what was looked at this morning -- and the drifting version
+           # is one click away.
+           sweep_stable: true,
            sweep_start: nil,
            sweep_k: 1,
            sweep_result: nil,
@@ -522,6 +527,19 @@ defmodule WandererAppWeb.ScoutPlannerLive do
      |> persist_filters()}
   end
 
+  # CHEWY PATCH (stable sweeps): see `sweep_opts/1` and `load_split/1`.
+  # Both halves of the drift are turned off together on purpose -- a
+  # membership that still moved would make a deterministic split
+  # pointless, and a deterministic membership whose split still stopped
+  # at a wall clock would still hand back different parts under load.
+  def handle_event("toggle_sweep_stable", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(sweep_stable: !socket.assigns.sweep_stable)
+     |> load_sweep()
+     |> persist_filters()}
+  end
+
   def handle_event("select_sweep_start", %{"id" => id}, socket) do
     case Integer.parse(to_string(id)) do
       {value, ""} ->
@@ -687,6 +705,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
       "sweep_kind" => to_string(socket.assigns.sweep_kind),
       "sweep_security" => Enum.map(socket.assigns.sweep_security, &to_string/1),
       "sweep_compress" => socket.assigns.sweep_compress,
+      "sweep_stable" => socket.assigns.sweep_stable,
       "sweep_start" => socket.assigns.sweep_start,
       "sweep_k" => socket.assigns.sweep_k
     }
@@ -711,6 +730,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            sweep_kind: restore_sweep_kind(saved, socket.assigns.sweep_kind),
            sweep_security: restore_sweep_security(saved),
            sweep_compress: restore_sweep_compress(saved, socket.assigns.sweep_compress),
+           sweep_stable: restore_sweep_stable(saved, socket.assigns.sweep_stable),
            sweep_start: restore_sweep_start(saved),
            sweep_k: restore_sweep_k(saved, socket.assigns.sweep_k)
          )}
@@ -800,6 +820,11 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     do: value
 
   defp restore_sweep_compress(_saved, default), do: default
+
+  defp restore_sweep_stable(%{"sweep_stable" => value}, _default) when is_boolean(value),
+    do: value
+
+  defp restore_sweep_stable(_saved, default), do: default
 
   defp restore_sweep_start(%{"sweep_start" => id}) when is_integer(id) and id > 0, do: id
   defp restore_sweep_start(_saved), do: nil
@@ -1127,11 +1152,20 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     end
   end
 
-  # `exclude` is the hard-zero half of `scout_assignments_v1` (design doc
-  # section 5, "the planner then treats assigned-to-someone-else exactly
-  # as it treats avoided"): once "Assign all" claims a part's systems,
-  # the NEXT sweep over the same scope must not re-offer them to a
-  # different pilot, or two splits over the same region keep competing.
+  # Two things normally make a sweep's MEMBERSHIP time-dependent, and
+  # together they are why the same region handed back different parts and
+  # different start systems on different evenings:
+  #
+  #   * freshness -- anything inside `Planner.ttl_seconds(kind, class)` of
+  #     its last coverage row is dropped, so a system scouted this morning
+  #     silently leaves the route;
+  #   * `exclude` -- the hard-zero half of `scout_assignments_v1` (design
+  #     doc section 5): once "Assign all" claims a part's systems, the
+  #     next sweep over the same scope must not re-offer them.
+  #
+  # Both are right for "what still needs doing right now" and wrong for
+  # "the route I fly every evening", so `sweep_stable` turns both off and
+  # takes the scope exactly as the region and the ticked bands define it.
   #
   # Returned as a thunk so the `Assignments` read runs inside the task
   # too -- it is a database round trip, and the point of the task is that
@@ -1142,6 +1176,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     security = socket.assigns.sweep_security
     start = socket.assigns.sweep_start
     compress = socket.assigns.sweep_compress
+    stable = socket.assigns.sweep_stable
 
     fn ->
       [
@@ -1150,7 +1185,9 @@ defmodule WandererAppWeb.ScoutPlannerLive do
         security: security,
         start: start,
         compress: compress,
-        exclude: kind |> Assignments.active_system_ids() |> MapSet.to_list()
+        include_fresh: stable,
+        exclude:
+          if(stable, do: [], else: kind |> Assignments.active_system_ids() |> MapSet.to_list())
       ]
     end
   end
@@ -1186,10 +1223,19 @@ defmodule WandererAppWeb.ScoutPlannerLive do
 
   # k=1 is just the sweep above with nowhere to split; `Split.split/3`
   # only runs once a second pilot is actually in the picture -- and it
-  # spends up to two seconds rebalancing, which is exactly why it is its
-  # own task rather than a tail of the sweep's.
+  # rebalances for seconds, which is exactly why it is its own task
+  # rather than a tail of the sweep's.
+  #
+  # `budget_ms: 0` under `sweep_stable`: the rebalance loop normally
+  # stops at a 2s WALL CLOCK, which makes the partition depend on how
+  # busy the box was, not only on the input. Measured on a 189-system
+  # graph (2026-10-06): k=3 converges in 4.8s and k=4 in 2.5s, where the
+  # budget never binds and the answer is already the exhaustive one; only
+  # k=2 runs long (62s), because its parts are biggest and its boundary
+  # longest. Stable mode buys determinism at that price; the default
+  # (unstable) path keeps the clock.
   defp load_split(socket) do
-    %{sweep_result: result, sweep_k: k} = socket.assigns
+    %{sweep_result: result, sweep_k: k, sweep_stable: stable} = socket.assigns
 
     if is_nil(result) or k <= 1 do
       assign(socket,
@@ -1201,10 +1247,11 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     else
       system_ids = Enum.map(result.stops, & &1.solar_system_id)
       token = socket.assigns.split_token + 1
+      opts = if stable, do: [budget_ms: 0], else: []
 
       socket
       |> assign(split_token: token, split_loading?: true)
-      |> start_async({:split, token}, fn -> Split.split(system_ids, k, []) end)
+      |> start_async({:split, token}, fn -> Split.split(system_ids, k, opts) end)
     end
   end
 

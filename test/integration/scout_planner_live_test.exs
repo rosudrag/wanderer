@@ -276,6 +276,43 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
       refute html =~ ~s(<tr>\n      <td colspan="1")
     end
 
+    # CHEWY PATCH (stable sweeps), reported 2026-10-06: "i am getting
+    # completely different 3 way split in delve than we had before ... I
+    # need consistent routes". A sweep's membership is normally
+    # time-dependent -- a system scouted this morning is dropped as
+    # `:fresh` -- so the stop set, the split and its start systems drift
+    # between runs over the same region. Stable mode (default) takes the
+    # scope exactly as the region and the bands define it.
+    test "stable mode keeps a freshly-scouted system as a stop; unticking it drops the system",
+         %{conn: conn} do
+      {:ok, _row} =
+        WandererApp.Api.ScoutSystemCoverage.create(
+          %{
+            solar_system_id: 990_500_003,
+            kind: :sigs,
+            observed_at: DateTime.utc_now(),
+            source: "test"
+          },
+          authorize?: false
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
+
+      render_click(planner, "switch_mode", %{"mode" => "sweep"})
+      render_click(planner, "add_region", %{"scope" => "sweep", "id" => "1"})
+      stable = sweep_html(planner)
+
+      assert stable =~ "Sweeplive3",
+             "stable mode must sweep the whole scope, freshness included"
+
+      render_click(planner, "toggle_sweep_stable", %{})
+      drifting = sweep_html(planner)
+
+      refute drifting =~ "Sweeplive3",
+             "with stable off, a system inside its kind's TTL is not due and must drop out"
+    end
+
     test "switching to sweep mode and setting a scope renders start suggestions", %{
       conn: conn
     } do
