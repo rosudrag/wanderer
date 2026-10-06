@@ -105,6 +105,36 @@ defmodule WandererAppWeb.ScoutDiscordTest do
     assert length(String.split(text, "•")) == 2
   end
 
+  # Asked for 2026-10-06: "the discord copy paste doesnt need the 'last
+  # seen'". These boards only ever carry structures the feed is still
+  # confirming, so the stamp read "a few minutes ago" on every row and
+  # spent budget saying nothing.
+  test "the standing-opportunity boards carry no last-seen stamp" do
+    seen_unix = DateTime.to_unix(~U[2026-10-05 17:43:00Z])
+
+    for board <- [:unanchored, :abandoned, :no_fuel] do
+      %{text: text} = ScoutDiscord.message(board, [structure()], opts())
+
+      assert text =~ "Sosala Fortizar"
+      refute text =~ "seen "
+      refute text =~ "<t:#{seen_unix}:R>"
+    end
+  end
+
+  # Abandoned (asset safety off) and NoFuel (low power) are two errands,
+  # so they are two boards with two headings rather than one labelled
+  # "Abandoned / no fuel".
+  test "abandoned and no-fuel are separate boards with their own headings" do
+    %{text: abandoned} =
+      ScoutDiscord.message(:abandoned, [structure(%{status: "Abandoned"})], opts())
+
+    %{text: no_fuel} = ScoutDiscord.message(:no_fuel, [structure(%{status: "NoFuel"})], opts())
+
+    assert abandoned =~ "Abandoned · 1"
+    refute abandoned =~ "No fuel"
+    assert no_fuel =~ "No fuel · 1"
+  end
+
   describe "the 2000-character budget" do
     setup do
       rows =
@@ -152,7 +182,7 @@ defmodule WandererAppWeb.ScoutDiscordTest do
 
   describe "parse_board/1" do
     test "accepts the boards the page renders" do
-      for board <- ~w(unanchored timers anchoring unanchoring abandoned spawns digest) do
+      for board <- ~w(unanchored timers anchoring unanchoring abandoned no_fuel spawns digest) do
         assert {:ok, _atom} = ScoutDiscord.parse_board(board)
       end
     end

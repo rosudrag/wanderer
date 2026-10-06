@@ -199,7 +199,9 @@ anchoring_family/0  : Anchoring, AnchorVulnerable, Deploying, Fitting, Onlining
 unanchoring_family/0: Unanchoring
 reinforced_family/0 : ArmorReinforced, HullReinforced, ShieldReinforced
 vulnerable_family/0 : ArmorVulnerable, HullVulnerable
-dead_family/0       : Abandoned, NoFuel
+abandoned_family/0  : Abandoned
+no_fuel_family/0    : NoFuel
+dead_family/0       : Abandoned, NoFuel (the two above, for grouping only)
 steady_family/0     : FullPower, Anchored, ShieldVulnerable, FobInvulnerable
 ```
 
@@ -225,7 +227,8 @@ action, and the alert described below.
 |`:unanchored`|`status in Status.unanchored_family()`|
 |`:anchoring`|`status in Status.anchoring_family()`|
 |`:unanchoring`|`status in Status.unanchoring_family()`|
-|`:abandoned`|`status in Status.dead_family()`|
+|`:abandoned`|`status in Status.abandoned_family()`|
+|`:no_fuel`|`status in Status.no_fuel_family()`|
 
 All four feed a dedicated `/scout` structures-tab table, latest sighting
 per `structure_id` — the same `Ash.Query.distinct([:structure_id]) |>
@@ -237,10 +240,13 @@ top of `:search`:
   cheapest kills in the game.
 - **Unanchoring** — a structure being pulled out of the ground: a one-shot
   opportunity with a hard deadline nobody reports. See "Predicted max out".
-- **Abandoned** — asset safety off (`Abandoned`) or unfuelled (`NoFuel`).
-  Neither carries a timer, so neither can appear in the timer table, and
-  before this board both were visible only as one muted row somewhere in the
-  flat log.
+- **Abandoned** — asset safety off: everything inside drops.
+- **No fuel** — low power, no tether, no services. Its own board since
+  1.103.4-chewy.86; it shared one with Abandoned through `dead_family/0`,
+  and "this is loot now" and "this owner stopped paying" are different
+  errands. Neither carries a timer, so neither can appear in the timer
+  table, and before these boards both were visible only as one muted row
+  somewhere in the flat log.
 
 Every one of them honours the search / system filter / window except
 `:unanchored`, which deliberately does not — see below.

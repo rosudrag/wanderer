@@ -371,6 +371,39 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
     end
   end
 
+  # Asked for 2026-10-06. `Abandoned` (asset safety off, everything
+  # inside drops) and `NoFuel` (low power, owner not paying attention)
+  # shared one board through `Status.dead_family/0`; they are different
+  # errands, so they are now two boards fed by two read actions.
+  describe "the abandoned and no-fuel tables" do
+    test "each board carries only its own status", %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_070,
+        structure_name: "Dropped Azbel",
+        status: "Abandoned",
+        observed_at: ago(5)
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_071,
+        structure_name: "Dry Raitaru",
+        status: "NoFuel",
+        observed_at: ago(5)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      abandoned = view |> element("#scout-abandoned") |> render()
+      no_fuel = view |> element("#scout-no-fuel") |> render()
+
+      assert abandoned =~ "Dropped Azbel"
+      refute abandoned =~ "Dry Raitaru"
+
+      assert no_fuel =~ "Dry Raitaru"
+      refute no_fuel =~ "Dropped Azbel"
+    end
+  end
+
   describe "the anchoring and unanchoring tables" do
     test "the anchoring table shows only ANCHORING-family statuses", %{conn: conn} do
       structure(%{

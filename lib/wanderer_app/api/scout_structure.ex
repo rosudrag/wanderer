@@ -180,13 +180,15 @@ defmodule WandererApp.Api.ScoutStructure do
       prepare build(sort: [last_confirmed_at: :desc], load: [:archived])
     end
 
-    # Nothing to shoot and nothing to wait for: asset safety off
-    # (`Abandoned`) or simply unfuelled (`NoFuel`) -- the highest-value
-    # findings short of a running timer. `presence == :seen` for the same
-    # reason every other board filters it: an unfuelled hull somebody has
-    # since refuelled comes back as `:cleared` and stops being a target,
-    # even though its last stored `status` is still "NoFuel" (a steady id
-    # carries no state to overwrite it with).
+    # Asset safety off: everything inside drops. Its own board since
+    # 1.103.4-chewy.86 -- it used to share one with `NoFuel` through
+    # `Status.dead_family/0`, and the two are not the same errand: an
+    # abandoned hull is loot, an unfuelled one is a hull whose owner
+    # stopped paying and may still come back. `presence == :seen` for the
+    # same reason every other board filters it: one that was since
+    # refuelled or killed comes back as `:cleared`/`:gone` and stops
+    # being a target, even though its last stored `status` still says so
+    # (a steady id carries no state to overwrite it with).
     read :abandoned do
       argument :since, :utc_datetime, allow_nil?: false
       argument :system_id, :integer
@@ -196,7 +198,35 @@ defmodule WandererApp.Api.ScoutStructure do
                presence == :seen and
                  archived == false and
                  last_confirmed_at >= ^arg(:since) and
-                 status in ^WandererApp.Scout.Status.dead_family() and
+                 status in ^WandererApp.Scout.Status.abandoned_family() and
+                 (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
+                 (is_nil(^arg(:q)) or
+                    fragment(
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      structure_name,
+                      owner_name,
+                      group_name,
+                      nearest_celestial,
+                      ^arg(:q)
+                    ))
+             )
+
+      prepare build(sort: [last_confirmed_at: :desc], load: [:archived])
+    end
+
+    # Low power: no tether, no services, and an owner who is not paying
+    # attention. Same shape as `:abandoned`, different half of the old
+    # `Status.dead_family/0`.
+    read :no_fuel do
+      argument :since, :utc_datetime, allow_nil?: false
+      argument :system_id, :integer
+      argument :q, :string
+
+      filter expr(
+               presence == :seen and
+                 archived == false and
+                 last_confirmed_at >= ^arg(:since) and
+                 status in ^WandererApp.Scout.Status.no_fuel_family() and
                  (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
                  (is_nil(^arg(:q)) or
                     fragment(

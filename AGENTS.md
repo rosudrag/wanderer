@@ -93,7 +93,8 @@ Everything else on the page stays muted so this one reads. See `docs/chewy/scout
 
 **On `/scout`, a board is a finding and the flat log is the tape.** Each status family that implies
 an action gets its own `panel/1` board fed by its own scoped read action — Unanchored, Live timers,
-Unanchoring, Anchoring, Abandoned (`Status.dead_family/0`: asset safety off or unfuelled) — and the
+Unanchoring, Anchoring, Abandoned (`Status.abandoned_family/0`: asset safety off) and No fuel
+(`Status.no_fuel_family/0`: low power) — and the
 window-bounded flat log sits at the bottom of both tabs in `log_panel/1`: dashed border, monospace
 label, muted body, deliberately NOT a `panel/1`. Two rules that follow: a new status worth acting
 on gets a read action and a board, never a column on the log; and ordering is assigned in the BEAM

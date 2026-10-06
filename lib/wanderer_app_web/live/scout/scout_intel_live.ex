@@ -134,6 +134,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
          structures: [],
          anchoring_structures: [],
          abandoned_structures: [],
+         no_fuel_structures: [],
          unanchoring_structures: [],
          archived_structures: [],
          spawns: [],
@@ -688,11 +689,18 @@ defmodule WandererAppWeb.ScoutIntelLive do
     {anchoring_structures, _more} =
       read(ScoutStructure, :anchoring, Map.put(filters, :since, since), limit)
 
-    # Nothing to shoot and nothing to wait for: asset safety off, or
-    # simply unfuelled. `:abandoned` mirrors `:search`'s filters, scoped
-    # server-side to WandererApp.Scout.Status.dead_family/0.
+    # Loot: asset safety is off and everything inside drops.
+    # `:abandoned` mirrors `:search`'s filters, scoped server-side to
+    # WandererApp.Scout.Status.abandoned_family/0.
     {abandoned_structures, _more} =
       read(ScoutStructure, :abandoned, Map.put(filters, :since, since), limit)
+
+    # Low power -- no tether, no services. Its own board since
+    # 1.103.4-chewy.86: it shared one with Abandoned and the two are
+    # different errands, so a reader scanning for loot had to read status
+    # labels row by row to tell them apart.
+    {no_fuel_structures, _more} =
+      read(ScoutStructure, :no_fuel, Map.put(filters, :since, since), limit)
 
     # Being pulled out of the ground: a one-shot opportunity with a
     # hard deadline. `:unanchoring` mirrors `:search`'s filters, scoped
@@ -718,6 +726,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
       # invulnerability ends next is the one worth undocking for.
       anchoring_structures: by_deadline(anchoring_structures),
       abandoned_structures: by_recent(abandoned_structures),
+      no_fuel_structures: by_recent(no_fuel_structures),
       unanchoring_structures: by_predicted_out(unanchoring_structures),
       archived_structures: by_archived(archived_structures),
       more?: more_structures?,
@@ -729,6 +738,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
       structures,
       anchoring_structures,
       abandoned_structures,
+      no_fuel_structures,
       unanchoring_structures,
       archived_structures
     ])
@@ -765,6 +775,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
       structures: [],
       anchoring_structures: [],
       abandoned_structures: [],
+      no_fuel_structures: [],
       unanchoring_structures: [],
       archived_structures: [],
       fresh_spawns: fresh_spawns
@@ -952,9 +963,12 @@ defmodule WandererAppWeb.ScoutIntelLive do
   defp discord_sections(socket) do
     case socket.assigns.tab do
       :structures ->
-        Enum.map([:unanchored, :timers, :anchoring, :unanchoring, :abandoned], fn board ->
-          {board, discord_rows(board, socket)}
-        end)
+        Enum.map(
+          [:unanchored, :timers, :anchoring, :unanchoring, :abandoned, :no_fuel],
+          fn board ->
+            {board, discord_rows(board, socket)}
+          end
+        )
 
       :spawns ->
         [
@@ -969,6 +983,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
   defp discord_rows(:anchoring, socket), do: socket.assigns.anchoring_structures
   defp discord_rows(:unanchoring, socket), do: socket.assigns.unanchoring_structures
   defp discord_rows(:abandoned, socket), do: socket.assigns.abandoned_structures
+  defp discord_rows(:no_fuel, socket), do: socket.assigns.no_fuel_structures
   defp discord_rows(:spawns, socket), do: socket.assigns.fresh_spawns
 
   defp discord_opts(socket) do

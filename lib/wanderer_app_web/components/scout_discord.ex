@@ -51,7 +51,15 @@ defmodule WandererAppWeb.ScoutDiscord do
   # Boards, in the order the digest packs them: the rarest and most
   # valuable finding first, then the things with a clock, then the
   # standing opportunities. Same order as the page.
-  @digest_boards [:unanchored, :timers, :anchoring, :unanchoring, :abandoned, :spawns]
+  @digest_boards [
+    :unanchored,
+    :timers,
+    :anchoring,
+    :unanchoring,
+    :abandoned,
+    :no_fuel,
+    :spawns
+  ]
 
   @boards @digest_boards
 
@@ -243,18 +251,20 @@ defmodule WandererAppWeb.ScoutDiscord do
     "• " <> bound <> " · " <> subject(row) <> " · " <> place(row, opts) <> owner(row)
   end
 
+  # No "seen N ago" on either of these: the boards only ever carry
+  # structures the feed is still confirming (`presence == :seen`), so the
+  # stamp said "a few minutes ago" on every row and cost a line's worth
+  # of the 2000-character budget to say nothing.
   defp line(:unanchored, row, opts) do
-    "• " <>
-      subject(row) <>
-      " · " <> place(row, opts) <> owner(row) <> " · seen " <> stamp(row.last_confirmed_at, "R")
+    "• " <> subject(row) <> " · " <> place(row, opts) <> owner(row)
   end
 
   defp line(:abandoned, row, opts) do
-    "• " <>
-      subject(row) <>
-      " · " <>
-      place(row, opts) <>
-      owner(row) <> status(row) <> " · seen " <> stamp(row.last_confirmed_at, "R")
+    "• " <> subject(row) <> " · " <> place(row, opts) <> owner(row) <> status(row)
+  end
+
+  defp line(:no_fuel, row, opts) do
+    "• " <> subject(row) <> " · " <> place(row, opts) <> owner(row) <> status(row)
   end
 
   defp line(:spawns, row, opts) do
@@ -323,7 +333,8 @@ defmodule WandererAppWeb.ScoutDiscord do
   defp label(:timers), do: "⏳ Timers running"
   defp label(:anchoring), do: "🔧 Anchoring"
   defp label(:unanchoring), do: "📦 Unanchoring"
-  defp label(:abandoned), do: "💀 Abandoned / no fuel"
+  defp label(:abandoned), do: "💀 Abandoned"
+  defp label(:no_fuel), do: "⛽ No fuel"
   defp label(:spawns), do: "⭐ Spawns, last 24h"
 
   defp empty(:spawns), do: "_Nothing in the last 24 hours._"

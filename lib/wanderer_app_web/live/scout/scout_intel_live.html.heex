@@ -109,7 +109,7 @@
     </button>
   </.scout_toolbar>
 
-  <div :if={@tab == :structures} class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
+  <div :if={@tab == :structures} class="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3 mb-5">
     <.stat
       id="scout-stat-unanchored"
       label="Unanchored"
@@ -137,8 +137,15 @@
       id="scout-stat-abandoned"
       label="Abandoned"
       value={to_string(length(@abandoned_structures))}
-      hint="asset safety off / no fuel"
+      hint="asset safety off"
       tone={if @abandoned_structures != [], do: :good, else: :neutral}
+    />
+    <.stat
+      id="scout-stat-no-fuel"
+      label="No fuel"
+      value={to_string(length(@no_fuel_structures))}
+      hint="low power"
+      tone={if @no_fuel_structures != [], do: :good, else: :neutral}
     />
     <.stat
       label="Structures seen"
@@ -343,7 +350,7 @@
       title="Abandoned"
       count={length(@abandoned_structures)}
       tone={if @abandoned_structures != [], do: :good, else: :neutral}
-      hint="asset safety off, or unfuelled"
+      hint="asset safety off — everything inside drops"
       copy="abandoned"
     >
       <.grid id="scout-abandoned">
@@ -376,7 +383,56 @@
             <td><.archive_cell row={row} /></td>
           </tr>
           <.empty :if={@abandoned_structures == []} cols={7}>
-            Nothing abandoned or unfuelled in this window.
+            Nothing abandoned in this window.
+          </.empty>
+        </tbody>
+      </.grid>
+    </.panel>
+
+    <%!-- CHEWY PATCH: its own board since 1.103.4-chewy.86. `NoFuel` and
+          `Abandoned` shared one through `Status.dead_family/0`, and they
+          are not the same errand: an abandoned hull is loot now, an
+          unfuelled one is an owner who stopped paying and may yet come
+          back. One table meant reading the status column row by row to
+          tell which was which. --%>
+    <.panel
+      title="No fuel"
+      count={length(@no_fuel_structures)}
+      tone={if @no_fuel_structures != [], do: :good, else: :neutral}
+      hint="low power — no tether, no services"
+      copy="no_fuel"
+    >
+      <.grid id="scout-no-fuel">
+        <thead>
+          <tr>
+            <th>Structure</th>
+            <th>System</th>
+            <th>Owner</th>
+            <th>Status</th>
+            <th>Where</th>
+            <th class="w-32">Seen</th>
+            <th class="w-10"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={row <- @no_fuel_structures} id={"scout-no-fuel-#{row.id}"}>
+            <td>
+              <.subject
+                name={row.structure_name || to_string(row.structure_id)}
+                badge={row.group_name}
+                click="show_structure"
+                phx-value-id={row.structure_id}
+              />
+            </td>
+            <td><.sys row={row} systems={@systems} /></td>
+            <td class="text-gray-300">{row.owner_name || "—"}</td>
+            <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            <td class="text-xs text-gray-400">{where(row)}</td>
+            <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            <td><.archive_cell row={row} /></td>
+          </tr>
+          <.empty :if={@no_fuel_structures == []} cols={7}>
+            Nothing unfuelled in this window.
           </.empty>
         </tbody>
       </.grid>

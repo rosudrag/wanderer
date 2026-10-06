@@ -40,9 +40,19 @@ defmodule WandererApp.Scout.Status do
   # Rows 11-12: a running timer, shootable right now.
   @vulnerable_family ~w(ArmorVulnerable HullVulnerable)
 
-  # Row 8 and row 13: asset safety off, or simply unfuelled. The
-  # highest-value findings short of an active timer.
-  @dead_family ~w(Abandoned NoFuel)
+  # Row 8: asset safety off, everything inside drops.
+  @abandoned_family ~w(Abandoned)
+
+  # Row 13: low power -- no tether, no services, an owner not paying
+  # attention.
+  @no_fuel_family ~w(NoFuel)
+
+  # The two together. Still one family wherever a structure only needs
+  # grouping rather than acting on (the status badge's colour, the
+  # retired sighting resource); `/scout` renders them as two boards,
+  # because "this is loot" and "this owner stopped paying" are different
+  # errands.
+  @dead_family @abandoned_family ++ @no_fuel_family
 
   # Rows 14-15 plus the orbital steady labels: boring, still not
   # journalled by the eveknob writer (unchanged behaviour).
@@ -71,6 +81,14 @@ defmodule WandererApp.Scout.Status do
   @doc "Abandoned, NoFuel."
   @spec dead_family() :: [String.t()]
   def dead_family, do: @dead_family
+
+  @doc "Abandoned — asset safety off."
+  @spec abandoned_family() :: [String.t()]
+  def abandoned_family, do: @abandoned_family
+
+  @doc "NoFuel — low power."
+  @spec no_fuel_family() :: [String.t()]
+  def no_fuel_family, do: @no_fuel_family
 
   @doc "FullPower, Anchored, ShieldVulnerable, FobInvulnerable."
   @spec steady_family() :: [String.t()]
