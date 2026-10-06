@@ -104,14 +104,21 @@ defmodule WandererAppWeb.ScoutIntelLive do
         Process.send_after(self(), :tick, @tick)
       end
 
+      # Everything category-shaped starts empty here and is filled by
+      # `handle_params/3`, which runs right after this for every entry
+      # (first load AND every later patch) -- never twice, and never for
+      # `:planner`, which owns no read on this socket at all. A
+      # structures read fired from here would be the six queries this
+      # whole redesign exists to stop running when the first paint is
+      # actually spawns.
       {:ok,
        socket
        |> assign(
          active_tab: :scout,
-         page_title: "Scout Log",
+         page_title: "Scout",
          tab: :structures,
-         days: @default_days,
          windows: @windows,
+         days: @default_days,
          q: "",
          system_id: nil,
          space: Space.all(),
@@ -121,33 +128,97 @@ defmodule WandererAppWeb.ScoutIntelLive do
          discord: nil,
          spawn_detail: nil,
          systems: %{},
+         now: DateTime.utc_now(),
+         unanchored_structures: [],
+         active_timers: [],
+         structures: [],
+         anchoring_structures: [],
+         abandoned_structures: [],
+         unanchoring_structures: [],
+         archived_structures: [],
+         spawns: [],
+         fresh_spawns: [],
+         more?: false,
+         last_observed: %{structures: nil, spawns: nil},
+         totals: nil,
+         # Lazy-mounted, then NEVER unmounted -- see `handle_params/3`.
+         # Tearing the child down on a tab switch would throw away a
+         # rank/sweep that cost real seconds to compute.
+         planner_mounted?: false,
+         filters: default_filters(),
          can_manage_access?: ScoutAccess.superadmin?(socket.assigns.current_user.id)
-       )
-       |> load()}
+       )}
     else
       {:ok, socket |> push_navigate(to: ~p"/maps")}
     end
   end
 
+  # -------------------------------------------------------------------
+  # URL-driven categories
+  #
+  # The URL is the one source of truth for which category is showing --
+  # `<.scout_tabs>` renders three `<.link patch>`s (scout_components.ex),
+  # so switching category is a patch to THIS LiveView, never a remount:
+  # no layout fade, no scroll reset, browser back/forward works, and
+  # every category is deep-linkable. `live_action` is the router's own
+  # answer to "which category" (router.ex's :scout live_session), so
+  # there is nothing left to parse out of `params`.
+  # -------------------------------------------------------------------
+
   @impl true
-  def handle_event("select_tab", %{"tab" => tab}, socket) when tab in ~w(spawns structures) do
-    {:noreply,
-     socket
-     |> assign(
-       tab: String.to_existing_atom(tab),
-       limit: @page,
-       detail: nil,
-       spawn_detail: nil,
-       discord: nil
-     )
-     |> load()
-     |> persist_filters()}
+  def handle_params(_params, _uri, socket) do
+    case socket.assigns.live_action do
+      :planner ->
+        if WandererApp.Env.scout_planner_enabled?() do
+          {:noreply,
+           assign(socket, tab: :planner, page_title: "Scout Planner", planner_mounted?: true)}
+        else
+          # The flag can flip between a bookmark being made and being
+          # opened; same message `ScoutPlannerLive` itself used to give
+          # before the planner moved in here as a nested LiveView.
+          {:noreply,
+           socket
+           |> put_flash(:error, "The scout planner is not enabled on this deployment.")
+           |> push_patch(to: ~p"/scout/structures")
+           |> enter_category(:structures)}
+        end
+
+      category when category in [:structures, :spawns] ->
+        {:noreply, enter_category(socket, category)}
+    end
   end
 
+  # The category's own reads, and the filters a reader left it with --
+  # `@days/@q/@system_id/@space` stay as "the ACTIVE category's
+  # values", so the rest of this module and the template barely know
+  # two categories' worth of filters exist at all.
+  defp enter_category(socket, category) do
+    cat_filters = Map.fetch!(socket.assigns.filters, category)
+
+    socket
+    |> assign(
+      tab: category,
+      page_title: category_title(category),
+      days: cat_filters.days,
+      q: cat_filters.q,
+      system_id: cat_filters.system_id,
+      space: cat_filters.space,
+      limit: @page,
+      detail: nil,
+      spawn_detail: nil,
+      discord: nil
+    )
+    |> load()
+  end
+
+  defp category_title(:structures), do: "Scout Log · Structures"
+  defp category_title(:spawns), do: "Scout Log · Spawns"
+
+  @impl true
   def handle_event("select_window", %{"days" => days}, socket) do
     case Integer.parse(days) do
       {days, ""} ->
-        {:noreply, socket |> assign(days: days, limit: @page) |> load() |> persist_filters()}
+        {:noreply, socket |> apply_filter(:days, days) |> load() |> persist_filters()}
 
       _ ->
         {:noreply, socket}
@@ -155,7 +226,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
   end
 
   def handle_event("search", %{"q" => q}, socket) do
-    {:noreply, socket |> assign(q: q, limit: @page) |> load() |> persist_filters()}
+    {:noreply, socket |> apply_filter(:q, q) |> load() |> persist_filters()}
   end
 
   # Clicking a system is the filter nobody has to discover; the chip in
@@ -163,8 +234,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
   def handle_event("filter_system", %{"id" => id}, socket) do
     case Integer.parse(to_string(id)) do
       {system_id, ""} ->
-        {:noreply,
-         socket |> assign(system_id: system_id, limit: @page) |> load() |> persist_filters()}
+        {:noreply, socket |> apply_filter(:system_id, system_id) |> load() |> persist_filters()}
 
       _ ->
         {:noreply, socket}
@@ -172,7 +242,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
   end
 
   def handle_event("clear_system", _params, socket) do
-    {:noreply, socket |> assign(system_id: nil, limit: @page) |> load() |> persist_filters()}
+    {:noreply, socket |> apply_filter(:system_id, nil) |> load() |> persist_filters()}
   end
 
   # The filter this page exists for: "everything except highsec" is one
@@ -182,13 +252,13 @@ defmodule WandererAppWeb.ScoutIntelLive do
   def handle_event("toggle_space", %{"type" => type}, socket) do
     {:noreply,
      socket
-     |> assign(space: Space.toggle(socket.assigns.space, type), limit: @page)
+     |> apply_filter(:space, Space.toggle(socket.assigns.space, type))
      |> load()
      |> persist_filters()}
   end
 
   def handle_event("reset_space", _params, socket) do
-    {:noreply, socket |> assign(space: Space.all(), limit: @page) |> load() |> persist_filters()}
+    {:noreply, socket |> apply_filter(:space, Space.all()) |> load() |> persist_filters()}
   end
 
   # The browser hands back the filters this page was last left with --
@@ -197,9 +267,17 @@ defmodule WandererAppWeb.ScoutIntelLive do
   # highsec off and picked a 24-hour window meant it for the next visit
   # too, and re-picking four controls on every page load was the single
   # most grating thing about this page.
+  #
+  # Only the ACTIVE category's values can possibly differ from what is
+  # already on screen -- the other category's restored values land in
+  # `@filters` either way, ready for the next time it is entered -- so
+  # `load/1` only runs when they actually do. Always reloading here
+  # would have traded the old async-tab flash for a guaranteed second
+  # round of reads on every single page load.
   def handle_event("ls_restore_scout_filters", %{"value" => value}, socket) do
     case restore_filters(socket, value) do
-      {:ok, socket} -> {:noreply, load(socket)}
+      {:ok, socket, true} -> {:noreply, load(socket)}
+      {:ok, socket, false} -> {:noreply, socket}
       :unchanged -> {:noreply, socket}
     end
   end
@@ -356,7 +434,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   # -------------------------------------------------------------------
-  # Sticky filters
+  # Sticky filters, per category
   #
   # The four controls in the toolbar survive a reload, a new tab and a
   # restart, in the browser rather than on the server: a per-user server
@@ -365,40 +443,91 @@ defmodule WandererAppWeb.ScoutIntelLive do
   # pushes `ls_restore_<key>` once on mount and listens for
   # `ls_update_<key>` -- so this costs no JavaScript.
   #
-  # `limit` is deliberately NOT persisted: "Load more" is about the page
-  # you are on, not about how you like to read the log.
+  # ONE flat blob used to back both tabs, which is how "High" picked on
+  # structures silently applied to spawns -- a reader had no way to
+  # notice until the spawns board came back wrong. `scout_filters` now
+  # holds one sub-object per category (the planner keeps its own key,
+  # `scout_planner_filters`, in `ScoutPlannerLive`); `@filters` is that
+  # same nested map on the socket, kept current for BOTH categories by
+  # `apply_filter/3` on every change, so there is nothing left to do at
+  # a category switch but read the incoming category's entry back out
+  # (`enter_category/2`, above).
+  #
+  # `limit` is deliberately NOT persisted and not part of this map:
+  # "Load more" is about the page you are on, not about how you like to
+  # read the log.
   # -------------------------------------------------------------------
 
   @filter_store "scout_filters"
+  @filter_categories ~w(structures spawns)a
+
+  defp default_category_filters,
+    do: %{days: @default_days, q: "", system_id: nil, space: Space.all()}
+
+  defp default_filters, do: Map.new(@filter_categories, &{&1, default_category_filters()})
+
+  # Writes the active category's value both to its own assign (so the
+  # template, which only ever reads `@days/@q/@system_id/@space`, does
+  # not need to know a second category exists) and into `@filters`, so
+  # it is there the moment `persist_filters/1` or a later visit to this
+  # same category reads it back out.
+  defp apply_filter(socket, field, value) do
+    filters = put_in(socket.assigns.filters, [socket.assigns.tab, field], value)
+
+    socket
+    |> assign(field, value)
+    |> assign(:limit, @page)
+    |> assign(:filters, filters)
+  end
 
   defp persist_filters(socket) do
-    state = %{
-      "tab" => to_string(socket.assigns.tab),
-      "days" => socket.assigns.days,
-      "q" => socket.assigns.q,
-      "system_id" => socket.assigns.system_id,
-      "space" => Enum.map(socket.assigns.space, &to_string/1)
-    }
+    state =
+      Map.new(socket.assigns.filters, fn {category, cat_filters} ->
+        {to_string(category), encode_category_filters(cat_filters)}
+      end)
 
     push_event(socket, "ls_update_#{@filter_store}", %{value: Jason.encode!(state)})
   end
 
+  defp encode_category_filters(cat_filters) do
+    %{
+      "days" => cat_filters.days,
+      "q" => cat_filters.q,
+      "system_id" => cat_filters.system_id,
+      "space" => Enum.map(cat_filters.space, &to_string/1)
+    }
+  end
+
   # Every field is validated the same way the event handlers validate a
-  # click: localStorage is user-writable, and an unknown window or a
-  # `tab` that is not an existing atom must cost the default, not a
-  # crash on mount.
+  # click: localStorage is user-writable, and an unknown window, an
+  # unknown space key, or a shape from before categories existed must
+  # cost the default, never a crash on mount.
+  #
+  # Accepts BOTH shapes:
+  #   * current -- `%{"structures" => %{...}, "spawns" => %{...}}`
+  #   * legacy  -- the old flat `%{"tab" => "spawns", "days" => 1, ...}`,
+  #     one blob shared by both tabs. Migrated onto the category its own
+  #     `tab` key names (default structures, same default `restore_tab/2`
+  #     always used) -- the OTHER category gets plain defaults, never a
+  #     copy of a selection it was never actually true of.
   defp restore_filters(socket, value) when is_binary(value) do
     case Jason.decode(value) do
       {:ok, %{} = saved} ->
-        {:ok,
-         assign(socket,
-           tab: restore_tab(saved, socket.assigns.tab),
-           days: restore_days(saved, socket.assigns.days),
-           q: restore_q(saved),
-           system_id: restore_system_id(saved),
-           space: restore_space(saved),
-           limit: @page
-         )}
+        filters = restore_filters_map(saved)
+        active = Map.fetch!(filters, socket.assigns.tab)
+        changed? = active != current_category_filters(socket)
+
+        socket =
+          assign(socket,
+            filters: filters,
+            days: active.days,
+            q: active.q,
+            system_id: active.system_id,
+            space: active.space,
+            limit: @page
+          )
+
+        {:ok, socket, changed?}
 
       _ ->
         :unchanged
@@ -406,6 +535,45 @@ defmodule WandererAppWeb.ScoutIntelLive do
   end
 
   defp restore_filters(_socket, _value), do: :unchanged
+
+  defp current_category_filters(socket) do
+    %{
+      days: socket.assigns.days,
+      q: socket.assigns.q,
+      system_id: socket.assigns.system_id,
+      space: socket.assigns.space
+    }
+  end
+
+  defp restore_filters_map(%{"structures" => _} = saved), do: restore_filters_map_current(saved)
+  defp restore_filters_map(%{"spawns" => _} = saved), do: restore_filters_map_current(saved)
+  defp restore_filters_map(saved), do: restore_filters_map_legacy(saved)
+
+  defp restore_filters_map_current(saved) do
+    Map.new(@filter_categories, fn category ->
+      {category, restore_category(Map.get(saved, to_string(category)))}
+    end)
+  end
+
+  defp restore_filters_map_legacy(saved) do
+    target = restore_tab(saved, :structures)
+    restored = restore_category(saved)
+
+    Map.new(@filter_categories, fn category ->
+      {category, if(category == target, do: restored, else: default_category_filters())}
+    end)
+  end
+
+  defp restore_category(saved) when is_map(saved) do
+    %{
+      days: restore_days(saved, @default_days),
+      q: restore_q(saved),
+      system_id: restore_system_id(saved),
+      space: restore_space(saved)
+    }
+  end
+
+  defp restore_category(_saved), do: default_category_filters()
 
   defp restore_tab(%{"tab" => tab}, _default) when tab in ~w(structures spawns),
     do: String.to_existing_atom(tab)

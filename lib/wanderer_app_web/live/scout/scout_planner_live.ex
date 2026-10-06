@@ -1,6 +1,6 @@
 defmodule WandererAppWeb.ScoutPlannerLive do
   @moduledoc """
-  CHEWY PATCH: `/scout/planner` -- design doc
+  CHEWY PATCH (scout shell): the Planner category of `/scout` -- design doc
   `docs/design/wanderer-scout-planner.md` section 8, "the human surface:
   a list, not a canvas".
 
@@ -16,18 +16,36 @@ defmodule WandererAppWeb.ScoutPlannerLive do
       start-point suggestions, region heat and a k-way split
       (`WandererApp.Scout.Split`).
 
-  Gated twice, the same way `ScoutIntelLive` is gated once:
+  ## A nested LiveView, not a route
 
-    * `WandererApp.Identity.ScoutAccess.can_view?/1`, uncached, exactly
-      like `ScoutIntelLive` -- the nav icon may read a cached answer,
-      the page itself never does.
+  `ScoutIntelLive` is the only thing `live_session :scout` routes to now
+  (`router.ex`); this module is rendered INTO it with `live_render/3`,
+  kept mounted and hidden (`container: {:div, class: "hidden"}`) once a
+  reader has visited the Planner tab, so switching categories never tears
+  it down and a computed rank/sweep survives the trip. That is also why
+  `mount/3` cannot `push_navigate/2` or `push_patch/2` on a gate failure
+  the way the routed page used to -- a child LiveView does not own the
+  URL, and both of those raise from one. A failed gate renders a one-line
+  `note/1` instead of the planner body (`mount_authorized/1`).
+
+  Because this LiveView sits outside `live_session :scout`, the
+  `live_session`'s own `on_mount` chain ([UserAuth, Nav]) never runs for
+  it -- `socket.assigns.current_user` would simply not exist. `mount/3`
+  calls `WandererAppWeb.UserAuth.on_mount(:ensure_authenticated, ...)`
+  directly instead of duplicating its `User.by_id!/1 |> Ash.load!/2`
+  lookup, so this socket's `current_user` is resolved exactly the way
+  every routed page's is.
+
+  Gated twice, same as before, but now BOTH checks happen in THIS child,
+  uncached, never delegated to the parent:
+
+    * `WandererApp.Identity.ScoutAccess.can_view?/1` -- a nested LiveView
+      must not trust `ScoutIntelLive` to have already gated the reader;
+      the nav icon may read a cached answer, this socket never does.
     * `WandererApp.Env.scout_planner_enabled?/0` -- this page's own
       flag, separate from `WANDERER_SCOUT_INTEL`, because a deployment
       may want the intel log without handing out a ranking nobody has
-      tuned yet (design section 8's closing line). The route stays
-      registered; a disabled flag redirects to `/scout` with a flash
-      instead of 404ing, since the flag is a product decision, not a
-      missing feature.
+      tuned yet (design section 8's closing line).
 
   ## Everything expensive runs in a task
 
@@ -40,12 +58,15 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   are `start_async/3` now, each carrying a monotonic token so a result
   that arrives after its controls changed is dropped rather than
   rendered, and the previous answer stays on screen (dimmed, with a
-  spinner) instead of the page blanking.
+  spinner) instead of the page blanking -- which matters more now that
+  this child stays mounted across category switches: a stale `start_async`
+  token from before the reader left the tab must still be dropped on
+  return, not rendered over whatever is current.
 
   Markup is the `WandererAppWeb.ScoutComponents` vocabulary throughout
   (`panel/1`, `stat/1`, `grid/1`, `field/1`, `note/1`, `busy/1`,
-  `region_picker/1`, …) -- this LiveView is reads, same as
-  `ScoutIntelLive`.
+  `scout_toolbar/1`, `scout_pane/1`, `region_picker/1`, …) -- this
+  LiveView is reads, same as `ScoutIntelLive`.
 
   ## Non-goals (design doc, "Non-goals" section)
 
@@ -90,16 +111,51 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   @max_split_k 6
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(params, session, socket) do
+    # `live_session :scout`'s own `on_mount` chain ([UserAuth, Nav]) never
+    # runs for this socket -- this LiveView is rendered as a CHILD
+    # (`live_render/3` in `scout_intel_live.html.heex`), and child
+    # LiveViews do not go through the router's `on_mount` pipeline at
+    # all. Calling `UserAuth.on_mount/4` directly, rather than
+    # re-deriving `current_user` with a second `User.by_id!/1`, is the
+    # "reuse" the moduledoc promises: one lookup, one place it can go
+    # stale.
+    case WandererAppWeb.UserAuth.on_mount(:ensure_authenticated, params, session, socket) do
+      {:cont, authed_socket} ->
+        mount_authorized(authed_socket)
+
+      {:halt, _redirected_socket} ->
+        # `on_mount/4` would `redirect/2` to `/welcome` here, but this
+        # socket is a CHILD -- it does not own the URL, and redirecting
+        # out from under `ScoutIntelLive` is not this LiveView's call to
+        # make. Render the gate failure in place instead; the original,
+        # un-redirected `socket` is what carries it.
+        {:ok, assign(socket, access?: false, denial: "Not signed in.")}
+    end
+  end
+
+  # Re-checked HERE, uncached, independent of whatever `ScoutIntelLive`
+  # already decided: see the moduledoc's "gated twice" section -- a
+  # nested LiveView that trusted its parent's gate would be one `assign`
+  # away from showing the planner to someone `ScoutAccess.can_view?/1`
+  # refuses.
+  defp mount_authorized(socket) do
+    current_user = socket.assigns.current_user
+
     cond do
-      not ScoutAccess.can_view?(socket.assigns.current_user.id) ->
-        {:ok, push_navigate(socket, to: ~p"/maps")}
+      not ScoutAccess.can_view?(current_user.id) ->
+        {:ok,
+         assign(socket,
+           access?: false,
+           denial: "You do not have access to the scout planner."
+         )}
 
       not WandererApp.Env.scout_planner_enabled?() ->
         {:ok,
-         socket
-         |> put_flash(:error, "The scout planner is not enabled on this deployment.")
-         |> push_navigate(to: ~p"/scout")}
+         assign(socket,
+           access?: false,
+           denial: "The scout planner is not enabled on this deployment."
+         )}
 
       true ->
         # The pilots this user could push a route onto. A route is set
@@ -108,13 +164,12 @@ defmodule WandererAppWeb.ScoutPlannerLive do
         # name which pilot -- there is no sensible default beyond "the
         # first one you own", and the choice is sticky like every other
         # control here.
-        characters = socket.assigns.current_user.characters || []
+        characters = current_user.characters || []
 
         {:ok,
          socket
          |> assign(
-           active_tab: :scout_planner,
-           page_title: "Scout Planner",
+           access?: true,
            origin_q: "",
            origin_matches: [],
            origin_id: nil,

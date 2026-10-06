@@ -1,17 +1,22 @@
 defmodule WandererAppWeb.ScoutPlannerLiveTest do
   @moduledoc """
-  The `/scout/planner` page RENDERS, and `/scout` links to it.
+  The Planner CATEGORY renders, and `/scout` links to it.
 
-  Both halves shipped broken and neither was caught by `mix compile`:
-  the template guarded an empty state with `@stops == [] and @origin_id`,
-  and `@origin_id` is an integer or nil, never a boolean -- HEEx raised
-  `BadBooleanError` on first render, so the page a reader reaches from
-  the Planner tab was a 500 every time. A compile-clean LiveView that
-  cannot mount is exactly what this file exists to catch.
+  CHEWY PATCH (scout shell): `/scout/planner` no longer routes to a
+  standalone `ScoutPlannerLive` -- `WandererAppWeb.ScoutIntelLive` is the
+  only routed view under `live_session :scout` now, and the planner is a
+  nested child it mounts with `live_render/3` (contract in
+  `ScoutPlannerLive`'s moduledoc). Every interaction below therefore goes
+  through `live_children/1` to reach that child, not the top-level `view`
+  `live/2` returns -- sending an event to the shell would be a no-op,
+  since `ScoutIntelLive` owns none of this page's handlers.
 
-  Both pages are asserted together because they are each other's only
-  navigation: the sidebar holds ONE scout icon (`AGENTS.md`), so a
-  missing tab on either side strands the other.
+  Both halves shipped broken once and neither was caught by `mix
+  compile`: the template guarded an empty state with `@stops == [] and
+  @origin_id`, and `@origin_id` is an integer or nil, never a boolean --
+  HEEx raised `BadBooleanError` on first render, so the page a reader
+  reaches from the Planner tab was a 500 every time. A compile-clean
+  LiveView that cannot mount is exactly what this file exists to catch.
 
   Every read on this page runs in a task now (`start_async/3`), so a
   result is asserted after `render_async/1`, not off the event's own
@@ -46,10 +51,49 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
   end
 
   test "the planner page mounts with no origin chosen", %{conn: conn} do
-    {:ok, _live, html} = live(conn, ~p"/scout/planner")
+    {:ok, view, html} = live(conn, ~p"/scout/planner")
 
-    assert html =~ "Scout Planner"
+    # Proves the nested mount actually happened under the id the
+    # contract fixes (`scout_intel_live.html.heex`'s `live_render/3`
+    # call) -- a typo'd `id` there would silently give this test a
+    # DIFFERENT child, or none.
+    planner = planner_child(view)
+    assert planner
+    assert planner.id == "scout-planner-live"
+
     assert html =~ "Search for an origin system to begin."
+  end
+
+  # The whole reason the planner is a nested child rather than a routed
+  # page: switching category is a `push_patch` on the SHELL, so the child
+  # is never torn down. A sweep costs seconds to compute, and remounting
+  # the planner every time a reader glances at the log would throw it
+  # away -- which is exactly what `<.link navigate>` to a separate
+  # LiveView used to do.
+  test "the planner child survives a trip to another category", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/scout/planner")
+    planner = planner_child(view)
+    pid = planner.pid
+
+    # State a remount would lose: the mode switch is child state, held
+    # nowhere else.
+    assert render_click(planner, "switch_mode", %{"mode" => "sweep"}) =~ "scout-sweep-no-scope"
+
+    # Away and back, both as patches on the shell. The pane the shell
+    # owns goes `hidden` -- it is still in the DOM, which is the whole
+    # trick, so it had better not be VISIBLE under the structures boards.
+    structures = render_patch(view, ~p"/scout/structures")
+    assert structures =~ ~s(id="scout-planner-pane")
+    assert structures =~ ~s(class="hidden")
+    same = planner_child(view)
+    assert same, "the planner child was unmounted by a category switch"
+    assert same.pid == pid, "the planner child was remounted by a category switch"
+
+    render_patch(view, ~p"/scout/planner")
+
+    # Still in sweep mode, with no recompute: the child never re-mounted,
+    # so the mode it was left in is the mode it comes back in.
+    assert render(planner_child(view)) =~ "scout-sweep-no-scope"
   end
 
   # The controls that make a route happen only exist once there IS a
@@ -61,10 +105,11 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     put_system(990_300_002, "Refreshbravo")
     put_jump(990_300_001, 990_300_002)
 
-    {:ok, live, _html} = live(conn, ~p"/scout/planner")
+    {:ok, view, _html} = live(conn, ~p"/scout/planner")
+    planner = planner_child(view)
 
-    render_click(live, "select_origin", %{"id" => "990300001", "name" => "Refreshalpha"})
-    html = render_async(live)
+    render_click(planner, "select_origin", %{"id" => "990300001", "name" => "Refreshalpha"})
+    html = render_async(planner)
 
     assert html =~ "Set route"
     assert html =~ "Refresh Reader"
@@ -72,20 +117,67 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
   end
 
   test "each scout page links to the other", %{conn: conn} do
-    {:ok, _live, intel_html} = live(conn, ~p"/scout")
+    {:ok, _view, intel_html} = live(conn, ~p"/scout")
     assert intel_html =~ ~s(href="/scout/planner")
 
-    {:ok, _live, planner_html} = live(conn, ~p"/scout/planner")
-    assert planner_html =~ ~s(href="/scout")
+    {:ok, _view, planner_html} = live(conn, ~p"/scout/planner")
+    assert planner_html =~ ~s(href="/scout/structures")
   end
 
-  test "with the planner flag off the page is not reachable", %{conn: conn} do
+  # CHEWY PATCH (scout shell): the flag redirect itself is
+  # `ScoutIntelLive.handle_params/3`'s call now (it owns the URL, so it
+  # is the only thing that CAN push_patch away from `/scout/planner`) --
+  # this file only has to prove the planner body never reaches the page
+  # when the flag is off, not re-assert the exact mechanics of how the
+  # shell gets there.
+  test "with the planner flag off the planner never mounts, the shell redirects", %{conn: conn} do
     Application.put_env(:wanderer_app, :scout_planner_enabled, false)
 
-    assert {:error, {:live_redirect, %{to: "/scout"}}} = live(conn, ~p"/scout/planner")
+    # `live/2` does not follow a redirect raised during the INITIAL
+    # connect (mount/handle_params) -- it is the shell's own
+    # `handle_params/3` doing this, not this file's concern to re-prove
+    # beyond "the planner body is never what landed".
+    assert {:error, {:live_redirect, %{to: "/scout/structures"}}} =
+             live(conn, ~p"/scout/planner")
+  end
 
-    {:ok, _live, intel_html} = live(conn, ~p"/scout")
-    refute intel_html =~ ~s(href="/scout/planner")
+  # CHEWY PATCH (scout shell): `ScoutIntelLive` already checks both
+  # gates before ever rendering the `live_render/3` that mounts this
+  # child -- these two call `ScoutPlannerLive.mount/3` directly, the
+  # same call the shell's heex makes, to prove the child refuses on its
+  # OWN account and would not have trusted a parent that forgot to ask.
+  # No router entry exists for this LiveView any more, so this is the
+  # only way to mount it without going through the shell at all.
+  describe "the child does not trust its parent for authorization" do
+    test "a user without scout access gets a denial notice, not the planner" do
+      other_user = insert(:user)
+
+      assert {:ok, socket} =
+               WandererAppWeb.ScoutPlannerLive.mount(
+                 %{},
+                 %{"user_id" => other_user.id},
+                 %Phoenix.LiveView.Socket{}
+               )
+
+      refute socket.assigns.access?
+      assert socket.assigns.denial =~ "do not have access"
+    end
+
+    test "the planner flag is re-read here even though the shell already read it", %{
+      character: character
+    } do
+      Application.put_env(:wanderer_app, :scout_planner_enabled, false)
+
+      assert {:ok, socket} =
+               WandererAppWeb.ScoutPlannerLive.mount(
+                 %{},
+                 %{"user_id" => character.user_id},
+                 %Phoenix.LiveView.Socket{}
+               )
+
+      refute socket.assigns.access?
+      assert socket.assigns.denial =~ "not enabled"
+    end
   end
 
   # The scope control is a NAME search over `WandererApp.Scout.Regions`,
@@ -95,12 +187,13 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     reset_region_cache()
     put_system(990_400_001, "Pickeralpha")
 
-    {:ok, live, _html} = live(conn, ~p"/scout/planner")
+    {:ok, view, _html} = live(conn, ~p"/scout/planner")
+    planner = planner_child(view)
 
-    html = render_change(live, "search_regions", %{"scope" => "rank", "q" => "refresh"})
+    html = render_change(planner, "search_regions", %{"scope" => "rank", "q" => "refresh"})
     assert html =~ "Refresh Region"
 
-    html = render_click(live, "add_region", %{"scope" => "rank", "id" => "1"})
+    html = render_click(planner, "add_region", %{"scope" => "rank", "id" => "1"})
     assert html =~ "scout-planner-regions-chip-1"
   end
 
@@ -108,9 +201,10 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     reset_region_cache()
     put_system(990_400_002, "Pickerbravo")
 
-    {:ok, live, _html} = live(conn, ~p"/scout/planner")
+    {:ok, view, _html} = live(conn, ~p"/scout/planner")
+    planner = planner_child(view)
 
-    html = render_click(live, "add_region", %{"scope" => "rank", "id" => "424242"})
+    html = render_click(planner, "add_region", %{"scope" => "rank", "id" => "424242"})
     refute html =~ "scout-planner-regions-chip-424242"
   end
 
@@ -152,9 +246,10 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     # straight into a `<div>`, so the browser discarded it and sweep mode
     # opened as a blank page with no instruction on it at all.
     test "sweep mode with no scope says what to do", %{conn: conn} do
-      {:ok, live, _html} = live(conn, ~p"/scout/planner")
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
 
-      html = render_click(live, "switch_mode", %{"mode" => "sweep"})
+      html = render_click(planner, "switch_mode", %{"mode" => "sweep"})
 
       assert html =~ "scout-sweep-no-scope"
       assert html =~ "Pick a scope above"
@@ -164,25 +259,27 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     test "switching to sweep mode and setting a scope renders start suggestions", %{
       conn: conn
     } do
-      {:ok, live, _html} = live(conn, ~p"/scout/planner")
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
 
-      render_click(live, "switch_mode", %{"mode" => "sweep"})
-      render_click(live, "add_region", %{"scope" => "sweep", "id" => "1"})
-      html = sweep_html(live)
+      render_click(planner, "switch_mode", %{"mode" => "sweep"})
+      render_click(planner, "add_region", %{"scope" => "sweep", "id" => "1"})
+      html = sweep_html(planner)
 
       assert html =~ "Start points"
       assert html =~ "Sweeplive1" or html =~ "Sweeplive6"
     end
 
     test "k=3 renders three per-part pilot pickers and an Assign all button", %{conn: conn} do
-      {:ok, live, _html} = live(conn, ~p"/scout/planner")
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
 
-      render_click(live, "switch_mode", %{"mode" => "sweep"})
-      render_click(live, "add_region", %{"scope" => "sweep", "id" => "1"})
-      sweep_html(live)
+      render_click(planner, "switch_mode", %{"mode" => "sweep"})
+      render_click(planner, "add_region", %{"scope" => "sweep", "id" => "1"})
+      sweep_html(planner)
 
-      render_change(live, "update_sweep_k", %{"k" => "3"})
-      html = sweep_html(live)
+      render_change(planner, "update_sweep_k", %{"k" => "3"})
+      html = sweep_html(planner)
 
       assert html =~ "scout-sweep-part-0-character"
       assert html =~ "scout-sweep-part-1-character"
@@ -238,17 +335,18 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     end
 
     test "unticking High in sweep mode drops highsec stops and keeps the rest", %{conn: conn} do
-      {:ok, live, _html} = live(conn, ~p"/scout/planner")
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
 
-      render_click(live, "switch_mode", %{"mode" => "sweep"})
-      render_click(live, "add_region", %{"scope" => "sweep", "id" => "2"})
-      html = sweep_html(live)
+      render_click(planner, "switch_mode", %{"mode" => "sweep"})
+      render_click(planner, "add_region", %{"scope" => "sweep", "id" => "2"})
+      html = sweep_html(planner)
 
       assert html =~ "Bandhs1"
       assert html =~ "Bandls2"
 
-      live |> element("#scout-sweep-space-hs") |> render_click()
-      filtered = sweep_html(live)
+      planner |> element("#scout-sweep-space-hs") |> render_click()
+      filtered = sweep_html(planner)
 
       refute filtered =~ "Bandhs1"
       refute filtered =~ "Bandhs3"
@@ -267,21 +365,22 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
       # The precise signature of the bug: the sweep chip must not have
       # written the RANK mode's filter, which is what one shared
       # `phx-click="toggle_space"` did.
-      rank_html = render_click(live, "switch_mode", %{"mode" => "rank"})
+      rank_html = render_click(planner, "switch_mode", %{"mode" => "rank"})
       assert rank_html =~ ~r/id="scout-planner-space-hs"[^>]*aria-pressed="true"/
     end
 
     test "the region heat table counts only the ticked bands", %{conn: conn} do
-      {:ok, live, _html} = live(conn, ~p"/scout/planner")
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
 
-      render_click(live, "switch_mode", %{"mode" => "sweep"})
-      html = sweep_html(live)
+      render_click(planner, "switch_mode", %{"mode" => "sweep"})
+      html = sweep_html(planner)
 
       assert html =~ "Band Region"
       assert heat_systems(html, 2) == 4
 
-      live |> element("#scout-sweep-space-hs") |> render_click()
-      filtered = sweep_html(live)
+      planner |> element("#scout-sweep-space-hs") |> render_click()
+      filtered = sweep_html(planner)
 
       assert heat_systems(filtered, 2) == 2
     end
@@ -348,20 +447,31 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
   end
 
   defp push_plan(conn) do
-    {:ok, live, _html} = live(conn, ~p"/scout/planner")
+    {:ok, view, _html} = live(conn, ~p"/scout/planner")
+    planner = planner_child(view)
 
-    render_click(live, "select_origin", %{"id" => "990600001", "name" => "Outcomealpha"})
-    render_async(live)
+    render_click(planner, "select_origin", %{"id" => "990600001", "name" => "Outcomealpha"})
+    render_async(planner)
 
-    render_click(live, "set_route", %{})
+    render_click(planner, "set_route", %{})
   end
 
   # A sweep's own task starts the split task from `handle_async/3`, so
   # one `render_async/1` can return between the two; the second waits for
   # whatever the first one started.
-  defp sweep_html(live) do
-    render_async(live)
-    render_async(live)
+  defp sweep_html(planner) do
+    render_async(planner)
+    render_async(planner)
+  end
+
+  # The layout's own `live_render/3` (`ServerStatusLive`,
+  # `components/layouts/live.html.heex`) mounts on every page under
+  # `/scout`, so `live_children/1` here is never a one-element list --
+  # picking by id is what keeps this file from silently asserting
+  # against the wrong child the moment a second nested LiveView joins
+  # the layout.
+  defp planner_child(view) do
+    Enum.find(live_children(view), &(&1.id == "scout-planner-live"))
   end
 
   # `Regions.all/0` is cached for a day, and these tests insert the rows

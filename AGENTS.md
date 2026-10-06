@@ -128,12 +128,31 @@ the button useless in the one case it exists for; only a real state change (`las
 brings a finding back. Any new board added to this page must carry the same filter, or an archived
 structure reappears on it alone.
 
-**`/scout`'s filters are sticky, in localStorage, with no new JavaScript.** Tab, window, search and
-space ride upstream's generic `LocalStorageSetting` hook (`ls_restore_<key>` on mount,
-`ls_update_<key>` on change) through a hidden `#scout-filter-store` div. Server-side storage was
-rejected on purpose: a Cachex entry dies with every deploy. Everything restored is re-validated
-like a click — localStorage is user-writable, and `String.to_existing_atom/1` on a stored string is
-how a page crashes on mount.
+**`/scout` is ONE LiveView with three URL-driven categories, and the planner is a nested child.**
+`WandererAppWeb.ScoutIntelLive` is the only routed view under `live_session :scout`: `/scout` and
+`/scout/structures`, `/scout/spawns`, `/scout/planner` are its `live_action`s, so switching category
+is a `<.link patch>` into `handle_params/3` — never a remount, which is what removes the live
+layout's `opacity-0 → duration-500` fade, the scroll reset and the rebuilt chrome, and what makes
+every category deep-linkable. `ScoutPlannerLive` is NOT routed any more: it is `live_render`'d as
+`#scout-planner-live` inside the shell-owned `#scout-planner-pane`, mounted lazily on the first
+visit and then only ever hidden with a class — unmounting it would discard a sweep that cost
+seconds. A nested child skips `live_session`'s `on_mount` chain, so it resolves `current_user` from
+the session itself and re-checks `ScoutAccess.can_view?/1` and its flag rather than trusting the
+parent, and it must never `push_patch` (a child does not own the URL). Page chrome is
+`<.scout_header>` → optional alert → `<.scout_toolbar>` → body for EVERY category, all from
+`ScoutComponents`, which is why nothing moves when you switch.
+
+**`/scout`'s filters are sticky, in localStorage, PER CATEGORY, with no new JavaScript.** Window,
+search, system chip and space ride upstream's generic `LocalStorageSetting` hook
+(`ls_restore_<key>` on mount, `ls_update_<key>` on change) through a hidden `#scout-filter-store`
+div. The stored blob is keyed by category (`{"structures": {…}, "spawns": {…}}`, planner on its own
+`scout_planner_filters` key) because the single flat blob it used to be was a reported bug:
+narrowing structures to highsec silently narrowed spawns too. No `tab` key is stored — the URL owns
+that, and restoring it after first paint is exactly what made landing on `/scout` flash through the
+wrong category. A legacy flat blob migrates onto the category its old `tab` key names. Server-side
+storage was rejected on purpose: a Cachex entry dies with every deploy. Everything restored is
+re-validated like a click — localStorage is user-writable, and `String.to_existing_atom/1` on a
+stored string is how a page crashes on mount.
 
 **A `/scout` board leaves this app as a Discord message, never as a screenshot or a webhook.**
 Each board header and the toolbar carry a copy button; `WandererAppWeb.ScoutDiscord` formats the

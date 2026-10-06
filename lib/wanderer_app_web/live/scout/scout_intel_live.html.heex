@@ -10,23 +10,13 @@
   >
   </div>
 
-  <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-3">
-    <h1 class="text-xl font-semibold tracking-tight">Scout Log</h1>
-
-    <span
-      class="flex items-center gap-1.5 text-[11px] text-gray-500"
-      title="New reports appear without a reload"
-    >
-      <span class="w-1.5 h-1.5 rounded-full bg-success"></span> live
-    </span>
-
-    <span class="text-[11px] text-gray-500 whitespace-nowrap" title="Is the scanner client alive?">
+  <.scout_header active={@tab} planner?={WandererApp.Env.scout_planner_enabled?()} live?={true}>
+    <:meta :if={@tab != :planner}>
       structures <span class="text-gray-300">{ago(@last_observed.structures, @now)}</span>
       · spawns <span class="text-gray-300">{ago(@last_observed.spawns, @now)}</span>
       · times UTC
-    </span>
-
-    <div class="ml-auto flex items-center gap-2">
+    </:meta>
+    <:actions :if={@tab != :planner}>
       <a
         href={export_path(assigns)}
         class="btn btn-sm btn-ghost"
@@ -47,48 +37,18 @@
       <.link :if={@can_manage_access?} navigate={~p"/scout/access"} class="btn btn-sm">
         Manage access
       </.link>
-    </div>
-  </div>
+    </:actions>
+  </.scout_header>
 
   <.unanchored_alert
+    :if={@tab != :planner}
     rows={@unanchored_structures}
     systems={@systems}
     now={@now}
     horizon_days={unanchored_horizon_days()}
   />
 
-  <div class="flex flex-wrap items-center gap-2 mb-4 p-2 rounded-lg border border-neutral-800 bg-neutral-900/30">
-    <div role="tablist" class="tabs tabs-boxed tabs-sm bg-neutral-950/60">
-      <button
-        role="tab"
-        id="scout-tab-structures"
-        phx-click="select_tab"
-        phx-value-tab="structures"
-        class={["tab", @tab == :structures && "tab-active"]}
-      >
-        Structures
-      </button>
-      <button
-        role="tab"
-        id="scout-tab-spawns"
-        phx-click="select_tab"
-        phx-value-tab="spawns"
-        class={["tab", @tab == :spawns && "tab-active"]}
-      >
-        Spawns
-      </button>
-
-      <.link
-        :if={WandererApp.Env.scout_planner_enabled?()}
-        navigate={~p"/scout/planner"}
-        role="tab"
-        id="scout-tab-planner"
-        class="tab"
-      >
-        Planner
-      </.link>
-    </div>
-
+  <.scout_toolbar :if={@tab != :planner}>
     <form phx-change="select_window">
       <select
         name="days"
@@ -147,7 +107,7 @@
     >
       All space ✕
     </button>
-  </div>
+  </.scout_toolbar>
 
   <div :if={@tab == :structures} class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
     <.stat
@@ -813,5 +773,21 @@
       </div>
     </div>
     <button class="modal-backdrop" phx-click="close_discord">close</button>
+  </div>
+
+  <%!-- CHEWY PATCH: the planner, nested rather than routed (router.ex,
+        ScoutIntelLive.handle_params/3). Mounted lazily on first visit to
+        `/scout/planner` and then NEVER unmounted -- a parent-owned
+        wrapper div toggles `hidden` instead of the live_render
+        `container:` option, since morphdom does not reliably patch an
+        attribute-only change on a phx-child container. This parent
+        LiveView never remounts across a patch (category switches are
+        `push_patch`, not a navigate), so the child does not need
+        `sticky: true` either -- its own id in the DOM is enough. --%>
+  <div :if={@planner_mounted?} id="scout-planner-pane" class={@tab != :planner && "hidden"}>
+    {live_render(@socket, WandererAppWeb.ScoutPlannerLive,
+      id: "scout-planner-live",
+      session: %{"user_id" => @current_user.id}
+    )}
   </div>
 </main>

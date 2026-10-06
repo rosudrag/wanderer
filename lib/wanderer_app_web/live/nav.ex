@@ -15,8 +15,7 @@ defmodule WandererAppWeb.Nav do
     CorpIdentityLive,
     GroupMapGrantsLive,
     ScoutIntelLive,
-    ScoutAccessLive,
-    ScoutPlannerLive
+    ScoutAccessLive
   }
 
   def on_mount(_scope, _params, _session, socket) do
@@ -114,14 +113,17 @@ defmodule WandererAppWeb.Nav do
         {GroupMapGrantsLive, _} ->
           :corp_map_grants
 
+        # CHEWY PATCH (scout shell): `ScoutIntelLive` is now the only
+        # routed view for ALL THREE `/scout*` categories, including
+        # `:planner` -- the planner used to be a separate routed
+        # `ScoutPlannerLive` with its own `:scout_planner` clause here,
+        # but it is a nested `live_render/3` child now (see that
+        # module's moduledoc) and never goes through this hook at all.
         {ScoutIntelLive, _} ->
           :scout
 
         {ScoutAccessLive, _} ->
           :scout_access
-
-        {ScoutPlannerLive, _} ->
-          :scout_planner
 
         {_, _} ->
           nil

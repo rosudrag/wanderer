@@ -407,8 +407,44 @@ history drill-down too.
 
 ## The page
 
-`/scout` is two tabs over the same two tables, and one `WANDERER_SCOUT_INTEL`
-flag covers all of it.
+`/scout` is **three categories over one LiveView** — Structures, Spawns and
+Planner — and one `WANDERER_SCOUT_INTEL` flag covers all of it (the Planner
+category additionally needs `WANDERER_SCOUT_PLANNER`).
+
+### One page, three categories
+
+`WandererAppWeb.ScoutIntelLive` is the only routed view under
+`live_session :scout`: `/scout` and `/scout/structures` are `:structures`,
+`/scout/spawns` is `:spawns`, `/scout/planner` is `:planner`. The category
+is therefore in the **URL**, switching it is a `<.link patch>` handled by
+`handle_params/3`, and the consequences are the point: no remount, so no
+`opacity-0 → duration-500` fade from the live layout, no scroll reset, no
+chrome rebuilt; browser back/forward works; and every category is
+bookmarkable.
+
+It used to be `phx-click="select_tab"` with the chosen tab restored from
+localStorage *after* first paint, which meant landing on `/scout` with
+"spawns" saved painted the structures boards (six queries) and then flipped
+to spawns (two more) — the visible jank that this shape removes. There is
+no "last category" memory any more, by design: the URL replaces it.
+
+`WandererAppWeb.ScoutPlannerLive` is no longer routed. It is a **nested
+LiveView** (`live_render/3`, id `scout-planner-live`) inside a shell-owned
+`#scout-planner-pane` div, mounted lazily the first time a reader opens the
+Planner category and then NEVER unmounted — the pane just gains `hidden`.
+A sweep costs seconds to compute, and a routed page threw that away on
+every glance at the log. Two rules follow: the child does not go through
+`live_session`'s `on_mount` chain, so it resolves `current_user` from the
+session itself (`UserAuth.on_mount(:ensure_authenticated, …)`) and re-checks
+`ScoutAccess.can_view?/1` and the planner flag independently of its parent;
+and it must never `push_patch` — a child does not own the URL.
+
+The page chrome is one shape for every category, so nothing moves when you
+switch: `<.scout_header>` (title, live dot, the three tab links, per-category
+actions) → optional unanchored alert → `<.scout_toolbar>` (that category's
+own controls) → body. All four live in `ScoutComponents`; the planner child
+renders its own `<.scout_toolbar>` holding the rank/sweep mode switch and
+Refresh.
 
 |Tab|What it leads with|
 |---|---|
@@ -529,10 +565,10 @@ utility, so dimming the backdrop needs `!bg-black/70`; and `ScoutNav` used
 it — the sidebar carried the same glyph twice, and the entry never drew the
 orange active bar every upstream entry draws.
 
-### The filters are sticky
+### The filters are sticky, and they are PER CATEGORY
 
-Tab, window, search and space selection survive a reload, a new tab and a
-browser restart. They live in **localStorage**, not on the server: a
+Window, search, system chip and space selection survive a reload, a new tab
+and a browser restart. They live in **localStorage**, not on the server: a
 per-user server cache would be wiped by every deploy, and on this fork that
 is often. No JavaScript was written for it — upstream's generic
 `LocalStorageSetting` hook (`assets/js/hooks/localStorageSetting.ts`) pushes
@@ -541,13 +577,30 @@ page mounts a hidden `#scout-filter-store` div and the LiveView answers
 `"ls_restore_scout_filters"` / emits `"ls_update_scout_filters"` after every
 filter event.
 
+The stored value is keyed by category, because the one blob it used to be
+was a reported bug — narrowing structures to highsec silently narrowed the
+spawns tab too:
+
+```json
+{"structures": {"days": 7, "q": "", "system_id": null, "space": ["hs","ls","ns","wh","pochven","other"]},
+ "spawns":     {"days": 1, "q": "ore", "system_id": 30000142, "space": ["ns"]}}
+```
+
+There is no `tab` key any more — the URL owns which category is showing.
+A legacy flat blob (the old `{"tab": …, "days": …, …}` shape) is migrated
+onto the category its `tab` key names, and the other category starts at
+defaults. The planner keeps its own key, `scout_planner_filters`, for the
+same reason: a category's filters are that category's.
+
 localStorage is user-writable, so every restored field is validated exactly
 as a click on the same control would be: an unknown window keeps the
-default, a `tab` that is not an existing atom never reaches
-`String.to_existing_atom/1`, the search is truncated, and a non-empty space
-list that parses to nothing falls back to every bucket rather than
-rendering a blank page. An explicitly empty space list IS restored — every
-chip unticked is a state a reader can choose.
+default, the search is truncated, a `system_id` that is not a positive
+integer is dropped, and a non-empty space list that parses to nothing falls
+back to every bucket rather than rendering a blank page. An explicitly empty
+space list IS restored — every chip unticked is a state a reader can choose.
+A restore only re-runs the reads when the ACTIVE category's values actually
+changed; the unconditional second round of six queries on every page load
+was the other half of the jank.
 
 `limit` is deliberately not persisted: "Load more" is about the page you are
 on, not about how you like to read the log.
@@ -556,7 +609,9 @@ on, not about how you like to read the log.
 
 Six chips — High, Low, Null, W-Space, Pochven, Other — all on by default,
 each one click to drop. "Everything except highsec" is the filter the page
-exists for, so it is one click and it holds across tab switches.
+exists for, so it is one click — and it holds across every table of THAT
+category, including the two that ignore the window selector, but never
+leaks into another category.
 
 `WandererApp.Scout.Space` owns it, and three things about it are load-bearing:
 
@@ -674,11 +729,12 @@ stale cache may cost a wrong icon, never a wrong page.
 |CSV export|`lib/wanderer_app_web/controllers/scout_export_controller.ex`|
 |Flag plug|`lib/wanderer_app_web/controllers/plugs/check_scout_intel_disabled.ex`|
 |Permission tier|`lib/wanderer_app/identity/scout_access.ex`|
-|Pages|`lib/wanderer_app_web/live/scout/scout_{intel,access}_live.ex`|
-|Panels, cells, formatters|`lib/wanderer_app_web/components/scout_components.ex`|
+|Pages (shell + access)|`lib/wanderer_app_web/live/scout/scout_{intel,access}_live.ex`|
+|Planner, as a nested child of the shell|`lib/wanderer_app_web/live/scout/scout_planner_live.ex`|
+|Page shell (header, tab strip, toolbar, pane), panels, cells, formatters|`lib/wanderer_app_web/components/scout_components.ex`|
 |Discord message format|`lib/wanderer_app_web/components/scout_discord.ex`|
 |Sidebar entry|`lib/wanderer_app_web/components/scout_nav.ex`|
-|Tests|`test/integration/scout_intel_test.exs`|
+|Tests|`test/integration/scout_intel_test.exs`, `test/integration/scout_{intel,planner}_live_test.exs`|
 
 ## Verified
 

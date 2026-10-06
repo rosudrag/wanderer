@@ -662,9 +662,11 @@ defmodule WandererAppWeb.Router do
         {WandererAppWeb.UserAuth, :ensure_authenticated},
         WandererAppWeb.Nav
       ] do
-      live "/", ScoutIntelLive, :index
+      live "/", ScoutIntelLive, :structures
+      live "/structures", ScoutIntelLive, :structures
+      live "/spawns", ScoutIntelLive, :spawns
+      live "/planner", ScoutIntelLive, :planner
       live "/access", ScoutAccessLive, :index
-      live "/planner", ScoutPlannerLive, :index
     end
 
     # Not a LiveView, so the live_session's auth gate does not cover it:

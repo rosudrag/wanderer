@@ -31,6 +31,12 @@ defmodule WandererAppWeb.ScoutComponents do
   """
 
   use Phoenix.Component
+  # CHEWY PATCH (scout shell): `scout_tabs/1` patches between categories
+  # with `~p"/scout/..."` rather than firing a LiveView event, so the URL
+  # is the thing that owns which category is active (see
+  # `ScoutIntelLive`). That needs the verified-routes sigil, which plain
+  # `Phoenix.Component` does not carry.
+  use WandererAppWeb, :verified_routes
 
   alias WandererApp.Scout.{Status, Unanchor}
 
@@ -38,6 +44,162 @@ defmodule WandererAppWeb.ScoutComponents do
   # `ScoutIntelLive`'s read, which is what makes the list a *list*; this
   # copy is the one the copy renders from.
   @fresh_seconds 24 * 3_600
+
+  # ---------------------------------------------------------------------
+  # Shell
+  # ---------------------------------------------------------------------
+
+  attr :active, :atom, required: true
+  attr :planner?, :boolean, default: false
+  # The green "live" dot. `ScoutIntelLive` passes `true`; the planner
+  # child has no live-updating read to advertise and leaves it off.
+  attr :live?, :boolean, default: false
+  # Small muted text beside the title -- the "structures 2m ago · spawns
+  # 40s ago" line, or nothing.
+  slot :meta
+  # Right-aligned buttons -- Export CSV, Copy for Discord, Refresh,
+  # Manage access. `ml-auto` lives here, not on the caller's markup, so
+  # every category's actions line up under the same pixel.
+  slot :actions
+
+  @doc """
+  The one header every `/scout` category renders, title through to the
+  action buttons, in a single `<header>`.
+
+  This used to be three categories' worth of hand-copied markup --
+  `scout_intel_live.html.heex` for structures/spawns, a second copy in
+  `scout_planner_live.html.heex` for the planner -- and the tab strip
+  was never byte-for-byte the same twig between them, which is what let
+  it visibly reflow on every category switch. One component, called
+  from one place (`ScoutIntelLive`'s template, now the only `<main>` on
+  `/scout`), means the header cannot drift again.
+  """
+  def scout_header(assigns) do
+    ~H"""
+    <header class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-3">
+      <h1 class="text-xl font-semibold tracking-tight">Scout</h1>
+
+      <span
+        :if={@live?}
+        class="flex items-center gap-1.5 text-[11px] text-gray-500"
+        title="New reports appear without a reload"
+      >
+        <span class="w-1.5 h-1.5 rounded-full bg-success"></span> live
+      </span>
+
+      <.scout_tabs active={@active} planner?={@planner?} />
+
+      <span :if={@meta != []} class="text-[11px] text-gray-500 truncate">
+        {render_slot(@meta)}
+      </span>
+
+      <div class="ml-auto flex items-center gap-2">
+        {render_slot(@actions)}
+      </div>
+    </header>
+    """
+  end
+
+  attr :active, :atom, required: true
+  attr :planner?, :boolean, default: false
+
+  @doc """
+  The three category tabs, as ONE element type throughout.
+
+  The pre-shell page mixed a `<button phx-click="select_tab">` (an
+  in-LiveView tab), a second identical button, and a `<.link navigate>`
+  for the planner -- three different elements reached three different
+  ways, which is exactly why the strip itself restyled when you crossed
+  from "tab" to "routed page". Every tab is now a `<.link patch>`: the
+  URL is the single source of truth for which category is active (see
+  `ScoutIntelLive.handle_params/3`), so switching category is a patch,
+  never a remount, and the strip never has to re-render as a different
+  kind of thing.
+  """
+  def scout_tabs(assigns) do
+    ~H"""
+    <div role="tablist" class="tabs tabs-boxed tabs-sm bg-neutral-950/60">
+      <.link
+        patch={~p"/scout/structures"}
+        role="tab"
+        id="scout-tab-structures"
+        class={["tab", @active == :structures && "tab-active"]}
+      >
+        Structures
+      </.link>
+      <.link
+        patch={~p"/scout/spawns"}
+        role="tab"
+        id="scout-tab-spawns"
+        class={["tab", @active == :spawns && "tab-active"]}
+      >
+        Spawns
+      </.link>
+      <.link
+        :if={@planner?}
+        patch={~p"/scout/planner"}
+        role="tab"
+        id="scout-tab-planner"
+        class={["tab", @active == :planner && "tab-active"]}
+      >
+        Planner
+      </.link>
+    </div>
+    """
+  end
+
+  attr :id, :string, default: nil
+  attr :class, :string, default: nil
+  slot :inner_block, required: true
+
+  @doc """
+  The rounded filter-bar box every category's controls sit in.
+
+  Was inlined on `scout_intel_live.html.heex` and separately on
+  `scout_planner_live.html.heex`, with the two copies already a few
+  classes apart (the planner's dropped `mb-4` in one branch) -- the kind
+  of drift that is invisible in review and obvious the moment a reader
+  switches category and the gap under the toolbar changes size.
+  """
+  def scout_toolbar(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      class={[
+        "flex flex-wrap items-center gap-2 mb-4 p-2 rounded-lg border border-neutral-800 bg-neutral-900/30",
+        @class
+      ]}
+    >
+      {render_slot(@inner_block)}
+    </div>
+    """
+  end
+
+  attr :loading, :boolean, default: false
+  attr :class, :string, default: nil
+  slot :inner_block, required: true
+
+  @doc """
+  A body that may be stale while a read is in flight: fades, and -- new
+  here -- stops taking clicks.
+
+  The planner already faded its rank and sweep boards by hand
+  (`"transition-opacity", @rank_loading? && "opacity-50"`) but never
+  blocked pointer events, so a click during a recompute could land on a
+  row that was about to be replaced. One idiom for the whole page, with
+  the `pointer-events-none` the hand-rolled version was missing.
+  """
+  def scout_pane(assigns) do
+    ~H"""
+    <div class={[
+      "transition-opacity duration-150",
+      @loading && "opacity-50 pointer-events-none",
+      @class
+    ]}>
+      {render_slot(@inner_block)}
+    </div>
+    """
+  end
 
   # ---------------------------------------------------------------------
   # Containers

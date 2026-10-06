@@ -1,7 +1,13 @@
-<main class="w-full h-full p-4 pl-20 pb-20 overflow-auto text-gray-200">
-  <%!-- CHEWY PATCH: this page's own sticky-filter key -- distinct from
-        `scout_filters` (ScoutIntelLive) so the two tabs never clobber
-        each other's saved state. --%>
+<%!-- CHEWY PATCH (scout shell): this LiveView is a CHILD of
+      `ScoutIntelLive` now (`live_render/3`), so it owns none of the page
+      chrome -- no `<main>`, no `<h1>`, no category tab strip. The shell's
+      `<.scout_header>` renders all of that once; a second copy here is
+      exactly what made category switching look like a different app
+      with a different toolbar. --%>
+<%= if @access? do %>
+  <%!-- This page's own sticky-filter key -- distinct from
+        `scout_filters` (ScoutIntelLive) so the two never clobber each
+        other's saved state. --%>
   <div
     id="scout-planner-filter-store"
     phx-hook="LocalStorageSetting"
@@ -10,28 +16,12 @@
   >
   </div>
 
-  <%!-- ONE header: title, the tab strip back to the log's two tabs, the
-        mode switch and the only button on the page that re-reads
-        everything. It used to be three stacked bars, which cost a third
-        of a laptop screen before a single row of data. --%>
-  <header class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-3">
-    <h1 class="text-xl font-semibold tracking-tight">Scout Planner</h1>
-
-    <%!-- The tabs ScoutIntelLive renders, so this page is not a dead end:
-          its two siblings are separate LiveView STATE there
-          (`select_tab`), not routes, so they navigate to `/scout` and
-          that page's sticky filters restore whichever tab was last
-          read. --%>
-    <div role="tablist" class="tabs tabs-boxed tabs-sm bg-neutral-950/60">
-      <.link navigate={~p"/scout"} role="tab" id="scout-planner-tab-structures" class="tab">
-        Structures
-      </.link>
-      <.link navigate={~p"/scout"} role="tab" id="scout-planner-tab-spawns" class="tab">
-        Spawns
-      </.link>
-      <span role="tab" id="scout-planner-tab-planner" class="tab tab-active">Planner</span>
-    </div>
-
+  <%!-- What used to be this page's own `<header>`: the mode switch (this
+        page's second axis, not a second route), the busy/1 indicator,
+        the generated-at line and the only button that re-reads
+        everything. `scout_toolbar/1` is the shared box every category's
+        own controls sit in -- see `ScoutComponents`. --%>
+  <.scout_toolbar id="scout-planner-toolbar">
     <.busy
       busy={@rank_loading? or @sweep_loading? or @split_loading? or @heat_loading?}
       label="computing"
@@ -48,7 +38,7 @@
     <div class="ml-auto flex items-center gap-2">
       <%!-- CHEWY PATCH (scout sweep): a second MODE on this same page, not
             a second route -- `rank` is the origin-ball ranking, `sweep` is
-            the whole-region route, start points, region heat and k-way
+            the whole-region route, start points, region heat and a k-way
             split. --%>
       <div role="tablist" class="tabs tabs-boxed tabs-sm bg-neutral-950/60">
         <button
@@ -79,7 +69,7 @@
         Refresh
       </button>
     </div>
-  </header>
+  </.scout_toolbar>
 
   <%!-- ================================ RANK ============================ --%>
   <div :if={@mode == :rank}>
@@ -221,7 +211,7 @@
       </div>
     </div>
 
-    <div class={["transition-opacity", @rank_loading? && "opacity-50"]}>
+    <.scout_pane loading={@rank_loading?}>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         <.stat label="Candidates in scope" value={to_string(@candidates)} />
         <.stat
@@ -373,7 +363,7 @@
           </tbody>
         </.grid>
       </.panel>
-    </div>
+    </.scout_pane>
   </div>
 
   <%!-- ================================ SWEEP =========================== --%>
@@ -523,7 +513,7 @@
       Routing this scope…
     </.note>
 
-    <div :if={@sweep_result} class={["transition-opacity", @sweep_loading? && "opacity-50"]}>
+    <.scout_pane :if={@sweep_result} loading={@sweep_loading?}>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         <.stat label="Systems" value={to_string(@sweep_result.systems)} />
         <.stat label="Total jumps" value={to_string(@sweep_result.jumps)} />
@@ -703,7 +693,7 @@
           </tbody>
         </.grid>
       </.panel>
-    </div>
+    </.scout_pane>
 
     <.panel
       id="scout-region-heat-panel"
@@ -761,4 +751,9 @@
       </.grid>
     </.panel>
   </div>
-</main>
+<% else %>
+  <%!-- One-line muted notice, not a redirect: this child cannot
+        `push_navigate/2` or `push_patch/2` out from under the shell
+        it is nested in (moduledoc), so a gate failure stays right here. --%>
+  <.note id="scout-planner-denied">{@denial}</.note>
+<% end %>

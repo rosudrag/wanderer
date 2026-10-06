@@ -569,7 +569,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert view |> element("#scout-unanchored") |> render() =~ "Free Keepstar"
 
       # The whole point: a reader on the spawns tab still sees it.
-      assert render_click(view, "select_tab", %{"tab" => "spawns"}) =~ "scout-unanchored-alert"
+      assert render_patch(view, ~p"/scout/spawns") =~ "scout-unanchored-alert"
     end
 
     test "the banner survives the window selector and the search box", %{conn: conn} do
@@ -794,6 +794,124 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
 
       assert restored =~ "Still Here"
     end
+
+    test "a legacy payload migrates onto the category its tab key names, not the one on screen",
+         %{conn: conn} do
+      create_solar_system(%{solar_system_id: @hs_sys, system_class: 7, security: "0.9"})
+      create_solar_system(%{solar_system_id: @ns_sys, system_class: 9, security: "-0.3"})
+
+      structure(%{
+        structure_id: 1_000_000_000_304,
+        structure_name: "Untouched Structure",
+        solar_system_id: @hs_sys
+      })
+
+      spawn_sighting(%{
+        solar_system_id: @hs_sys,
+        spawn_name: "Highsec Spawn Saved",
+        observed_at: ago(60)
+      })
+
+      spawn_sighting(%{
+        solar_system_id: @ns_sys,
+        spawn_name: "Nullsec Spawn Saved",
+        observed_at: ago(60)
+      })
+
+      {:ok, view, html} = live(conn, ~p"/scout")
+      assert html =~ "Untouched Structure"
+
+      # A legacy blob naming "spawns" restores while structures is the
+      # category on screen -- the structures board, the only thing
+      # rendered right now, must not move.
+      restored_on_structures =
+        render_hook(view, "ls_restore_scout_filters", %{
+          "value" => Jason.encode!(%{"tab" => "spawns", "days" => 1, "space" => ["ns"]})
+        })
+
+      assert restored_on_structures =~ "Untouched Structure"
+
+      # The migration landed on spawns, not here.
+      spawns_html = render_patch(view, ~p"/scout/spawns")
+      refute spawns_html =~ "Highsec Spawn Saved"
+      assert spawns_html =~ "Nullsec Spawn Saved"
+    end
+  end
+
+  # The bug report this whole redesign exists for: one flat
+  # `scout_filters` blob shared by both tabs, so a space selection made
+  # on structures silently applied to spawns too.
+  describe "per-category filters" do
+    test "a space selection narrowed on structures does not apply to spawns, and survives the trip back",
+         %{conn: conn} do
+      create_solar_system(%{solar_system_id: @hs_sys, system_class: 7, security: "0.9"})
+      create_solar_system(%{solar_system_id: @ns_sys, system_class: 9, security: "-0.3"})
+
+      structure(%{
+        structure_id: 1_000_000_000_306,
+        structure_name: "Highsec Structure",
+        solar_system_id: @hs_sys
+      })
+
+      structure(%{
+        structure_id: 1_000_000_000_307,
+        structure_name: "Nullsec Structure",
+        solar_system_id: @ns_sys
+      })
+
+      spawn_sighting(%{
+        solar_system_id: @hs_sys,
+        spawn_name: "Highsec Spawn",
+        observed_at: ago(10)
+      })
+
+      {:ok, view, html} = live(conn, ~p"/scout")
+      assert html =~ "Highsec Structure"
+
+      # Drop highsec from the structures board only.
+      narrowed = view |> element("#scout-space-hs") |> render_click()
+      refute narrowed =~ "Highsec Structure"
+      assert narrowed =~ "Nullsec Structure"
+
+      # The spawns board still carries every space type -- the
+      # structures-only selection never crossed the category boundary.
+      spawns_html = render_patch(view, ~p"/scout/spawns")
+      assert spawns_html =~ "Highsec Spawn"
+
+      # And back on structures, the narrowing a reader picked is still
+      # there -- it was never undone by visiting another category.
+      back = render_patch(view, ~p"/scout/structures")
+      refute back =~ "Highsec Structure"
+      assert back =~ "Nullsec Structure"
+    end
+  end
+
+  describe "URL-driven categories" do
+    test "/scout is structures and /scout/spawns deep-links straight into spawns", %{conn: conn} do
+      structure(%{structure_id: 1_000_000_000_308, structure_name: "Only A Structure"})
+      spawn_sighting(%{spawn_name: "Only A Spawn", observed_at: ago(10)})
+
+      {:ok, _view, structures_html} = live(conn, ~p"/scout")
+      assert structures_html =~ "Only A Structure"
+      refute structures_html =~ "Only A Spawn"
+      assert structures_html =~ ~s(id="scout-structures")
+      refute structures_html =~ ~s(id="scout-spawns")
+
+      assert structures_html =~
+               ~r/<a[^>]*id="scout-tab-structures"[^>]*class="tab tab-active"[^>]*>/
+
+      # A fresh connection straight to /scout/spawns: structures never
+      # ran a single read on this socket, so there is nothing for it to
+      # have flashed before spawns painted.
+      {:ok, _view, spawns_html} = live(conn, ~p"/scout/spawns")
+      refute spawns_html =~ "Only A Structure"
+      assert spawns_html =~ "Only A Spawn"
+      refute spawns_html =~ ~s(id="scout-structures")
+      assert spawns_html =~ ~s(id="scout-spawns")
+
+      assert spawns_html =~
+               ~r/<a[^>]*id="scout-tab-spawns"[^>]*class="tab tab-active"[^>]*>/
+    end
   end
 
   describe "spawns tab" do
@@ -803,7 +921,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/scout")
 
-      default_window = render_click(view, "select_tab", %{"tab" => "spawns"})
+      default_window = render_patch(view, ~p"/scout/spawns")
       assert default_window =~ "Fresh Spawn"
       refute default_window =~ "Ancient Spawn"
 
@@ -822,7 +940,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       })
 
       {:ok, view, _html} = live(conn, ~p"/scout")
-      render_click(view, "select_tab", %{"tab" => "spawns"})
+      render_patch(view, ~p"/scout/spawns")
 
       fresh = view |> element("#scout-fresh-spawns") |> render()
 
@@ -840,7 +958,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       spawn_sighting(%{spawn_name: "Days Ago", observed_at: ago(60 * 30)})
 
       {:ok, view, _html} = live(conn, ~p"/scout")
-      render_click(view, "select_tab", %{"tab" => "spawns"})
+      render_patch(view, ~p"/scout/spawns")
 
       fresh = view |> element("#scout-fresh-spawns") |> render()
       log = view |> element("#scout-spawns") |> render()
@@ -861,7 +979,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       spawn_sighting(%{spawn_name: "Expiring Pop", observed_at: edge})
 
       {:ok, view, _html} = live(conn, ~p"/scout")
-      render_click(view, "select_tab", %{"tab" => "spawns"})
+      render_patch(view, ~p"/scout/spawns")
       assert view |> element("#scout-fresh-spawns") |> render() =~ "Expiring Pop"
 
       Process.sleep(1_100)
@@ -883,7 +1001,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       })
 
       {:ok, view, _html} = live(conn, ~p"/scout")
-      render_click(view, "select_tab", %{"tab" => "spawns"})
+      render_patch(view, ~p"/scout/spawns")
 
       render_click(view, "show_spawn", %{
         "system" => to_string(@jita),
@@ -969,7 +1087,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       })
 
       {:ok, view, _html} = live(conn, ~p"/scout")
-      render_click(view, "select_tab", %{"tab" => "spawns"})
+      render_patch(view, ~p"/scout/spawns")
 
       render_click(view, "toggle_space", %{"type" => "hs"})
 
