@@ -101,14 +101,16 @@ defmodule WandererApp.Scout.Split do
   Splits `system_ids` into `k` parts.
 
   opts:
-    * `:starts` -- a positional list of pinned start systems, one per
-      part (`[123, nil, 456]` pins parts 0 and 2 and leaves part 1 to
-      the seeding). A pinned system is that part's medoid for the whole
-      run and its route origin; it does NOT have to be one of
-      `system_ids`. Duplicates after the first are ignored (two parts
-      cannot share a medoid), and entries past `k` are dropped. When a
-      caller supplies `:distances` as well, that matrix MUST cover the
-      pinned systems -- `split/3` only builds one itself.
+    * `:starts` -- a positional list of start systems, one per part
+      (`[123, nil, 456]` starts parts 0 and 2 there and leaves part 1 to
+      the seeding). A start is always that part's ROUTE ORIGIN and does
+      not have to be one of `system_ids`. It is additionally that part's
+      MEDOID when it is unique to that part; several parts may share one
+      start (a fleet staged out of one system), in which case the carve-up
+      is seeded normally and only the routes begin there -- two identical
+      medoids would let a tie decide the partition. Entries past `k` are
+      dropped. When a caller supplies `:distances` as well, that matrix
+      MUST cover the start systems -- `split/3` only builds one itself.
     * `:distances` -- a precomputed `Sweep.distances/1` result, to avoid
       recomputing it when the caller already has one (e.g. the sweep that
       produced `system_ids` already paid for it).
@@ -141,6 +143,7 @@ defmodule WandererApp.Scout.Split do
       {:error, :too_few_systems}
     else
       starts = normalize_starts(Keyword.get(opts, :starts, []), k)
+      pins = geometric_pins(starts)
 
       distances =
         Keyword.get(opts, :distances) ||
@@ -150,22 +153,22 @@ defmodule WandererApp.Scout.Split do
 
       assignment =
         ids
-        |> seed_medoids(distances, k, starts)
+        |> seed_medoids(distances, k, pins)
         |> then(&capacity_balanced_assign(ids, &1, distances, capacity))
         |> lloyd(
           ids,
           distances,
           capacity,
           k,
-          starts,
+          pins,
           Keyword.get(opts, :max_lloyd_rounds, @default_max_lloyd_rounds)
         )
-        |> pin_members(starts)
+        |> pin_members(pins)
 
       parts =
         assignment
         |> build_parts(k, distances, starts)
-        |> maybe_rebalance(distances, starts, opts)
+        |> maybe_rebalance(distances, starts, pins, opts)
         |> finalize(starts)
 
       {:ok, parts}
@@ -173,43 +176,51 @@ defmodule WandererApp.Scout.Split do
   end
 
   # Positional list -> `%{part_index => system_id}`. Anything that is not
-  # an integer (`nil` for "seed this part normally") is simply absent, and
-  # a repeat of an already-pinned system is dropped rather than handed to
-  # two parts -- `capacity_balanced_assign/4` would then see two identical
-  # medoids and the tie would decide the partition, which is not something
-  # a reader of the UI could have predicted.
+  # an integer (`nil` for "seed this part normally") is simply absent.
+  # DUPLICATES ARE KEPT: a fleet staged out of one system is the normal
+  # case, and dropping the repeats (which this did until 2026-10-07)
+  # pinned pilot 1 and silently seeded the rest somewhere else.
   defp normalize_starts(starts, k) when is_list(starts) do
     starts
     |> Enum.take(k)
     |> Enum.with_index()
     |> Enum.reduce(%{}, fn
-      {id, idx}, acc when is_integer(id) ->
-        if id in Map.values(acc), do: acc, else: Map.put(acc, idx, id)
-
-      {_not_an_id, _idx}, acc ->
-        acc
+      {id, idx}, acc when is_integer(id) -> Map.put(acc, idx, id)
+      {_not_an_id, _idx}, acc -> acc
     end)
   end
 
   defp normalize_starts(_starts, _k), do: %{}
+
+  # A start only shapes the PARTITION when it is unique to its part: two
+  # identical medoids make a tie decide the carve-up, which is both
+  # arbitrary and invisible to the reader. Shared starts still shape every
+  # ROUTE (`route_for/4` uses the full `starts` map) -- three pilots
+  # undocking from one staging system get three balanced parts, each flown
+  # from that system.
+  defp geometric_pins(starts) do
+    counts = starts |> Map.values() |> Enum.frequencies()
+    Map.filter(starts, fn {_idx, id} -> Map.fetch!(counts, id) == 1 end)
+  end
 
   # A pinned start that IS a candidate belongs to its own part, even when
   # `capacity_balanced_assign/4` had to put it elsewhere to respect a
   # capacity: a pilot standing in a system nobody else should have to fly
   # to is the cheapest possible first stop. Worth at most one system of
   # imbalance, which step 4 then sees like any other.
-  defp pin_members(assignment, starts) do
-    Enum.reduce(starts, assignment, fn {idx, id}, acc ->
+  defp pin_members(assignment, pins) do
+    Enum.reduce(pins, assignment, fn {idx, id}, acc ->
       if Map.has_key?(acc, id), do: Map.put(acc, id, idx), else: acc
     end)
   end
 
-  defp maybe_rebalance(parts, distances, starts, opts) do
+  defp maybe_rebalance(parts, distances, starts, pins, opts) do
     if Keyword.get(opts, :rebalance, true) do
       rebalance(
         parts,
         distances,
         starts,
+        pins,
         Keyword.get(opts, :max_rebalance_rounds, @default_max_rebalance_rounds),
         System.monotonic_time(:millisecond),
         Keyword.get(opts, :budget_ms, @default_rebalance_budget_ms)
@@ -444,18 +455,18 @@ defmodule WandererApp.Scout.Split do
   # is always a valid partition, just a less polished one.
   # ---------------------------------------------------------------------
 
-  defp rebalance(parts, _distances, _starts, 0, _started_at, _budget_ms), do: parts
+  defp rebalance(parts, _distances, _starts, _pins, 0, _started_at, _budget_ms), do: parts
 
-  defp rebalance(parts, distances, starts, rounds_left, started_at, budget_ms) do
+  defp rebalance(parts, distances, starts, pins, rounds_left, started_at, budget_ms) do
     if budget_ms > 0 and System.monotonic_time(:millisecond) - started_at >= budget_ms do
       parts
     else
       worst = Enum.max_by(parts, & &1.jumps)
       current_makespan = worst.jumps
 
-      case best_move(worst, parts, distances, starts) do
+      case best_move(worst, parts, distances, starts, pins) do
         {moved_parts, new_makespan} when new_makespan < current_makespan ->
-          rebalance(moved_parts, distances, starts, rounds_left - 1, started_at, budget_ms)
+          rebalance(moved_parts, distances, starts, pins, rounds_left - 1, started_at, budget_ms)
 
         _no_improving_move ->
           parts
@@ -463,12 +474,12 @@ defmodule WandererApp.Scout.Split do
     end
   end
 
-  defp best_move(worst, parts, distances, starts) do
+  defp best_move(worst, parts, distances, starts, pins) do
     if length(worst.system_ids) <= 1 do
       nil
     else
       worst
-      |> boundary_candidates(parts, distances, starts)
+      |> boundary_candidates(parts, distances, pins)
       |> Enum.map(fn {system_id, target_idx} ->
         simulate_move(parts, worst.index, target_idx, system_id, distances, starts)
       end)
@@ -478,16 +489,18 @@ defmodule WandererApp.Scout.Split do
 
   # Systems in the worst part that sit exactly one jump from a system in
   # some OTHER part -- real gate-adjacent boundary systems, paired with
-  # every part they border. A part's own pinned start is never a
+  # every part they border. A part's own UNIQUELY pinned start is never a
   # candidate: handing the pilot's own system to someone else is the one
-  # move that makes a pinned split worse than no pinning at all.
-  defp boundary_candidates(worst, parts, distances, starts) do
+  # move that makes a pinned split worse than no pinning at all. A SHARED
+  # staging system is not protected -- exactly one part can own it, and
+  # which one is a balance question like any other.
+  defp boundary_candidates(worst, parts, distances, pins) do
     other_ids_by_part =
       parts
       |> Enum.reject(&(&1.index == worst.index))
       |> Map.new(&{&1.index, &1.system_ids})
 
-    pinned = Map.get(starts, worst.index)
+    pinned = Map.get(pins, worst.index)
 
     worst.system_ids
     |> Enum.reject(&(&1 == pinned))

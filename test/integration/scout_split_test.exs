@@ -217,11 +217,47 @@ defmodule WandererApp.ScoutSplitTest do
       assert parts |> Enum.flat_map(& &1.system_ids) |> Enum.sort() == Enum.sort(candidates)
     end
 
-    test "a repeated pinned system is honoured once, not handed to two parts" do
-      assert {:ok, parts} = Split.split(@all_ids, 2, starts: [@s1_4, @s1_4])
+    # Reported 2026-10-07, with a screenshot of three pilots all pinned
+    # to 319-3D and only Part 1 reading "pinned": the old
+    # `normalize_starts/2` dropped every repeat, so pilots 2 and 3 were
+    # seeded wherever the geometry liked. A fleet staged out of ONE
+    # system is the normal case, so a shared start now routes every part
+    # that names it.
+    test "several parts may share one staging system; every route starts there" do
+      assert {:ok, parts} = Split.split(@all_ids, 3, starts: [@h, @h, @h])
 
-      assert Enum.count(parts, & &1.pinned?) == 1
-      assert Enum.count(parts, &(&1.start == @s1_4)) == 1
+      assert length(parts) == 3
+
+      for part <- parts do
+        assert part.start == @h
+        assert part.pinned?
+        assert hd(part.order) == @h or @h not in part.system_ids
+      end
+
+      # Exactly one part may OWN the staging system as a stop; the other
+      # two fly from it without re-visiting it.
+      assert Enum.count(parts, &(@h in &1.system_ids)) == 1
+
+      # The carve-up is still a real partition.
+      assert parts |> Enum.flat_map(& &1.system_ids) |> Enum.sort() == Enum.sort(@all_ids)
+
+      for {a, b} <- pairs(parts) do
+        assert MapSet.disjoint?(MapSet.new(a.system_ids), MapSet.new(b.system_ids))
+      end
+    end
+
+    # A start that IS unique still shapes the partition, which is what
+    # `geometric_pins/1` separates: shared starts route, unique starts
+    # route AND seed.
+    test "a mix of one shared and one unique start keeps both as route origins" do
+      assert {:ok, parts} = Split.split(@all_ids, 3, starts: [@h, @h, @s1_4])
+
+      by_index = Map.new(parts, &{&1.index, &1})
+
+      assert by_index[0].start == @h
+      assert by_index[1].start == @h
+      assert by_index[2].start == @s1_4
+      assert @s1_4 in by_index[2].system_ids, "a unique start seeds its own part"
     end
   end
 
