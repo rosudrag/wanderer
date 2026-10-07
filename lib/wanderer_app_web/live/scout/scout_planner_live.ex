@@ -224,6 +224,15 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            sweep_stable: true,
            sweep_start: nil,
            sweep_k: 1,
+           # CHEWY PATCH (pinned split starts): `%{part_index => %{id:,
+           # name:}}`, the systems the operator's characters are already
+           # parked in. One search box is open at a time, so the query
+           # and its matches are single-slot state (`sweep_start_slot`
+           # says which picker owns them) rather than a map of k queries.
+           sweep_starts: %{},
+           sweep_start_slot: nil,
+           sweep_start_q: "",
+           sweep_start_matches: [],
            sweep_result: nil,
            sweep_error: nil,
            sweep_parts: [],
@@ -565,11 +574,115 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   def handle_event("update_sweep_k", %{"k" => k}, socket) do
     case Integer.parse(k) do
       {value, ""} when value >= 1 and value <= @max_split_k ->
-        {:noreply, socket |> assign(sweep_k: value) |> load_split() |> persist_filters()}
+        # A pinned start for a part that no longer exists is not kept
+        # hidden: lowering `k` to 2 and raising it again must not quietly
+        # re-pin part 3 to a system the operator can no longer see.
+        starts =
+          socket.assigns.sweep_starts
+          |> Enum.filter(fn {index, _start} -> index < value end)
+          |> Map.new()
+
+        {:noreply,
+         socket
+         |> assign(sweep_k: value, sweep_starts: starts)
+         |> load_split()
+         |> persist_filters()}
 
       _ ->
         {:noreply, socket}
     end
+  end
+
+  # -------------------------------------------------------------------
+  # CHEWY PATCH (pinned split starts): one start system per part, so a
+  # split routes the characters FROM WHERE THEY ARE instead of from
+  # whatever dead end the seeding liked. Same `MapSolarSystem.
+  # find_by_name/1` search the rank mode's origin picker uses; the
+  # pinned system does not have to be a stop in the sweep (a pilot
+  # parked in a system nothing needs scouting in is the normal case).
+  # Every change re-splits, which is a second or two in a task -- so the
+  # slot reports its own result next to itself, like the `k` control.
+  # -------------------------------------------------------------------
+
+  def handle_event("search_part_start", %{"slot" => slot, "q" => q}, socket) do
+    case split_slot(slot, socket.assigns.sweep_k) do
+      {:ok, index} ->
+        matches =
+          case String.trim(q) do
+            "" ->
+              []
+
+            trimmed ->
+              MapSolarSystem.find_by_name!(%{name: trimmed})
+              |> Enum.sort_by(& &1.solar_system_name)
+              |> Enum.take(10)
+          end
+
+        {:noreply,
+         assign(socket,
+           sweep_start_slot: index,
+           sweep_start_q: q,
+           sweep_start_matches: matches
+         )}
+
+      :error ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_part_start_search", _params, socket) do
+    {:noreply, assign(socket, sweep_start_matches: [], sweep_start_q: "", sweep_start_slot: nil)}
+  end
+
+  def handle_event("select_part_start", %{"slot" => slot, "id" => id} = params, socket) do
+    with {:ok, index} <- split_slot(slot, socket.assigns.sweep_k),
+         {system_id, ""} <- Integer.parse(to_string(id)) do
+      starts =
+        Map.put(socket.assigns.sweep_starts, index, %{
+          id: system_id,
+          name: Map.get(params, "name") || to_string(system_id)
+        })
+
+      {:noreply,
+       socket
+       |> assign(
+         sweep_starts: starts,
+         sweep_start_slot: nil,
+         sweep_start_q: "",
+         sweep_start_matches: []
+       )
+       |> load_split()
+       |> persist_filters()}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("clear_part_start", %{"slot" => slot}, socket) do
+    case split_slot(slot, socket.assigns.sweep_k) do
+      {:ok, index} ->
+        {:noreply,
+         socket
+         |> assign(sweep_starts: Map.delete(socket.assigns.sweep_starts, index))
+         |> load_split()
+         |> persist_filters()}
+
+      :error ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("clear_part_starts", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(
+       sweep_starts: %{},
+       sweep_start_slot: nil,
+       sweep_start_q: "",
+       sweep_start_matches: []
+     )
+     |> load_split()
+     |> persist_filters()}
   end
 
   # A heat row is the cheapest way into a sweep: picking the scope stops
@@ -715,7 +828,11 @@ defmodule WandererAppWeb.ScoutPlannerLive do
       "sweep_compress" => socket.assigns.sweep_compress,
       "sweep_stable" => socket.assigns.sweep_stable,
       "sweep_start" => socket.assigns.sweep_start,
-      "sweep_k" => socket.assigns.sweep_k
+      "sweep_k" => socket.assigns.sweep_k,
+      "sweep_starts" =>
+        Map.new(socket.assigns.sweep_starts, fn {index, start} ->
+          {to_string(index), %{"id" => start.id, "name" => start.name}}
+        end)
     }
 
     push_event(socket, "ls_update_#{@filter_store}", %{value: Jason.encode!(state)})
@@ -740,7 +857,9 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            sweep_compress: restore_sweep_compress(saved, socket.assigns.sweep_compress),
            sweep_stable: restore_sweep_stable(saved, socket.assigns.sweep_stable),
            sweep_start: restore_sweep_start(saved),
-           sweep_k: restore_sweep_k(saved, socket.assigns.sweep_k)
+           sweep_k: restore_sweep_k(saved, socket.assigns.sweep_k),
+           sweep_starts:
+             restore_sweep_starts(saved, restore_sweep_k(saved, socket.assigns.sweep_k))
          )}
 
       _ ->
@@ -842,6 +961,45 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   end
 
   defp restore_sweep_k(_saved, default), do: default
+
+  # Stored slots are re-validated exactly like a click: the key has to
+  # parse to a slot the current `k` actually has, and the id has to be a
+  # positive integer. localStorage is user-writable, and an out-of-range
+  # slot would pin a part nothing renders a picker for.
+  defp restore_sweep_starts(%{"sweep_starts" => saved}, k) when is_map(saved) do
+    saved
+    |> Enum.flat_map(fn
+      {slot, %{"id" => id} = start} when is_integer(id) and id > 0 ->
+        case split_slot(slot, k) do
+          {:ok, index} -> [{index, %{id: id, name: start_label(start, id)}}]
+          :error -> []
+        end
+
+      _other ->
+        []
+    end)
+    |> Map.new()
+  end
+
+  defp restore_sweep_starts(_saved, _k), do: %{}
+
+  defp start_label(%{"name" => name}, _id) when is_binary(name), do: String.slice(name, 0, 100)
+  defp start_label(_start, id), do: to_string(id)
+
+  # A split slot is a part index: `0..k-1`, from either a `phx-value-`
+  # string or a stored key.
+  defp split_slot(slot, k) when is_binary(slot) do
+    case Integer.parse(slot) do
+      {index, ""} -> split_slot(index, k)
+      _ -> :error
+    end
+  end
+
+  defp split_slot(slot, k) when is_integer(slot) and slot >= 0 do
+    if slot < k, do: {:ok, slot}, else: :error
+  end
+
+  defp split_slot(_slot, _k), do: :error
 
   # -------------------------------------------------------------------
   # Helpers
@@ -1255,7 +1413,15 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     else
       system_ids = Enum.map(result.stops, & &1.solar_system_id)
       token = socket.assigns.split_token + 1
-      opts = if stable, do: [budget_ms: 0], else: []
+
+      # Positional, one entry per part, `nil` where the operator pinned
+      # nothing -- `Split.split/3`'s `:starts` contract.
+      starts =
+        Enum.map(0..(k - 1), fn index ->
+          socket.assigns.sweep_starts |> Map.get(index, %{}) |> Map.get(:id)
+        end)
+
+      opts = [starts: starts] ++ if(stable, do: [budget_ms: 0], else: [])
 
       socket
       |> assign(split_token: token, split_loading?: true)
@@ -1366,10 +1532,20 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     end
   end
 
-  defp start_name(start_id, stops) do
-    case Enum.find(stops, &(&1.solar_system_id == start_id)) do
-      nil -> to_string(start_id)
-      stop -> stop.name
+  # A part's start is usually one of its own stops; a PINNED start is
+  # often not a stop at all (the pilot is parked where nothing needs
+  # scouting), so the picker's own name is the second source before
+  # falling back to the bare id.
+  defp start_name(start_id, stops, pinned) do
+    cond do
+      stop = Enum.find(stops, &(&1.solar_system_id == start_id)) ->
+        stop.name
+
+      start = Enum.find(Map.values(pinned), &(&1.id == start_id)) ->
+        start.name
+
+      true ->
+        to_string(start_id)
     end
   end
 end

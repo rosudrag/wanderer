@@ -157,6 +157,74 @@ defmodule WandererApp.ScoutSplitTest do
     end
   end
 
+  # CHEWY PATCH (pinned split starts): `:starts` exists so a scout can
+  # keep each character where it already is. Two behaviours are
+  # load-bearing and neither is visible from the headline makespan: a
+  # pinned part STARTS at the pinned system, and a pinned system outside
+  # the candidate set is flown FROM without being listed as a stop.
+  describe "split/3 -- pinned starts" do
+    test "each pinned part starts at its pinned system and keeps coverage" do
+      assert {:ok, parts} = Split.split(@all_ids, 2, starts: [@s1_4, @s2_3])
+
+      assert [p0, p1] = Enum.sort_by(parts, & &1.index)
+
+      assert p0.start == @s1_4
+      assert p1.start == @s2_3
+      assert p0.pinned? and p1.pinned?
+
+      # The pinned system is the FIRST stop of its own part, not merely
+      # a member of it -- that is the difference between "my character
+      # is here" and "my character has to fly somewhere else first".
+      assert hd(p0.order) == @s1_4
+      assert hd(p1.order) == @s2_3
+
+      # Pinning never costs coverage or disjointness.
+      assert parts |> Enum.flat_map(& &1.system_ids) |> Enum.sort() == Enum.sort(@all_ids)
+
+      for {a, b} <- pairs(parts) do
+        assert MapSet.disjoint?(MapSet.new(a.system_ids), MapSet.new(b.system_ids))
+      end
+    end
+
+    test "an unpinned part is still seeded normally alongside a pinned one" do
+      assert {:ok, parts} = Split.split(@all_ids, 2, starts: [@d3, nil])
+
+      assert [pinned, seeded] = Enum.sort_by(parts, & &1.index)
+
+      assert pinned.start == @d3
+      assert pinned.pinned?
+
+      refute seeded.pinned?
+      assert seeded.start in seeded.system_ids
+    end
+
+    test "a pinned system outside the candidate set is flown from, not visited" do
+      # The pilot is parked in S1_4, which this sweep does not need.
+      candidates = @all_ids -- [@s1_4]
+
+      assert {:ok, parts} = Split.split(candidates, 2, starts: [@s1_4, @s2_3])
+      assert %{} = part = Enum.find(parts, &(&1.start == @s1_4))
+
+      refute @s1_4 in part.system_ids
+      refute @s1_4 in part.order
+      assert part.order != []
+
+      # Flying out of the parked system is real work and stays in the
+      # cost: the first leg is at least the jump to the first stop.
+      assert part.jumps >= 1
+
+      # Nothing outside the sweep leaks into the covered set.
+      assert parts |> Enum.flat_map(& &1.system_ids) |> Enum.sort() == Enum.sort(candidates)
+    end
+
+    test "a repeated pinned system is honoured once, not handed to two parts" do
+      assert {:ok, parts} = Split.split(@all_ids, 2, starts: [@s1_4, @s1_4])
+
+      assert Enum.count(parts, & &1.pinned?) == 1
+      assert Enum.count(parts, &(&1.start == @s1_4)) == 1
+    end
+  end
+
   describe "Assignments.assign/2 and active_system_ids/1" do
     test "an expired assignment is not active" do
       past = DateTime.add(DateTime.utc_now(), -3600, :second) |> DateTime.truncate(:second)

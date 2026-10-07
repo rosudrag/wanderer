@@ -381,6 +381,54 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
       assert :binary.match(html, "scout-sweep-split-panel") <
                :binary.match(html, "scout-sweep-table-panel")
     end
+
+    # CHEWY PATCH (pinned split starts), asked for 2026-10-07: "could u
+    # make the route planner for split also be able to take custom
+    # starting position? I would like to keep my chars in same place".
+    # The whole feature is invisible unless the pinned system actually
+    # becomes that part's first stop, so that is what this asserts --
+    # not that a chip rendered.
+    test "pinning a part's start routes that part from the pinned system", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
+
+      render_click(planner, "switch_mode", %{"mode" => "sweep"})
+      render_click(planner, "add_region", %{"scope" => "sweep", "id" => "1"})
+      sweep_html(planner)
+
+      render_change(planner, "update_sweep_k", %{"k" => "2"})
+      html = sweep_html(planner)
+
+      assert html =~ "scout-sweep-start-slot-0"
+      assert html =~ "scout-sweep-start-slot-1"
+
+      # The picker is the rank mode's system search, scoped to a slot.
+      matches = render_change(planner, "search_part_start", %{"slot" => "0", "q" => "Sweeplive4"})
+      assert matches =~ "Sweeplive4"
+
+      render_click(planner, "select_part_start", %{
+        "slot" => "0",
+        "id" => "990500004",
+        "name" => "Sweeplive4"
+      })
+
+      html = sweep_html(planner)
+      assert html =~ "pinned"
+
+      parts = :sys.get_state(planner.pid).socket.assigns.sweep_parts
+      pinned = Enum.find(parts, & &1.pinned?)
+
+      assert pinned.index == 0
+      assert pinned.start == 990_500_004
+      assert hd(pinned.order) == 990_500_004
+      refute Enum.any?(parts, &(&1.index != 0 and &1.pinned?))
+
+      # Unpinning puts the part back on a seeded start.
+      render_click(planner, "clear_part_start", %{"slot" => "0"})
+      sweep_html(planner)
+
+      refute :sys.get_state(planner.pid).socket.assigns.sweep_parts |> Enum.any?(& &1.pinned?)
+    end
   end
 
   # CHEWY PATCH (scout planner security focus): "I would like to scout

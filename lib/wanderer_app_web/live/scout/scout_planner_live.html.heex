@@ -525,6 +525,92 @@
           visiting {security_summary(@sweep_security)}; the route still transits whatever it must
         </span>
       </div>
+
+      <%!-- CHEWY PATCH (pinned split starts): "I would like to keep my
+            chars in same place" -- a split normally picks each part's
+            start geometrically, which sends every pilot somewhere else
+            before the first scan. Pin a part to the system its character
+            is already sitting in and the partition is built AROUND that
+            system and routed from it; the system itself needs not be a
+            stop (a parked pilot usually is nowhere interesting), in
+            which case the approach leg still counts in that part's
+            jumps. Lives next to the `k` control, not in the split panel
+            below the route table, for the same reason the `k` feedback
+            does. --%>
+      <div
+        :if={@sweep_k > 1}
+        class="flex flex-wrap items-start gap-2 mt-2 pt-2 border-t border-neutral-800/70"
+        phx-click-away="close_part_start_search"
+      >
+        <span class="text-[10px] uppercase tracking-wider text-gray-500 mt-4">
+          Pilot starts
+        </span>
+        <div
+          :for={slot <- 0..(@sweep_k - 1)}
+          id={"scout-sweep-start-slot-#{slot}"}
+          class="relative w-36"
+        >
+          <div class="text-[10px] text-gray-500 mb-0.5">Part {slot + 1}</div>
+          <button
+            :if={Map.has_key?(@sweep_starts, slot)}
+            type="button"
+            phx-click="clear_part_start"
+            phx-value-slot={slot}
+            id={"scout-sweep-start-slot-#{slot}-clear"}
+            title="Unpin this part -- it goes back to a seeded start"
+            class="badge badge-sm gap-1 border-0 bg-primary/20 text-primary hover:bg-primary/30 max-w-full truncate"
+          >
+            {@sweep_starts[slot].name} ✕
+          </button>
+          <form
+            :if={not Map.has_key?(@sweep_starts, slot)}
+            phx-change="search_part_start"
+            phx-submit="search_part_start"
+          >
+            <input type="hidden" name="slot" value={slot} />
+            <input
+              type="text"
+              name="q"
+              id={"scout-sweep-start-slot-#{slot}-q"}
+              value={if @sweep_start_slot == slot, do: @sweep_start_q, else: ""}
+              phx-debounce="300"
+              autocomplete="off"
+              placeholder="Where it is…"
+              title="The system this pilot is parked in -- the part is built around it and routed from it"
+              class="input input-xs input-bordered bg-neutral-950/60 w-full"
+            />
+          </form>
+          <div
+            :if={@sweep_start_slot == slot and @sweep_start_matches != []}
+            class="absolute z-20 mt-1 w-full min-w-[14rem] rounded-lg border border-neutral-700 bg-neutral-900 shadow-lg max-h-64 overflow-auto"
+          >
+            <button
+              :for={m <- @sweep_start_matches}
+              type="button"
+              phx-click="select_part_start"
+              phx-value-slot={slot}
+              phx-value-id={m.solar_system_id}
+              phx-value-name={m.solar_system_name}
+              class="flex w-full items-baseline justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-neutral-800"
+            >
+              <span class="truncate">{m.solar_system_name}</span>
+              <span class="text-[11px] text-gray-500 truncate">{m.region_name}</span>
+            </button>
+          </div>
+        </div>
+        <button
+          :if={@sweep_starts != %{}}
+          type="button"
+          phx-click="clear_part_starts"
+          id="scout-sweep-starts-clear"
+          class="btn btn-xs btn-ghost text-gray-400 mt-4"
+        >
+          Unpin all ✕
+        </button>
+        <span class="text-[11px] text-gray-500 mt-4 max-w-sm">
+          a pinned part starts where its character already is; unpinned parts are seeded as before
+        </span>
+      </div>
     </div>
 
     <%!-- `empty/1` is a `<tr>`; dropped straight into a `<div>` the browser
@@ -637,8 +723,16 @@
             <div class="text-sm text-gray-200 mb-2">
               {length(part.system_ids)} systems · {part.jumps} jumps · starts {start_name(
                 part.start,
-                @sweep_result.stops
+                @sweep_result.stops,
+                @sweep_starts
               )}
+              <span
+                :if={part.pinned?}
+                class="badge badge-xs border-0 bg-primary/20 text-primary align-middle"
+                title="Pinned: this part was built around the system you parked this character in, and the jumps include flying out of it"
+              >
+                pinned
+              </span>
             </div>
             <form phx-change="select_part_character" class="flex items-center gap-2 mb-2">
               <input type="hidden" name="part" value={part.index} />
