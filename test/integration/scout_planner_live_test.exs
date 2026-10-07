@@ -429,6 +429,51 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
 
       refute :sys.get_state(planner.pid).socket.assigns.sweep_parts |> Enum.any?(& &1.pinned?)
     end
+
+    # CHEWY PATCH (searchable start picker), asked for 2026-10-07: "i
+    # need a searchable dropdown to pick starting location". The three
+    # suggested buttons are the three CHEAPEST starts, never "where my
+    # character is", and a start outside the scope used to be dropped on
+    # the floor by `pick_main_route/5` -- the page said it was set and
+    # the route opened somewhere else entirely.
+    test "a searched start outside the scope is flown from, not listed as a stop", %{conn: conn} do
+      # Off-scope: reachable from the chain but in another region, so it
+      # is never a sweep candidate.
+      put_system(990_500_099, "Sweepliveparked", 2, "Parked Region", 7, "0.9")
+      put_jump(990_500_099, 990_500_001)
+      reset_region_cache()
+
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
+
+      render_click(planner, "switch_mode", %{"mode" => "sweep"})
+      render_click(planner, "add_region", %{"scope" => "sweep", "id" => "1"})
+      sweep_html(planner)
+
+      matches =
+        render_change(planner, "search_part_start", %{"slot" => "main", "q" => "Sweepliveparked"})
+
+      assert matches =~ "Sweepliveparked"
+
+      render_click(planner, "select_part_start", %{
+        "slot" => "main",
+        "id" => "990500099",
+        "name" => "Sweepliveparked"
+      })
+
+      html = sweep_html(planner)
+      assert html =~ "scout-sweep-start-custom"
+      assert html =~ "from Sweepliveparked"
+
+      result = :sys.get_state(planner.pid).socket.assigns.sweep_result
+
+      assert result.start == 990_500_099
+      stop_ids = Enum.map(result.stops, & &1.solar_system_id)
+
+      refute 990_500_099 in stop_ids
+      assert hd(stop_ids) == 990_500_001, "the route must open at the nearest stop to the start"
+      assert result.systems == 6
+    end
   end
 
   # CHEWY PATCH (scout planner security focus): "I would like to scout

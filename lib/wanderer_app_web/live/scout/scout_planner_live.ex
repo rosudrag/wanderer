@@ -223,6 +223,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            # is one click away.
            sweep_stable: true,
            sweep_start: nil,
+           sweep_start_name: nil,
            sweep_k: 1,
            # CHEWY PATCH (pinned split starts): `%{part_index => %{id:,
            # name:}}`, the systems the operator's characters are already
@@ -557,10 +558,14 @@ defmodule WandererAppWeb.ScoutPlannerLive do
      |> persist_filters()}
   end
 
-  def handle_event("select_sweep_start", %{"id" => id}, socket) do
+  def handle_event("select_sweep_start", %{"id" => id} = params, socket) do
     case Integer.parse(to_string(id)) do
       {value, ""} ->
-        {:noreply, socket |> assign(sweep_start: value) |> load_sweep() |> persist_filters()}
+        {:noreply,
+         socket
+         |> assign(sweep_start: value, sweep_start_name: Map.get(params, "name"))
+         |> load_sweep()
+         |> persist_filters()}
 
       _ ->
         {:noreply, socket}
@@ -568,7 +573,11 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   end
 
   def handle_event("clear_sweep_start", _params, socket) do
-    {:noreply, socket |> assign(sweep_start: nil) |> load_sweep() |> persist_filters()}
+    {:noreply,
+     socket
+     |> assign(sweep_start: nil, sweep_start_name: nil)
+     |> load_sweep()
+     |> persist_filters()}
   end
 
   def handle_event("update_sweep_k", %{"k" => k}, socket) do
@@ -594,18 +603,23 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   end
 
   # -------------------------------------------------------------------
-  # CHEWY PATCH (pinned split starts): one start system per part, so a
-  # split routes the characters FROM WHERE THEY ARE instead of from
-  # whatever dead end the seeding liked. Same `MapSolarSystem.
-  # find_by_name/1` search the rank mode's origin picker uses; the
-  # pinned system does not have to be a stop in the sweep (a pilot
-  # parked in a system nothing needs scouting in is the normal case).
-  # Every change re-splits, which is a second or two in a task -- so the
-  # slot reports its own result next to itself, like the `k` control.
+  # CHEWY PATCH (searchable start picker): one type-to-search dropdown,
+  # used by `"main"` (the whole sweep's start) and by each split part's
+  # slot (`"0"`, `"1"`, …) -- a split routes the characters FROM WHERE
+  # THEY ARE instead of from whatever dead end the seeding liked. Same
+  # `MapSolarSystem.find_by_name/1` search the rank mode's origin picker
+  # uses, and in BOTH cases the chosen system may be outside the sweep:
+  # a parked pilot usually is. `Sweep.sweep/1` and `Split.split/3` both
+  # route FROM such a system without listing it as a stop.
+  #
+  # One dropdown is open at a time, so the query and its matches are
+  # single-slot state (`sweep_start_slot` says who owns them) rather
+  # than k+1 copies. Every change re-routes in a task -- which is why
+  # each control reports its own result next to itself, like `k`.
   # -------------------------------------------------------------------
 
   def handle_event("search_part_start", %{"slot" => slot, "q" => q}, socket) do
-    case split_slot(slot, socket.assigns.sweep_k) do
+    case start_slot(slot, socket.assigns.sweep_k) do
       {:ok, index} ->
         matches =
           case String.trim(q) do
@@ -632,6 +646,26 @@ defmodule WandererAppWeb.ScoutPlannerLive do
 
   def handle_event("close_part_start_search", _params, socket) do
     {:noreply, assign(socket, sweep_start_matches: [], sweep_start_q: "", sweep_start_slot: nil)}
+  end
+
+  def handle_event("select_part_start", %{"slot" => "main", "id" => id} = params, socket) do
+    case Integer.parse(to_string(id)) do
+      {system_id, ""} ->
+        {:noreply,
+         socket
+         |> assign(
+           sweep_start: system_id,
+           sweep_start_name: Map.get(params, "name"),
+           sweep_start_slot: nil,
+           sweep_start_q: "",
+           sweep_start_matches: []
+         )
+         |> load_sweep()
+         |> persist_filters()}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("select_part_start", %{"slot" => slot, "id" => id} = params, socket) do
@@ -828,6 +862,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
       "sweep_compress" => socket.assigns.sweep_compress,
       "sweep_stable" => socket.assigns.sweep_stable,
       "sweep_start" => socket.assigns.sweep_start,
+      "sweep_start_name" => socket.assigns.sweep_start_name,
       "sweep_k" => socket.assigns.sweep_k,
       "sweep_starts" =>
         Map.new(socket.assigns.sweep_starts, fn {index, start} ->
@@ -857,6 +892,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            sweep_compress: restore_sweep_compress(saved, socket.assigns.sweep_compress),
            sweep_stable: restore_sweep_stable(saved, socket.assigns.sweep_stable),
            sweep_start: restore_sweep_start(saved),
+           sweep_start_name: restore_sweep_start_name(saved),
            sweep_k: restore_sweep_k(saved, socket.assigns.sweep_k),
            sweep_starts:
              restore_sweep_starts(saved, restore_sweep_k(saved, socket.assigns.sweep_k))
@@ -956,6 +992,11 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   defp restore_sweep_start(%{"sweep_start" => id}) when is_integer(id) and id > 0, do: id
   defp restore_sweep_start(_saved), do: nil
 
+  defp restore_sweep_start_name(%{"sweep_start_name" => name}) when is_binary(name),
+    do: String.slice(name, 0, 100)
+
+  defp restore_sweep_start_name(_saved), do: nil
+
   defp restore_sweep_k(%{"sweep_k" => k}, default) when is_integer(k) do
     if k >= 1 and k <= @max_split_k, do: k, else: default
   end
@@ -1000,6 +1041,11 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   end
 
   defp split_slot(_slot, _k), do: :error
+
+  # The search dropdown is shared: `"main"` is the whole sweep's start,
+  # anything else is a split part's slot.
+  defp start_slot("main", _k), do: {:ok, :main}
+  defp start_slot(slot, k), do: split_slot(slot, k)
 
   # -------------------------------------------------------------------
   # Helpers

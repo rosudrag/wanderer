@@ -644,13 +644,18 @@
         />
       </div>
 
-      <.panel id="scout-sweep-starts-panel" title="Start points" hint="top 3 by route cost">
+      <.panel
+        id="scout-sweep-starts-panel"
+        title="Start points"
+        hint="top 3 by route cost, or search for the system you are in"
+      >
         <div class="flex flex-wrap items-center gap-2 p-2">
           <button
             :for={s <- @sweep_result.starts}
             type="button"
             phx-click="select_sweep_start"
             phx-value-id={s.solar_system_id}
+            phx-value-name={s.name}
             id={"scout-sweep-start-#{s.solar_system_id}"}
             class={[
               "btn btn-sm gap-1",
@@ -660,6 +665,61 @@
             {s.name}
             <span class="font-mono text-[11px] opacity-80">{s.jumps}j</span>
           </button>
+
+          <%!-- CHEWY PATCH (searchable start picker): the three buttons
+                above are the three CHEAPEST starts, which is never "the
+                system my character is parked in". This is the same
+                type-to-search dropdown the rank mode's origin uses, on
+                slot "main", and the system it picks does not have to be
+                a stop: `Sweep.sweep/1` routes FROM an out-of-scope start
+                and counts the approach leg without listing it. --%>
+          <div class="relative w-48" phx-click-away="close_part_start_search">
+            <form phx-change="search_part_start" phx-submit="search_part_start">
+              <input type="hidden" name="slot" value="main" />
+              <input
+                type="text"
+                name="q"
+                id="scout-sweep-start-q"
+                value={if @sweep_start_slot == :main, do: @sweep_start_q, else: ""}
+                phx-debounce="300"
+                autocomplete="off"
+                placeholder="Start somewhere else…"
+                title="Start this sweep from any system by name -- typically the one your character is already in"
+                class="input input-sm input-bordered bg-neutral-950/60 w-full"
+              />
+            </form>
+            <div
+              :if={@sweep_start_slot == :main and @sweep_start_matches != []}
+              id="scout-sweep-start-matches"
+              class="absolute z-20 mt-1 w-full min-w-[14rem] rounded-lg border border-neutral-700 bg-neutral-900 shadow-lg max-h-64 overflow-auto"
+            >
+              <button
+                :for={m <- @sweep_start_matches}
+                type="button"
+                phx-click="select_part_start"
+                phx-value-slot="main"
+                phx-value-id={m.solar_system_id}
+                phx-value-name={m.solar_system_name}
+                class="flex w-full items-baseline justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-neutral-800"
+              >
+                <span class="truncate">{m.solar_system_name}</span>
+                <span class="text-[11px] text-gray-500 truncate">{m.region_name}</span>
+              </button>
+            </div>
+          </div>
+
+          <span
+            :if={
+              @sweep_start &&
+                not Enum.any?(@sweep_result.starts, &(&1.solar_system_id == @sweep_start))
+            }
+            id="scout-sweep-start-custom"
+            class="badge badge-sm border-0 bg-primary/20 text-primary"
+            title="Starting from this system; it is only a stop if the sweep needed it anyway"
+          >
+            from {@sweep_start_name || @sweep_start}
+          </span>
+
           <button
             :if={@sweep_start}
             type="button"

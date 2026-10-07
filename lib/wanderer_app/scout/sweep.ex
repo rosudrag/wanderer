@@ -151,15 +151,30 @@ defmodule WandererApp.Scout.Sweep do
 
   defp build_sweep_result(resolved, candidate_ids, metadata_by_id) do
     graph = Planner.graph()
-    dist_matrix = distances(candidate_ids)
     id_set = MapSet.new(candidate_ids)
+
+    # CHEWY PATCH (custom start): a start the operator picked by name is
+    # usually where a character is parked, which is very often NOT one of
+    # this sweep's stops. Routing from it needs its row in the matrix;
+    # without this the start was silently ignored and the sweep opened
+    # wherever the seeding liked.
+    external_start = external_start(resolved.start, id_set)
+    dist_matrix = distances(candidate_ids ++ List.wrap(external_start))
 
     evaluated =
       id_set
       |> border_candidates(graph)
       |> Enum.map(fn sid -> {sid, route(candidate_ids, sid, dist_matrix)} end)
 
-    main_route = pick_main_route(resolved.start, id_set, candidate_ids, dist_matrix, evaluated)
+    main_route =
+      pick_main_route(
+        resolved.start,
+        external_start,
+        id_set,
+        candidate_ids,
+        dist_matrix,
+        evaluated
+      )
 
     starts =
       evaluated
@@ -189,11 +204,27 @@ defmodule WandererApp.Scout.Sweep do
      }}
   end
 
-  defp pick_main_route(start, id_set, candidate_ids, dist_matrix, evaluated) do
-    if is_integer(start) and MapSet.member?(id_set, start) do
-      route(candidate_ids, start, dist_matrix)
-    else
-      evaluated |> Enum.min_by(fn {_sid, r} -> r.jumps end) |> elem(1)
+  defp external_start(start, id_set) when is_integer(start) do
+    if MapSet.member?(id_set, start), do: nil, else: start
+  end
+
+  defp external_start(_start, _id_set), do: nil
+
+  defp pick_main_route(start, external_start, id_set, candidate_ids, dist_matrix, evaluated) do
+    cond do
+      is_integer(start) and MapSet.member?(id_set, start) ->
+        route(candidate_ids, start, dist_matrix)
+
+      # Parked outside the scope: fly FROM there. The system itself is
+      # not a stop (nothing needs scouting in it), but the approach leg
+      # is real work and stays in `jumps` -- same contract as
+      # `Split.split/3`'s pinned starts.
+      is_integer(external_start) ->
+        anchored = route([external_start | candidate_ids], external_start, dist_matrix)
+        %{anchored | order: tl(anchored.order)}
+
+      true ->
+        evaluated |> Enum.min_by(fn {_sid, r} -> r.jumps end) |> elem(1)
     end
   end
 
