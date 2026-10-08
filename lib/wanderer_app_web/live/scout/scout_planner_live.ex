@@ -87,6 +87,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   alias WandererApp.Api.{MapSolarSystem, ScoutSystemCoverage}
   alias WandererApp.Identity.ScoutAccess
   alias WandererApp.Scout.{Assignments, PlanWaypoints, Planner, Regions, Space, Split, Sweep}
+  alias WandererApp.Scout.Targets
 
   @kinds ~w(visit anoms sigs grid)
   @default_kind :sigs
@@ -246,7 +247,26 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            region_heat_kind: nil,
            region_heat_security: nil,
            heat_loading?: false,
-           heat_token: 0
+           heat_token: 0,
+           # CHEWY PATCH (target routing): the third mode -- a route over
+           # the systems `scout_structures_v1` says hold a finding, not
+           # over a region. Its own state throughout (own start, own
+           # bands) because sharing the sweep's would mean changing one
+           # mode's controls silently rewrote the other's answer.
+           targets_families: Targets.default_families(),
+           targets_window_days: Targets.default_window_days(),
+           targets_hide_expired: true,
+           targets_security: @default_security,
+           targets_radius: Targets.default_radius(),
+           targets_start: nil,
+           targets_start_name: nil,
+           # `%{system_id => name}` -- struck-off systems, named so the
+           # chip can say which one without a second read.
+           targets_ignore: %{},
+           targets_result: nil,
+           targets_error: nil,
+           targets_loading?: false,
+           targets_token: 0
          )
          |> load()}
     end
@@ -426,6 +446,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     {:noreply,
      case socket.assigns.mode do
        :sweep -> socket |> load_sweep() |> maybe_load_region_heat(force: true)
+       :targets -> load_targets(socket)
        _rank -> load(socket)
      end}
   end
@@ -487,10 +508,13 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   # table and k-way split instead of `rank/1`'s single ranked list.
   # -------------------------------------------------------------------
 
-  def handle_event("switch_mode", %{"mode" => mode}, socket) when mode in ~w(rank sweep) do
+  def handle_event("switch_mode", %{"mode" => mode}, socket)
+      when mode in ~w(rank sweep targets) do
+    socket = assign(socket, mode: String.to_existing_atom(mode))
+
     {:noreply,
      socket
-     |> assign(mode: String.to_existing_atom(mode))
+     |> maybe_load_targets()
      |> maybe_load_region_heat()
      |> persist_filters()}
   end
@@ -646,6 +670,31 @@ defmodule WandererAppWeb.ScoutPlannerLive do
 
   def handle_event("close_part_start_search", _params, socket) do
     {:noreply, assign(socket, sweep_start_matches: [], sweep_start_q: "", sweep_start_slot: nil)}
+  end
+
+  # CHEWY PATCH (target routing): the targets mode's own start, on the
+  # SAME shared dropdown -- slot `"target"` beside `"main"` and the
+  # per-part integer slots. Its system does not have to be a target:
+  # `Sweep.sweep/1` routes from an out-of-scope start, and the radius
+  # filter is measured from here.
+  def handle_event("select_part_start", %{"slot" => "target", "id" => id} = params, socket) do
+    case Integer.parse(to_string(id)) do
+      {system_id, ""} ->
+        {:noreply,
+         socket
+         |> assign(
+           targets_start: system_id,
+           targets_start_name: Map.get(params, "name"),
+           sweep_start_matches: [],
+           sweep_start_q: "",
+           sweep_start_slot: nil
+         )
+         |> load_targets()
+         |> persist_filters()}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("select_part_start", %{"slot" => "main", "id" => id} = params, socket) do
@@ -829,6 +878,144 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   end
 
   # -------------------------------------------------------------------
+  # Targets mode (`WandererApp.Scout.Targets`) -- the candidate set is
+  # the systems a structure finding names, so every control here is a
+  # MEMBERSHIP filter (which families, how stale, how far) plus the
+  # strike-off list. No kind selector and no split: freshness does not
+  # gate a finding, and a target run is one pilot's errand.
+  # -------------------------------------------------------------------
+
+  def handle_event("toggle_targets_family", %{"family" => family}, socket) do
+    case normalize_family(family) do
+      nil ->
+        {:noreply, socket}
+
+      key ->
+        families =
+          if key in socket.assigns.targets_families do
+            List.delete(socket.assigns.targets_families, key)
+          else
+            Targets.normalize_families([key | socket.assigns.targets_families])
+          end
+
+        {:noreply,
+         socket
+         |> assign(targets_families: Targets.normalize_families(families))
+         |> load_targets()
+         |> persist_filters()}
+    end
+  end
+
+  def handle_event("select_targets_window", %{"window" => window}, socket) do
+    days =
+      case Integer.parse(to_string(window)) do
+        {value, ""} -> Targets.normalize_window(value)
+        _ -> nil
+      end
+
+    {:noreply, socket |> assign(targets_window_days: days) |> load_targets() |> persist_filters()}
+  end
+
+  def handle_event("toggle_targets_expired", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(targets_hide_expired: !socket.assigns.targets_hide_expired)
+     |> load_targets()
+     |> persist_filters()}
+  end
+
+  def handle_event("update_targets_radius", %{"radius" => value}, socket) do
+    case Integer.parse(to_string(value)) do
+      {radius, ""} when radius >= 0 and radius <= 60 ->
+        {:noreply,
+         socket |> assign(targets_radius: radius) |> load_targets() |> persist_filters()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_targets_space", %{"type" => type}, socket) do
+    case parse_security_key(type) do
+      nil ->
+        {:noreply, socket}
+
+      key ->
+        {:noreply,
+         socket
+         |> assign(targets_security: toggle_security(socket.assigns.targets_security, key))
+         |> load_targets()
+         |> persist_filters()}
+    end
+  end
+
+  def handle_event("reset_targets_space", _params, socket) do
+    {:noreply,
+     socket |> assign(targets_security: @security_keys) |> load_targets() |> persist_filters()}
+  end
+
+  # "Not this one" -- the knob the operator asked for first. A struck-off
+  # system is remembered by NAME as well as id so the chip that undoes it
+  # can say what it is without re-reading the static map.
+  def handle_event("ignore_target", %{"id" => id} = params, socket) do
+    case Integer.parse(to_string(id)) do
+      {system_id, ""} ->
+        name = Map.get(params, "name") || to_string(system_id)
+
+        {:noreply,
+         socket
+         |> assign(targets_ignore: Map.put(socket.assigns.targets_ignore, system_id, name))
+         |> load_targets()
+         |> persist_filters()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("unignore_target", %{"id" => id}, socket) do
+    case Integer.parse(to_string(id)) do
+      {system_id, ""} ->
+        {:noreply,
+         socket
+         |> assign(targets_ignore: Map.delete(socket.assigns.targets_ignore, system_id))
+         |> load_targets()
+         |> persist_filters()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("clear_targets_ignore", _params, socket) do
+    {:noreply, socket |> assign(targets_ignore: %{}) |> load_targets() |> persist_filters()}
+  end
+
+  def handle_event("clear_targets_start", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(targets_start: nil, targets_start_name: nil)
+     |> load_targets()
+     |> persist_filters()}
+  end
+
+  # Same contract as the sweep's push: every stop is gate-reachable
+  # k-space (`Targets.plan/1` drops anything with no node in the jump
+  # graph before routing), so `leg: :gate` on each one is true, not
+  # assumed.
+  def handle_event("set_targets_route", _params, socket) do
+    %{targets_result: result, character_eve_id: character_eve_id} = socket.assigns
+
+    if is_nil(result) do
+      {:noreply, socket}
+    else
+      stops = Enum.map(result.route.waypoints, &%{solar_system_id: &1, leg: :gate})
+
+      push_route(socket, :targets, stops, character_eve_id, "This target run")
+    end
+  end
+
+  # -------------------------------------------------------------------
   # Sticky filters -- same `LocalStorageSetting` idiom as `ScoutIntelLive`
   # (`lib/wanderer_app_web/live/scout/scout_intel_live.ex`), own key so
   # the two pages' saved state never collides, everything re-validated
@@ -841,8 +1028,12 @@ defmodule WandererAppWeb.ScoutPlannerLive do
 
   def handle_event("ls_restore_#{@filter_store}", %{"value" => value}, socket) do
     case restore_filters(socket, value) do
-      {:ok, socket} -> {:noreply, socket |> load() |> load_sweep() |> maybe_load_region_heat()}
-      :unchanged -> {:noreply, socket}
+      {:ok, socket} ->
+        {:noreply,
+         socket |> load() |> load_sweep() |> maybe_load_region_heat() |> maybe_load_targets()}
+
+      :unchanged ->
+        {:noreply, socket}
     end
   end
 
@@ -867,7 +1058,16 @@ defmodule WandererAppWeb.ScoutPlannerLive do
       "sweep_starts" =>
         Map.new(socket.assigns.sweep_starts, fn {index, start} ->
           {to_string(index), %{"id" => start.id, "name" => start.name}}
-        end)
+        end),
+      "targets_families" => Enum.map(socket.assigns.targets_families, &to_string/1),
+      "targets_window_days" => socket.assigns.targets_window_days,
+      "targets_hide_expired" => socket.assigns.targets_hide_expired,
+      "targets_security" => Enum.map(socket.assigns.targets_security, &to_string/1),
+      "targets_radius" => socket.assigns.targets_radius,
+      "targets_start" => socket.assigns.targets_start,
+      "targets_start_name" => socket.assigns.targets_start_name,
+      "targets_ignore" =>
+        Map.new(socket.assigns.targets_ignore, fn {id, name} -> {to_string(id), name} end)
     }
 
     push_event(socket, "ls_update_#{@filter_store}", %{value: Jason.encode!(state)})
@@ -895,7 +1095,16 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            sweep_start_name: restore_sweep_start_name(saved),
            sweep_k: restore_sweep_k(saved, socket.assigns.sweep_k),
            sweep_starts:
-             restore_sweep_starts(saved, restore_sweep_k(saved, socket.assigns.sweep_k))
+             restore_sweep_starts(saved, restore_sweep_k(saved, socket.assigns.sweep_k)),
+           targets_families: restore_targets_families(saved, socket.assigns.targets_families),
+           targets_window_days: restore_targets_window(saved, socket.assigns.targets_window_days),
+           targets_hide_expired:
+             restore_bool(saved, "targets_hide_expired", socket.assigns.targets_hide_expired),
+           targets_security: restore_targets_security(saved),
+           targets_radius: restore_targets_radius(saved, socket.assigns.targets_radius),
+           targets_start: restore_targets_start(saved),
+           targets_start_name: restore_targets_start_name(saved),
+           targets_ignore: restore_targets_ignore(saved)
          )}
 
       _ ->
@@ -904,6 +1113,74 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   end
 
   defp restore_filters(_socket, _value), do: :unchanged
+
+  # Every stored targets value is re-validated exactly like a click --
+  # localStorage is user-writable, and `String.to_existing_atom/1` on a
+  # stored string is how a page crashes on mount.
+  defp restore_targets_families(%{"targets_families" => saved}, _default) when is_list(saved),
+    do: Targets.normalize_families(saved)
+
+  defp restore_targets_families(_saved, default), do: default
+
+  defp restore_targets_window(%{"targets_window_days" => days}, _default) when is_integer(days),
+    do: Targets.normalize_window(days)
+
+  defp restore_targets_window(%{"targets_window_days" => nil}, _default), do: nil
+  defp restore_targets_window(_saved, default), do: default
+
+  defp restore_bool(saved, key, default) do
+    case Map.get(saved, key) do
+      value when is_boolean(value) -> value
+      _ -> default
+    end
+  end
+
+  defp restore_targets_security(%{"targets_security" => saved}) when is_list(saved) do
+    case saved |> Enum.filter(&is_binary/1) |> Planner.normalize_security() do
+      [] -> @default_security
+      keys -> keys
+    end
+  end
+
+  defp restore_targets_security(_saved), do: @default_security
+
+  defp restore_targets_radius(%{"targets_radius" => radius}, _default)
+       when is_integer(radius) and radius >= 0 do
+    min(radius, Targets.max_radius())
+  end
+
+  defp restore_targets_radius(_saved, default), do: default
+
+  defp restore_targets_start(%{"targets_start" => id}) when is_integer(id) and id > 0, do: id
+  defp restore_targets_start(_saved), do: nil
+
+  defp restore_targets_start_name(%{"targets_start_name" => name}) when is_binary(name),
+    do: String.slice(name, 0, 100)
+
+  defp restore_targets_start_name(_saved), do: nil
+
+  defp restore_targets_ignore(%{"targets_ignore" => saved}) when is_map(saved) do
+    Enum.flat_map(saved, fn
+      {key, name} when is_binary(name) ->
+        case Integer.parse(to_string(key)) do
+          {id, ""} when id > 0 -> [{id, String.slice(name, 0, 100)}]
+          _ -> []
+        end
+
+      _ ->
+        []
+    end)
+    |> Map.new()
+  end
+
+  defp restore_targets_ignore(_saved), do: %{}
+
+  defp normalize_family(family) do
+    case Targets.normalize_families([family]) do
+      [key] -> if to_string(key) == to_string(family), do: key, else: nil
+      _ -> nil
+    end
+  end
 
   defp restore_origin_id(%{"origin_id" => id}) when is_integer(id) and id > 0, do: id
   defp restore_origin_id(_saved), do: nil
@@ -1045,6 +1322,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   # The search dropdown is shared: `"main"` is the whole sweep's start,
   # anything else is a split part's slot.
   defp start_slot("main", _k), do: {:ok, :main}
+  defp start_slot("target", _k), do: {:ok, :target}
   defp start_slot(slot, k), do: split_slot(slot, k)
 
   # -------------------------------------------------------------------
@@ -1271,6 +1549,64 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     ]
   end
 
+  # The targets read is the same shape as the sweep's: an opts closure
+  # built from the socket OUTSIDE the task (so the task never touches
+  # assigns), one monotonic token, previous answer left on screen while
+  # it runs.
+  defp load_targets(socket) do
+    socket = assign(socket, now: DateTime.utc_now())
+
+    if connected?(socket) do
+      opts = targets_opts(socket)
+      token = socket.assigns.targets_token + 1
+
+      socket
+      |> assign(targets_token: token, targets_loading?: true)
+      |> start_async({:targets, token}, fn -> Targets.plan(opts.()) end)
+    else
+      socket
+    end
+  end
+
+  # Switching INTO the mode must not recompute an answer that is already
+  # on screen -- a target run costs a structure read, a metadata read and
+  # a tour, and the tab is clicked far more often than the filters
+  # change. Every filter event calls `load_targets/1` directly.
+  defp maybe_load_targets(socket) do
+    %{mode: mode, targets_result: result, targets_error: error, targets_loading?: loading} =
+      socket.assigns
+
+    if mode == :targets and is_nil(result) and is_nil(error) and not loading do
+      load_targets(socket)
+    else
+      socket
+    end
+  end
+
+  defp targets_opts(socket) do
+    %{
+      targets_families: families,
+      targets_window_days: window_days,
+      targets_hide_expired: hide_expired,
+      targets_security: security,
+      targets_radius: radius,
+      targets_start: start,
+      targets_ignore: ignore
+    } = socket.assigns
+
+    fn ->
+      [
+        families: families,
+        window_days: window_days,
+        hide_past_window: hide_expired,
+        security: security,
+        radius: radius,
+        start: start,
+        ignore: Map.keys(ignore)
+      ]
+    end
+  end
+
   @impl true
   def handle_async({:rank, token}, result, socket) do
     if token == socket.assigns.rank_token do
@@ -1302,6 +1638,31 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     else
       {:noreply, socket}
     end
+  end
+
+  def handle_async({:targets, token}, result, socket) do
+    if token == socket.assigns.targets_token do
+      {:noreply, apply_targets(socket, result)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  defp apply_targets(socket, {:ok, {:ok, result}}) do
+    assign(socket,
+      targets_loading?: false,
+      now: DateTime.utc_now(),
+      targets_result: result,
+      targets_error: nil
+    )
+  end
+
+  defp apply_targets(socket, {:ok, {:error, reason}}),
+    do: assign(socket, targets_loading?: false, targets_result: nil, targets_error: reason)
+
+  defp apply_targets(socket, {:exit, reason}) do
+    Logger.error("[scout planner] targets task exited: #{inspect(reason)}")
+    assign(socket, targets_loading?: false, targets_result: nil, targets_error: :targets_crashed)
   end
 
   defp apply_rank(socket, {:ok, {:ok, %{rank: rank, plan: plan}}}) do
@@ -1577,6 +1938,34 @@ defmodule WandererAppWeb.ScoutPlannerLive do
       labels -> labels |> Enum.map(&elem(&1, 1)) |> Enum.join(", ")
     end
   end
+
+  # The finding(s) behind one stop on a target route. A stop with no
+  # entry cannot happen (`Targets.plan/1` routes exactly its own target
+  # ids) but the template must not raise if it ever does.
+  defp target_of(%{targets: targets}, solar_system_id), do: Map.get(targets, solar_system_id)
+  defp target_of(_result, _solar_system_id), do: nil
+
+  defp targets_structures(%{targets: targets}),
+    do: targets |> Map.values() |> Enum.map(& &1.structures) |> Enum.sum()
+
+  defp targets_structures(_result), do: 0
+
+  # Everything the filters removed, in one line. A route that silently
+  # omitted four reachable findings would read as "there is nothing else
+  # out there", which is the one wrong conclusion this page can cause.
+  defp targets_excluded_summary(%{excluded: excluded}, radius) do
+    [
+      {excluded.ignored, "ignored"},
+      {length(excluded.radius), "beyond #{radius} jumps"},
+      {length(excluded.unroutable), "not gate-reachable"},
+      {excluded.band, "in unticked space"},
+      {excluded.past_window, "past their window"}
+    ]
+    |> Enum.filter(fn {count, _label} -> count > 0 end)
+    |> Enum.map_join(" · ", fn {count, label} -> "#{count} #{label}" end)
+  end
+
+  defp targets_excluded_summary(_result, _radius), do: ""
 
   # A part's start is usually one of its own stops; a PINNED start is
   # often not a stop at all (the pilot is parked where nothing needs

@@ -97,6 +97,7 @@ defmodule WandererApp.Api.ScoutStructure do
     define(:active_timers, action: :active_timers, args: [:now])
     define(:search, action: :search, args: [:since])
     define(:archived, action: :archived)
+    define(:targets, action: :targets, args: [:statuses, :since])
 
     define(:archive, action: :archive, args: [:user_id])
     define(:restore, action: :restore)
@@ -378,6 +379,32 @@ defmodule WandererApp.Api.ScoutStructure do
              )
 
       prepare build(sort: [archived_at: :desc], load: [:archived])
+    end
+
+    # CHEWY PATCH (target routing): the membership behind the planner's
+    # Targets mode -- "take me to every system where we last saw one of
+    # THESE". Deliberately not one of the board actions above: it takes
+    # the status families as an ARGUMENT (the page lets a reader tick
+    # more than one) and carries no `q`/`system_id` filter, because a
+    # route is built from the whole finding set, not from whatever the
+    # intel page's search box happens to hold.
+    #
+    # `presence == :seen` and `archived == false` for the same reasons
+    # every board applies them: a structure the absence pipeline already
+    # took to `:missing`/`:gone` is not somewhere to fly, and an
+    # archived finding is one a reader has explicitly dismissed.
+    read :targets do
+      argument :statuses, {:array, :string}, allow_nil?: false
+      argument :since, :utc_datetime, allow_nil?: false
+
+      filter expr(
+               presence == :seen and
+                 archived == false and
+                 last_confirmed_at >= ^arg(:since) and
+                 status in ^arg(:statuses)
+             )
+
+      prepare build(sort: [last_confirmed_at: :desc], load: [:archived])
     end
 
     # Not atomic: both changes are plain attribute writes, but the

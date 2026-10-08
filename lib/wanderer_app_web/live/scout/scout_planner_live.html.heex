@@ -63,6 +63,17 @@
         >
           Sweep
         </button>
+        <button
+          type="button"
+          phx-click="switch_mode"
+          phx-value-mode="targets"
+          role="tab"
+          id="scout-planner-mode-targets"
+          class={["tab", @mode == :targets && "tab-active"]}
+          title="Route the systems where a structure finding was last seen — unanchoring hulls by default"
+        >
+          Targets
+        </button>
       </div>
 
       <button phx-click="refresh" id="scout-planner-refresh" class="btn btn-sm btn-ghost">
@@ -933,6 +944,407 @@
         </tbody>
       </.grid>
     </.panel>
+  </div>
+
+  <%!-- =============================== TARGETS ========================== --%>
+  <%!-- CHEWY PATCH (target routing): the candidate set is a FINDING set,
+        not a region and not a ball -- `WandererApp.Scout.Targets` turns
+        `scout_structures_v1` rows into a system list and hands it to the
+        same `Sweep.sweep/1` the mode above uses, so everything below the
+        filter row is the sweep vocabulary. No kind selector (freshness
+        never gates a finding) and no k-split (a target run is one
+        pilot's errand); what it has instead is a strike-off list and a
+        radius, because 39 unanchoring systems over 14 regions is not one
+        route. --%>
+  <div :if={@mode == :targets}>
+    <div class="mb-4 p-2 rounded-lg border border-neutral-800 bg-neutral-900/30">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-[10px] uppercase tracking-wider text-gray-500">Findings</span>
+        <div class="join" id="scout-targets-families">
+          <button
+            :for={family <- Targets.families()}
+            type="button"
+            phx-click="toggle_targets_family"
+            phx-value-family={family}
+            id={"scout-targets-family-#{family}"}
+            class={[
+              "btn btn-xs join-item",
+              if(family in @targets_families, do: "btn-primary", else: "btn-ghost text-gray-400")
+            ]}
+          >
+            {Targets.family_label(family)}
+          </button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2 items-start mt-2 pt-2 border-t border-neutral-800/70">
+        <.field label="Confirmed within">
+          <form phx-change="select_targets_window">
+            <select
+              name="window"
+              id="scout-targets-window"
+              class="select select-sm select-bordered bg-neutral-950/60 w-full py-0"
+              title="Ignore a finding nobody has re-confirmed in this long — a six-day-old sighting is a guess, not a target"
+            >
+              <option
+                :for={days <- Targets.window_days_options()}
+                value={days}
+                selected={days == @targets_window_days}
+              >
+                {days}d
+              </option>
+              <option value="any" selected={is_nil(@targets_window_days)}>Any age</option>
+            </select>
+          </form>
+        </.field>
+
+        <.field label="Max jumps">
+          <form phx-change="update_targets_radius">
+            <input
+              type="number"
+              name="radius"
+              id="scout-targets-radius"
+              min="0"
+              max={Targets.max_radius()}
+              value={@targets_radius}
+              phx-debounce="400"
+              title="How far from the start a target may be. 0 turns it off; it does nothing until a start is picked, since there is nothing to measure from."
+              class="input input-sm input-bordered bg-neutral-950/60 w-full"
+            />
+          </form>
+          <p
+            :if={@targets_radius > 0 and is_nil(@targets_start)}
+            class="mt-0.5 text-[10px] text-gray-500 truncate"
+          >
+            pick a start to apply it
+          </p>
+        </.field>
+
+        <%!-- The same type-to-search dropdown the other two modes use, on
+              its own slot: a target run starts where the character is
+              parked, which is almost never one of the targets. --%>
+        <.field label="Start" class="col-span-2 sm:col-span-1">
+          <div class="relative" phx-click-away="close_part_start_search">
+            <button
+              :if={@targets_start}
+              type="button"
+              phx-click="clear_targets_start"
+              id="scout-targets-start-clear"
+              title="Unpin this start — the route opens wherever it is cheapest"
+              class="badge badge-sm gap-1 border-0 bg-primary/20 text-primary hover:bg-primary/30 max-w-full truncate"
+            >
+              {@targets_start_name || @targets_start} ✕
+            </button>
+            <form
+              :if={is_nil(@targets_start)}
+              phx-change="search_part_start"
+              phx-submit="search_part_start"
+            >
+              <input type="hidden" name="slot" value="target" />
+              <input
+                type="text"
+                name="q"
+                id="scout-targets-start-q"
+                value={if @sweep_start_slot == :target, do: @sweep_start_q, else: ""}
+                phx-debounce="300"
+                autocomplete="off"
+                placeholder="Where you are…"
+                class="input input-sm input-bordered bg-neutral-950/60 w-full"
+              />
+            </form>
+            <div
+              :if={@sweep_start_slot == :target and @sweep_start_matches != []}
+              id="scout-targets-start-matches"
+              class="absolute z-20 mt-1 w-full min-w-[14rem] rounded-lg border border-neutral-700 bg-neutral-900 shadow-lg max-h-64 overflow-auto"
+            >
+              <button
+                :for={m <- @sweep_start_matches}
+                type="button"
+                phx-click="select_part_start"
+                phx-value-slot="target"
+                phx-value-id={m.solar_system_id}
+                phx-value-name={m.solar_system_name}
+                class="flex w-full items-baseline justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-neutral-800"
+              >
+                <span class="truncate">{m.solar_system_name}</span>
+                <span class="text-[11px] text-gray-500 truncate">{m.region_name}</span>
+              </button>
+            </div>
+          </div>
+        </.field>
+
+        <%!-- A decommission is a FIXED 7 days from a start nobody saw, so
+              `unanchoring_since + 7d` is the latest the hull can still be
+              there (`WandererApp.Scout.Unanchor`). Past it, the trip is
+              wasted -- but it is a prediction, so it is a tick box, not a
+              hard rule. --%>
+        <label
+          class="flex min-w-0 items-start gap-1.5 text-[11px] text-gray-300 cursor-pointer col-span-2"
+          title="Drop an unanchoring hull once its predicted maximum (first sighting + 7 days) has passed — it cannot still be coming out. Only ever drops rows that carry a prediction."
+        >
+          <input
+            type="checkbox"
+            id="scout-targets-hide-expired"
+            checked={@targets_hide_expired}
+            phx-click="toggle_targets_expired"
+            class="checkbox checkbox-xs mt-0.5"
+          />
+          <span>
+            Hide findings past their window
+            <span class="block text-gray-500">unanchoring: first sighting + 7d</span>
+          </span>
+        </label>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-neutral-800/70">
+        <div class="max-w-full overflow-x-auto">
+          <div class="join" id="scout-targets-security">
+            <.space_chip
+              :for={{key, label} <- @security_types}
+              key={key}
+              label={label}
+              event="toggle_targets_space"
+              id={"scout-targets-space-#{key}"}
+              title={"Keep #{label} targets — the route still transits whatever it must"}
+              selected={key in @targets_security}
+            />
+          </div>
+        </div>
+        <button
+          :if={length(@targets_security) < length(@security_types)}
+          phx-click="reset_targets_space"
+          id="scout-targets-security-reset"
+          class="btn btn-sm btn-ghost text-gray-400"
+        >
+          All space ✕
+        </button>
+      </div>
+
+      <%!-- The strike-off list. Kept visible whenever it is non-empty, in
+            the toolbar rather than next to the table, because a filter
+            you cannot see is a route you cannot explain. --%>
+      <div
+        :if={@targets_ignore != %{}}
+        class="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-neutral-800/70"
+        id="scout-targets-ignored"
+      >
+        <span class="text-[10px] uppercase tracking-wider text-gray-500">Ignored</span>
+        <button
+          :for={{id, name} <- Enum.sort_by(@targets_ignore, fn {_id, name} -> name end)}
+          type="button"
+          phx-click="unignore_target"
+          phx-value-id={id}
+          id={"scout-targets-ignored-#{id}"}
+          title="Put this system back on the route"
+          class="badge badge-sm gap-1 border-0 bg-neutral-800 text-gray-300 hover:bg-neutral-700"
+        >
+          {name} ✕
+        </button>
+        <button
+          type="button"
+          phx-click="clear_targets_ignore"
+          id="scout-targets-ignored-clear"
+          class="btn btn-xs btn-ghost text-gray-400"
+        >
+          Clear all
+        </button>
+      </div>
+    </div>
+
+    <.note :if={@targets_error == :no_targets} id="scout-targets-none">
+      Nothing matches these filters — no {Enum.map_join(
+        @targets_families,
+        " / ",
+        &String.downcase(Targets.family_label(&1))
+      )} finding is both recent enough and reachable. That is the good day.
+    </.note>
+
+    <.note :if={@targets_error && @targets_error != :no_targets} id="scout-targets-error">
+      {plan_error_message(@targets_error)}
+    </.note>
+
+    <.note :if={@targets_loading? and is_nil(@targets_result)} id="scout-targets-loading">
+      Finding targets…
+    </.note>
+
+    <.scout_pane :if={@targets_result} loading={@targets_loading?}>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <.stat label="Target systems" value={to_string(@targets_result.route.systems)} />
+        <.stat
+          label="Structures"
+          value={to_string(targets_structures(@targets_result))}
+          hint={"of #{@targets_result.candidates} systems found"}
+        />
+        <.stat label="Total jumps" value={to_string(@targets_result.route.jumps)} />
+        <.stat
+          label="Waypoints"
+          value={to_string(length(@targets_result.route.waypoints))}
+          hint={
+            if @targets_result.route.compressed?, do: "after compression", else: "uncompressed"
+          }
+        />
+      </div>
+
+      <p
+        :if={targets_excluded_summary(@targets_result, @targets_radius) != ""}
+        id="scout-targets-excluded"
+        class="text-[11px] text-gray-500 mb-3"
+      >
+        Not on this route: {targets_excluded_summary(@targets_result, @targets_radius)}.
+      </p>
+
+      <div class="flex flex-wrap items-center gap-2 mb-3">
+        <form phx-change="select_character" class="flex items-center gap-2">
+          <select
+            name="character_eve_id"
+            id="scout-targets-character"
+            title="Whose autopilot this route is written to, through ESI"
+            class="select select-sm select-bordered bg-neutral-950/60 py-0 max-w-[12rem]"
+          >
+            <option
+              :for={character <- @characters}
+              value={character.eve_id}
+              selected={character.eve_id == @character_eve_id}
+            >
+              {character.name}
+            </option>
+          </select>
+        </form>
+        <button
+          type="button"
+          phx-click="set_targets_route"
+          id="scout-targets-set-route"
+          disabled={@characters == []}
+          title="Replaces this character's in-game route with the target run, in order"
+          class="btn btn-sm btn-primary"
+        >
+          Set route
+        </button>
+        <.route_outcome status={@route_status} scope={:targets} />
+      </div>
+
+      <.panel
+        id="scout-targets-table-panel"
+        title="Target route"
+        count={length(@targets_result.route.stops)}
+        hint="soonest predicted deadline is an upper bound, never a timer"
+      >
+        <.grid id="scout-targets-table">
+          <thead>
+            <tr>
+              <th class="text-right">#</th>
+              <th>System</th>
+              <th>Region</th>
+              <th>Findings</th>
+              <th>Out by</th>
+              <th>Last seen</th>
+              <th class="text-right">Jumps</th>
+              <th>WP</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              :for={stop <- @targets_result.route.stops}
+              id={"scout-target-#{stop.solar_system_id}"}
+            >
+              <td class="text-right text-xs text-gray-500">{stop.order}</td>
+              <td>
+                <div class="flex items-center gap-1.5 whitespace-nowrap">
+                  {stop.name}
+                  <.space_badge space={stop.space} />
+                </div>
+              </td>
+              <td class="text-xs text-gray-400">{stop.region_name || "—"}</td>
+              <td>
+                <.target_findings target={target_of(@targets_result, stop.solar_system_id)} />
+              </td>
+              <td>
+                <.target_deadline
+                  target={target_of(@targets_result, stop.solar_system_id)}
+                  now={@now}
+                />
+              </td>
+              <td>
+                <.target_seen
+                  target={target_of(@targets_result, stop.solar_system_id)}
+                  now={@now}
+                />
+              </td>
+              <td class="text-right tabular-nums">{stop.jumps_from_prev}</td>
+              <td><.waypoint_badge waypoint?={stop.waypoint?} /></td>
+              <td class="text-right">
+                <button
+                  type="button"
+                  phx-click="ignore_target"
+                  phx-value-id={stop.solar_system_id}
+                  phx-value-name={stop.name}
+                  id={"scout-target-#{stop.solar_system_id}-ignore"}
+                  title="Drop this system from the route — undo it from the Ignored chips above"
+                  class="btn btn-ghost btn-xs text-gray-500 hover:text-error"
+                >
+                  ✕
+                </button>
+              </td>
+            </tr>
+            <.empty :if={@targets_result.route.stops == []} cols={9}>
+              Nothing to fly to.
+            </.empty>
+          </tbody>
+        </.grid>
+      </.panel>
+
+      <%!-- A finding the route could not take. Listed, never dropped
+            silently: a wormhole has no gate path and an out-of-radius
+            target is a choice, not an absence. --%>
+      <.panel
+        :if={@targets_result.excluded.radius != [] or @targets_result.excluded.unroutable != []}
+        id="scout-targets-excluded-panel"
+        title="Left out"
+        count={
+          length(@targets_result.excluded.radius) + length(@targets_result.excluded.unroutable)
+        }
+        hint="real findings this route does not visit"
+      >
+        <.grid id="scout-targets-excluded-table">
+          <thead>
+            <tr>
+              <th>System</th>
+              <th>Region</th>
+              <th>Findings</th>
+              <th>Why</th>
+              <th>Last seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              :for={
+                {t, why} <-
+                  Enum.map(
+                    @targets_result.excluded.radius,
+                    &{&1, "beyond #{@targets_radius} jumps"}
+                  ) ++
+                    Enum.map(@targets_result.excluded.unroutable, &{&1, "no gate route"})
+              }
+              id={"scout-target-out-#{t.solar_system_id}"}
+            >
+              <td>
+                <div class="flex items-center gap-1.5 whitespace-nowrap">
+                  {t.name}
+                  <.space_badge space={t.space} />
+                </div>
+              </td>
+              <td class="text-xs text-gray-400">{t.region_name || "—"}</td>
+              <td class="text-xs text-gray-300">
+                {plural(t.structures, "structure", "structures")}
+              </td>
+              <td class="text-xs text-gray-500">{why}</td>
+              <td><.seen at={t.last_confirmed_at} now={@now} /></td>
+            </tr>
+          </tbody>
+        </.grid>
+      </.panel>
+    </.scout_pane>
   </div>
 <% else %>
   <%!-- One-line muted notice, not a redirect: this child cannot

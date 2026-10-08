@@ -176,6 +176,118 @@ defmodule WandererAppWeb.ScoutSweepAPITest do
     assert response(conn, 404)
   end
 
+  # CHEWY PATCH (target routing): `mode=targets` answers the SAME
+  # `#plan 2` a sweep does -- a bot that can fly one can fly the other --
+  # and says which it got through the `scope=systems:…` token. Its
+  # candidate set comes from `scout_structures_v1`, so there is no
+  # `scope` parameter at all.
+  describe "mode=targets" do
+    setup do
+      since = DateTime.add(DateTime.utc_now(), -1, :day)
+      put_structure(990_400_901, @s2, "Unanchoring", since)
+      put_structure(990_400_902, @s4, "Unanchoring", since)
+      # A different family: absent unless `families` asks for it.
+      put_structure(990_400_903, @s1, "NoFuel", nil)
+      :ok
+    end
+
+    test "answers #plan 2 over the systems a finding names", %{conn: conn, map: map} do
+      conn = get(conn, ~p"/api/maps/#{map.id}/scout/plan?mode=targets&format=flat")
+
+      body = response(conn, 200)
+
+      refute String.contains?(body, "\n")
+      assert ["#plan 2 " <> header | records] = String.split(body, ";")
+      assert header =~ "scope=systems:"
+      assert length(records) == 2
+
+      ids = Enum.map(records, &(&1 |> String.split("|") |> hd()))
+      assert Enum.sort(ids) == Enum.sort(["#{@s2}", "#{@s4}"])
+    end
+
+    test "families widens the candidate set and ignore narrows it", %{conn: conn, map: map} do
+      conn =
+        get(
+          conn,
+          ~p"/api/maps/#{map.id}/scout/plan?mode=targets&families=unanchoring,dead&ignore=#{@s4}&format=flat"
+        )
+
+      body = response(conn, 200)
+      [_header | records] = String.split(body, ";")
+      ids = Enum.map(records, &(&1 |> String.split("|") |> hd()))
+
+      assert Enum.sort(ids) == Enum.sort(["#{@s1}", "#{@s2}"])
+    end
+
+    test "an unknown family is refused rather than silently ignored", %{conn: conn, map: map} do
+      conn = get(conn, ~p"/api/maps/#{map.id}/scout/plan?mode=targets&families=bogus")
+      assert response(conn, 422) =~ "families"
+    end
+
+    test "nothing matching is a 422 naming the reason, not an empty route", %{
+      conn: conn,
+      map: map
+    } do
+      conn = get(conn, ~p"/api/maps/#{map.id}/scout/plan?mode=targets&families=unanchored")
+      assert response(conn, 422) =~ "no_targets"
+    end
+
+    test "the feature flag gates it", %{conn: conn, map: map} do
+      Application.put_env(:wanderer_app, :scout_planner_enabled, false)
+
+      conn = get(conn, ~p"/api/maps/#{map.id}/scout/plan?mode=targets")
+
+      assert response(conn, 404)
+    end
+  end
+
+  defp put_structure(structure_id, solar_system_id, status, unanchoring_since) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, _row} =
+      WandererApp.Api.ScoutStructure
+      |> Ash.Changeset.for_create(:create, %{
+        structure_id: structure_id,
+        solar_system_id: solar_system_id,
+        structure_name: "FIX #{structure_id}",
+        group_name: "Citadel",
+        status: status,
+        presence: :seen,
+        unanchoring_since: unanchoring_since,
+        first_seen_at: DateTime.add(now, -3, :day),
+        last_confirmed_at: DateTime.add(now, -1, :hour)
+      })
+      |> Ash.create(authorize?: false)
+  end
+
+  # `format=json` answered a 500 for every sweep until the scope tuple
+  # was rendered as its token: Jason refuses a tuple, and nothing on the
+  # wire path had ever asked for JSON.
+  describe "format=json" do
+    test "a sweep encodes, with scope as the same token the text header carries", %{
+      conn: conn,
+      map: map
+    } do
+      conn = get(conn, ~p"/api/maps/#{map.id}/scout/plan?mode=sweep&scope=region:#{@region}")
+
+      assert %{"data" => data} = json_response(conn, 200)
+      assert data["scope"] == "region:#{@region}"
+      assert length(data["stops"]) == 4
+    end
+
+    test "a target run encodes its findings envelope", %{conn: conn, map: map} do
+      since = DateTime.add(DateTime.utc_now(), -1, :day)
+      put_structure(990_400_911, @s2, "Unanchoring", since)
+
+      conn = get(conn, ~p"/api/maps/#{map.id}/scout/plan?mode=targets")
+
+      assert %{"data" => data} = json_response(conn, 200)
+      assert data["route"]["scope"] =~ "systems:"
+      assert %{"structures" => 1} = data["targets"]["#{@s2}"]
+      assert data["excluded"]["ignored"] == 0
+    end
+  end
+
   defp put_system(solar_system_id, name) do
     {:ok, _system} =
       MapSolarSystem

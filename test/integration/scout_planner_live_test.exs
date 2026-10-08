@@ -625,6 +625,91 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     end
   end
 
+  # CHEWY PATCH (target routing): the third mode. Same contract as the
+  # two above -- it renders, its controls change the ANSWER and not just
+  # the chip state, and the strike-off list is visible enough to explain
+  # the route it produced.
+  describe "targets mode" do
+    setup do
+      WandererApp.Cache.delete("scout:planner:adjacency")
+
+      for {id, name} <- [
+            {990_700_001, "Targetalpha"},
+            {990_700_002, "Targetbravo"},
+            {990_700_003, "Targetcharlie"}
+          ] do
+        put_system(id, name, 3, "Target Region", 7, "0.8")
+      end
+
+      put_jump(990_700_001, 990_700_002)
+      put_jump(990_700_002, 990_700_003)
+
+      since = DateTime.add(DateTime.utc_now(), -1, :day)
+      put_structure(990_700_101, 990_700_001, "Unanchoring", since)
+      put_structure(990_700_102, 990_700_002, "Unanchoring", since)
+      put_structure(990_700_103, 990_700_003, "NoFuel", nil)
+
+      reset_region_cache()
+
+      :ok
+    end
+
+    test "lists the systems a finding names, and ignoring one takes it off the route", %{
+      conn: conn
+    } do
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
+
+      render_click(planner, "switch_mode", %{"mode" => "targets"})
+      html = render_async(planner)
+
+      assert html =~ "Target route"
+      assert html =~ "Targetalpha"
+      assert html =~ "Targetbravo"
+      # A NoFuel structure is not an unanchoring target.
+      refute html =~ "Targetcharlie"
+
+      planner |> element("#scout-target-990700001-ignore") |> render_click()
+      ignored = render_async(planner)
+
+      refute ignored =~ ~r/id="scout-target-990700001"/
+      assert ignored =~ "scout-targets-ignored-990700001"
+      assert ignored =~ "Targetbravo"
+    end
+
+    test "ticking the dead family adds its systems", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
+
+      render_click(planner, "switch_mode", %{"mode" => "targets"})
+      render_async(planner)
+
+      planner |> element("#scout-targets-family-dead") |> render_click()
+      html = render_async(planner)
+
+      assert html =~ "Targetcharlie"
+    end
+  end
+
+  defp put_structure(structure_id, solar_system_id, status, unanchoring_since) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, _row} =
+      WandererApp.Api.ScoutStructure
+      |> Ash.Changeset.for_create(:create, %{
+        structure_id: structure_id,
+        solar_system_id: solar_system_id,
+        structure_name: "FIX #{structure_id}",
+        group_name: "Citadel",
+        status: status,
+        presence: :seen,
+        unanchoring_since: unanchoring_since,
+        first_seen_at: DateTime.add(now, -3, :day),
+        last_confirmed_at: DateTime.add(now, -1, :hour)
+      })
+      |> Ash.create(authorize?: false)
+  end
+
   defp push_plan(conn) do
     {:ok, view, _html} = live(conn, ~p"/scout/planner")
     planner = planner_child(view)

@@ -38,10 +38,11 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
   alias WandererApp.Scout.Planner
   alias WandererApp.Scout.PlanWaypoints
   alias WandererApp.Scout.Sweep
+  alias WandererApp.Scout.Targets
 
   @kinds ~w(visit anoms sigs grid)
   @formats ~w(json text flat)
-  @modes ~w(rank sweep)
+  @modes ~w(rank sweep targets)
 
   @default_limit 10
   @max_limit 100
@@ -65,10 +66,116 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
   def plan(conn, params) do
     case fetch_mode(params) do
       {:ok, :sweep} -> sweep_plan(conn, params)
+      {:ok, :targets} -> targets_plan(conn, params)
       {:ok, :rank} -> rank_plan(conn, params)
       {:error, message} -> error(conn, message)
     end
   end
+
+  # CHEWY PATCH (target routing): `mode=targets` -- the candidate set is
+  # every system a structure finding names (`WandererApp.Scout.Targets`),
+  # so there is no `scope` here at all: `families`, `window`, `radius`,
+  # `start` and `ignore` decide membership. What it answers with IS a
+  # `Sweep` route, so the wire format is `#plan 2`, byte-identical to
+  # `mode=sweep`'s -- a bot that can fly one can fly the other, and the
+  # `scope=systems:…` token on the header line says which it got.
+  defp targets_plan(conn, params) do
+    with {:ok, families} <- fetch_families(params),
+         {:ok, format} <- fetch_format(params),
+         {:ok, start} <- fetch_sweep_start(params),
+         {:ok, security} <- fetch_security(params) do
+      opts =
+        [
+          families: families,
+          window_days: fetch_window_days(params),
+          hide_past_window: Map.get(params, "include_expired") != "1",
+          radius: fetch_radius(params),
+          ignore: fetch_ignore(params),
+          start: start,
+          compress: fetch_compress(params)
+        ]
+        |> maybe_put_opt(:security, security)
+
+      case Targets.plan(opts) do
+        {:ok, %{route: route} = result} -> render_targets_result(conn, result, route, format)
+        {:error, reason} -> error(conn, to_string(reason))
+      end
+    else
+      {:error, message} -> error(conn, message)
+    end
+  end
+
+  # JSON carries the whole envelope (the findings behind each stop, and
+  # what the filters left out); the two text formats are the route and
+  # nothing else, because that is all the bot can act on.
+  #
+  # `scope` is a TUPLE (`{:systems, ids}`) and Jason refuses one, so the
+  # JSON branch -- here and in `render_sweep_result/3` -- sends the same
+  # `scope=` token the header line carries rather than the raw term.
+  defp render_targets_result(conn, result, route, "json"),
+    do: json(conn, %{data: %{result | route: jsonable_route(route)}})
+
+  defp render_targets_result(conn, _result, route, format),
+    do: render_sweep_result(conn, route, format)
+
+  defp jsonable_route(route), do: %{route | scope: scope_token(route.scope)}
+
+  # Validated token by token against the vocabulary, NOT through
+  # `Targets.normalize_families/1`: that one is the localStorage restore
+  # path and deliberately falls back to the default rather than fail, so
+  # using it here would answer a typo'd `families=` with a plan for
+  # something else.
+  defp fetch_families(%{"families" => value}) when is_binary(value) and value != "" do
+    tokens = value |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+    vocabulary = Enum.map(Targets.families(), &to_string/1)
+
+    case Enum.reject(tokens, &(&1 in vocabulary)) do
+      [] ->
+        {:ok, Targets.normalize_families(tokens)}
+
+      unknown ->
+        {:error,
+         "unknown families #{Enum.join(unknown, ", ")}: expected #{families_vocabulary()}"}
+    end
+  end
+
+  defp fetch_families(_params), do: {:ok, Targets.default_families()}
+
+  defp families_vocabulary, do: Targets.families() |> Enum.map_join(", ", &to_string/1)
+
+  # `window=any` is "however old"; anything unparseable falls back to the
+  # module's own default rather than 422 -- the same tradeoff `limit`
+  # makes above.
+  defp fetch_window_days(%{"window" => "any"}), do: nil
+
+  defp fetch_window_days(%{"window" => value}) when is_binary(value) do
+    case Integer.parse(value) do
+      {days, ""} -> Targets.normalize_window(days)
+      _ -> Targets.default_window_days()
+    end
+  end
+
+  defp fetch_window_days(_params), do: Targets.default_window_days()
+
+  defp fetch_radius(params) do
+    case Map.get(params, "radius") do
+      "0" -> 0
+      value -> parse_pos_int(value, Targets.default_radius())
+    end
+  end
+
+  defp fetch_ignore(%{"ignore" => value}) when is_binary(value) do
+    value
+    |> String.split(",", trim: true)
+    |> Enum.flat_map(fn s ->
+      case Integer.parse(String.trim(s)) do
+        {id, ""} when id > 0 -> [id]
+        _ -> []
+      end
+    end)
+  end
+
+  defp fetch_ignore(_params), do: []
 
   defp rank_plan(conn, params) do
     with {:ok, origin} <- fetch_origin(params),
@@ -412,7 +519,11 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
   # `row_line/1` above, even though the shapes rhyme.
   # ---------------------------------------------------------------------
 
-  defp render_sweep_result(conn, result, "json"), do: json(conn, %{data: result})
+  # `scope` is a tuple and Jason refuses one, so `format=json` answered a
+  # 500 for every sweep until this; the token is what the text formats'
+  # header line already carries.
+  defp render_sweep_result(conn, result, "json"),
+    do: json(conn, %{data: jsonable_route(result)})
 
   defp render_sweep_result(conn, result, "text") do
     conn

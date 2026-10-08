@@ -1231,6 +1231,68 @@ defmodule WandererAppWeb.ScoutComponents do
   defp heat_pct(_n, 0), do: 0
   defp heat_pct(n, total), do: Float.round(n / total * 100, 1)
 
+  attr :target, :map, default: nil
+
+  @doc """
+  CHEWY PATCH (target routing): what was found in one stop of a target
+  route -- how many structures, and which status families they are in.
+  A system is on that route BECAUSE of these rows, so the count is the
+  subject of the cell and the badges qualify it.
+  """
+  def target_findings(assigns) do
+    ~H"""
+    <div :if={@target} class="flex flex-wrap items-center gap-1">
+      <span class="text-xs text-gray-300 whitespace-nowrap">
+        {plural(@target.structures, "structure", "structures")}
+      </span>
+      <.status :for={s <- @target.statuses} status={s} />
+    </div>
+    <div :if={is_nil(@target)} class="text-gray-600">—</div>
+    """
+  end
+
+  attr :target, :map, default: nil
+  attr :now, :any, required: true
+
+  @doc """
+  CHEWY PATCH (target routing): the soonest moment any hull in this
+  system must be out of the ground -- `WandererApp.Scout.Unanchor`'s
+  upper bound, rendered with the same `≤` `predicted_out_cell/1` uses
+  and for the same reason: nothing on the wire carries a decommission
+  countdown, so this is derived from the FIRST sighting of the run, and
+  presenting it as a timer would be a lie with a timestamp on it.
+  """
+  def target_deadline(assigns) do
+    ~H"""
+    <div
+      :if={@target && @target.earliest_deadline}
+      class="whitespace-nowrap"
+      title={
+        "Latest it can still be in space: " <>
+          at(@target.earliest_deadline) <>
+          " UTC. A decommission is a fixed 7 days from a start nobody saw."
+      }
+    >
+      <span class="text-gray-500">≤</span>
+      <span class={urgency(@target.earliest_deadline, @now)}>
+        {countdown(@target.earliest_deadline, @now)}
+      </span>
+    </div>
+    <div :if={is_nil(@target) or is_nil(@target.earliest_deadline)} class="text-gray-600">—</div>
+    """
+  end
+
+  attr :target, :map, default: nil
+  attr :now, :any, required: true
+
+  @doc "When a target's newest finding was last confirmed."
+  def target_seen(assigns) do
+    ~H"""
+    <.seen :if={@target} at={@target.last_confirmed_at} now={@now} />
+    <div :if={is_nil(@target)} class="text-gray-600">—</div>
+    """
+  end
+
   # ---------------------------------------------------------------------
   # Formatting
   # ---------------------------------------------------------------------
