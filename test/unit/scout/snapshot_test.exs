@@ -103,18 +103,32 @@ defmodule WandererApp.Scout.SnapshotTest do
       assert result.missing == []
     end
 
-    test "a known structure with no stored position is never missing" do
+    # The retired per-row feed stored no positions, so refusing to diff
+    # a positionless row made every one of its structures permanent --
+    # 33 of them on the live instance, 7 still shouting "Unanchoring"
+    # weeks later while blobs cleared their neighbours in the same
+    # system. A complete blob is the only evidence such a row will ever
+    # get, so it counts; `:gone` still needs a second absence.
+    test "a known structure with no stored position is missing on a complete blob" do
       positionless = known(1, %{pos_x: nil, pos_y: nil, pos_z: nil})
 
       result = Snapshot.diff([positionless], blob(%{steady_ids: [2]}))
 
-      assert result.missing == []
+      assert ids(result.missing) == [1]
     end
 
-    test "a partially positioned structure is never missing" do
+    test "a partially positioned structure is treated the same way" do
       half = known(1, %{pos_z: nil})
 
       result = Snapshot.diff([half], blob(%{steady_ids: [2]}))
+
+      assert ids(result.missing) == [1]
+    end
+
+    test "a positionless structure the blob DOES list is never missing" do
+      positionless = known(1, %{pos_x: nil, pos_y: nil, pos_z: nil})
+
+      result = Snapshot.diff([positionless], blob(%{steady_ids: [1]}))
 
       assert result.missing == []
     end
@@ -294,6 +308,29 @@ defmodule WandererApp.Scout.SnapshotTest do
     test "a blob that saw nothing at all is refused" do
       assert {:error, :no_observation} =
                Snapshot.normalize(wire(%{"structures" => [], "steady_ids" => []}))
+    end
+
+    test "an empty blob with allow_empty is the 'this system is empty now' claim" do
+      assert {:ok, blob} =
+               Snapshot.normalize(
+                 wire(%{"structures" => [], "steady_ids" => [], "allow_empty" => "true"})
+               )
+
+      assert blob.structures == []
+      assert blob.steady_ids == []
+      assert blob.complete?
+    end
+
+    test "allow_empty does not relax anything else about an empty blob" do
+      assert {:error, _reason} =
+               Snapshot.normalize(
+                 wire(%{
+                   "structures" => [],
+                   "steady_ids" => [],
+                   "allow_empty" => "true",
+                   "horizon_m" => "0"
+                 })
+               )
     end
 
     test "a zero horizon is refused -- it describes no sphere" do

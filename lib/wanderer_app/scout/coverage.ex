@@ -99,8 +99,9 @@ defmodule WandererApp.Scout.Coverage do
 
   defp store_row(row, map_id) when is_map(row) do
     with {:ok, attrs} <- row_attrs(row, map_id),
-         :ok <- write(attrs) do
+         {:ok, outcome} <- write(attrs) do
       maybe_complete_assignment(attrs)
+      maybe_absence(attrs, outcome)
       :ok
     end
   end
@@ -136,17 +137,21 @@ defmodule WandererApp.Scout.Coverage do
   # Reads the current row for this identity and only upserts when the
   # incoming observation is strictly newer. See the module doc for why
   # this lives here (in Elixir) rather than as an Ash `upsert_condition`.
+  #
+  # Reports WHICH of the two happened: a superseded replay must not
+  # produce a second absence tick (see `maybe_absence/2`), while an
+  # assignment is complete either way.
   defp write(%{solar_system_id: system_id, kind: kind, observed_at: observed_at} = attrs) do
     case ScoutSystemCoverage.by_system_and_kind(system_id, kind, authorize?: false) do
       {:ok, %{observed_at: stored_at}} ->
         if DateTime.compare(observed_at, stored_at) == :gt do
-          do_upsert(attrs)
+          with :ok <- do_upsert(attrs), do: {:ok, :stored}
         else
-          :ok
+          {:ok, :superseded}
         end
 
       {:error, _not_found} ->
-        do_upsert(attrs)
+        with :ok <- do_upsert(attrs), do: {:ok, :stored}
     end
   end
 
@@ -171,6 +176,26 @@ defmodule WandererApp.Scout.Coverage do
   rescue
     _ -> :ok
   end
+
+  # CHEWY PATCH: coverage is the second absence witness. A dwell in a
+  # system where a structure was last seen days ago, from a client whose
+  # structure watch is live, retires that structure off the current
+  # watchlist -- the one thing the presence feed cannot do for an emptied
+  # system (it needs a blob, and a client with nothing to list posts
+  # none). See `WandererApp.Scout.Absence`; it never raises and never
+  # fails the ingest it hangs off.
+  defp maybe_absence(attrs, :stored) do
+    WandererApp.Scout.Absence.from_coverage(
+      attrs.solar_system_id,
+      attrs.kind,
+      attrs.observed_at,
+      attrs.map_id
+    )
+
+    :ok
+  end
+
+  defp maybe_absence(_attrs, :superseded), do: :ok
 
   # ---------------------------------------------------------------------
   # Row -> attributes

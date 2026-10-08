@@ -229,10 +229,24 @@ defmodule WandererApp.Scout.Snapshot do
 
   defp in_scope?(%{presence: :gone}, _blob), do: false
 
-  defp in_scope?(row, blob) do
-    not is_nil(row.pos_x) and not is_nil(row.pos_y) and not is_nil(row.pos_z) and
-      within_horizon?(row, blob.observer, blob.horizon_m)
-  end
+  # A known row with no stored position cannot be range-tested, and
+  # refusing to diff it made it IMMORTAL: every row the retired per-row
+  # feed wrote carries no position, so 33 of them (7 of them
+  # `Unanchoring`) sat on the boards forever while the presence feed
+  # cleared everything around them in the same systems -- measured on
+  # live data 2026-10-08, e.g. 30004738's legacy hull last confirmed
+  # 2026-10-03 while a blob confirmed its neighbour at 12:39 today. A
+  # complete blob is the best evidence this app will ever get about such
+  # a row, so it counts as in scope and the absence ticks. The cost if
+  # the structure was really outside the proven sphere is one `:missing`
+  # (off the boards, kept in history), undone by the next sighting,
+  # which also finally stores a position; `:gone` still needs the
+  # two-absences-30-minutes-apart rule.
+  defp in_scope?(%{pos_x: nil}, _blob), do: true
+  defp in_scope?(%{pos_y: nil}, _blob), do: true
+  defp in_scope?(%{pos_z: nil}, _blob), do: true
+
+  defp in_scope?(row, blob), do: within_horizon?(row, blob.observer, blob.horizon_m)
 
   defp within_horizon?(row, observer, horizon_m) do
     dx = row.pos_x - observer.x
@@ -302,7 +316,7 @@ defmodule WandererApp.Scout.Snapshot do
 
     with :ok <- require_list(structures_raw, "structures"),
          :ok <- require_list(steady_raw, "steady_ids"),
-         :ok <- require_non_empty(structures_raw, steady_raw),
+         :ok <- require_non_empty(structures_raw, steady_raw, params),
          :ok <- require_batch_size(structures_raw, steady_raw),
          {:ok, solar_system_id} <- required_int(params, "solar_system_id"),
          {:ok, observed_at} <- required_time(params, "observed_at"),
@@ -341,8 +355,24 @@ defmodule WandererApp.Scout.Snapshot do
   defp require_list(value, _field) when is_list(value), do: :ok
   defp require_list(_value, field), do: {:error, "#{field} must be an array"}
 
-  defp require_non_empty([], []), do: {:error, :no_observation}
-  defp require_non_empty(_structures, _steady), do: :ok
+  # An all-empty blob is refused by default -- a client bug that posts
+  # nothing must not be read as "the system is empty now". With an
+  # explicit `allow_empty: true` it IS that claim, and the only way the
+  # feed can retire the LAST structure in a system: the client that sees
+  # an emptied system has nothing to list, so without this the absence
+  # is unreportable (and is instead inferred one level up, from the
+  # coverage ledger -- see `WandererApp.Scout.Absence`). Same convention
+  # and same reasoning as `WandererApp.Map.Operations.SignatureSync`'s
+  # `allow_empty`.
+  defp require_non_empty([], [], params) do
+    if bool(Map.get(params, "allow_empty")) == true do
+      :ok
+    else
+      {:error, :no_observation}
+    end
+  end
+
+  defp require_non_empty(_structures, _steady, _params), do: :ok
 
   defp require_batch_size(structures, steady) do
     if length(structures) + length(steady) > @max_ids do
@@ -755,40 +785,75 @@ defmodule WandererApp.Scout.Snapshot do
         observed_at
       )
 
+  @doc """
+  Applies ONE absence tick to a known structure: `missing_count + 1`,
+  `missing_since` anchored on the first miss, presence `:missing` or
+  `:gone` per `gone?/5`, plus the matching event row.
+
+  Public because a snapshot blob is not the only thing that can prove an
+  absence. The client only posts a blob when it has something to list,
+  so the LAST structure in a system can never be retired by this feed --
+  the coverage ledger is what proves that visit, and
+  `WandererApp.Scout.Absence` turns it into a tick through here, so
+  both routes share one definition of what an absence does.
+
+  Returns `:stale` for an observation older than the stored
+  `last_confirmed_at` (never drags a structure backwards).
+  """
+  @spec absent(struct(), DateTime.t(), Ecto.UUID.t() | nil, [String.t()]) ::
+          {:ok, :missing | :gone} | :stale | {:error, term()}
+  def absent(known, observed_at, map_id, changed_fields \\ []) do
+    if stale?(known, observed_at) do
+      :stale
+    else
+      new_count = known.missing_count + 1
+      new_since = known.missing_since || observed_at
+
+      presence =
+        if gone?(new_count, new_since, observed_at, known.status, known.timer_expires_at),
+          do: :gone,
+          else: :missing
+
+      attrs = %{missing_count: new_count, missing_since: new_since, presence: presence}
+
+      case update(known, attrs) do
+        {:ok, _record} ->
+          write_event_at(
+            presence,
+            known.structure_id,
+            known.solar_system_id,
+            observed_at,
+            known.status,
+            known.status,
+            changed_fields,
+            map_id
+          )
+
+          {:ok, presence}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
   defp apply_missing(missing, blob, map_id) do
-    {missing_count, gone_count, skipped} =
-      Enum.reduce(missing, {0, 0, 0}, fn known, {m, g, skipped} ->
-        if stale?(known, blob.observed_at) do
+    Enum.reduce(missing, {0, 0, 0}, fn known, {m, g, skipped} ->
+      case absent(known, blob.observed_at, map_id) do
+        {:ok, :missing} ->
+          {m + 1, g, skipped}
+
+        {:ok, :gone} ->
+          {m, g + 1, skipped}
+
+        :stale ->
           {m, g, skipped + 1}
-        else
-          new_count = known.missing_count + 1
-          new_since = known.missing_since || blob.observed_at
 
-          promote? =
-            gone?(new_count, new_since, blob.observed_at, known.status, known.timer_expires_at)
-
-          presence = if promote?, do: :gone, else: :missing
-
-          attrs = %{
-            missing_count: new_count,
-            missing_since: new_since,
-            presence: presence
-          }
-
-          case update(known, attrs) do
-            {:ok, _record} ->
-              kind = if promote?, do: :gone, else: :missing
-              write_event(kind, known.structure_id, blob, known.status, known.status, [], map_id)
-              if promote?, do: {m, g + 1, skipped}, else: {m + 1, g, skipped}
-
-            {:error, reason} ->
-              Logger.warning("[Scout.Snapshot] missing update failed: #{inspect(reason)}")
-              {m, g, skipped + 1}
-          end
-        end
-      end)
-
-    {missing_count, gone_count, skipped}
+        {:error, reason} ->
+          Logger.warning("[Scout.Snapshot] missing update failed: #{inspect(reason)}")
+          {m, g, skipped + 1}
+      end
+    end)
   end
 
   defp update(known, attrs) do
@@ -797,13 +862,35 @@ defmodule WandererApp.Scout.Snapshot do
     |> Ash.update(authorize?: false)
   end
 
-  defp write_event(kind, structure_id, blob, status_before, status_after, changed_fields, map_id) do
+  defp write_event(kind, structure_id, blob, status_before, status_after, changed_fields, map_id),
+    do:
+      write_event_at(
+        kind,
+        structure_id,
+        blob.solar_system_id,
+        blob.observed_at,
+        status_before,
+        status_after,
+        changed_fields,
+        map_id
+      )
+
+  defp write_event_at(
+         kind,
+         structure_id,
+         solar_system_id,
+         observed_at,
+         status_before,
+         status_after,
+         changed_fields,
+         map_id
+       ) do
     ScoutStructureEvent.create(
       %{
         structure_id: structure_id,
-        solar_system_id: blob.solar_system_id,
+        solar_system_id: solar_system_id,
         kind: kind,
-        observed_at: blob.observed_at,
+        observed_at: observed_at,
         status_before: status_before,
         status_after: status_after,
         changed_fields: changed_fields,
@@ -820,7 +907,8 @@ defmodule WandererApp.Scout.Snapshot do
   # depends on a subscriber existing. Shares the alert cache invalidation
   # too -- an unanchored structure reported `:gone` or confirmed `:seen`
   # moves the sidebar badge.
-  defp announce do
+  @doc false
+  def announce do
     WandererApp.Scout.Alerts.invalidate()
 
     Phoenix.PubSub.broadcast(

@@ -411,6 +411,57 @@ The merge costs one indexed lookup per ingested row —
 `index([:structure_id, :observed_at])`, added for it and used by the
 history drill-down too.
 
+## Leaving the watchlist: two absence witnesses
+
+A finding has to be able to STOP being one. `presence` is that signal
+(`:seen → :missing → :gone`, reset by any sighting), every opportunity board
+filters `presence == :seen`, and nothing is ever deleted — the flat log, the
+per-structure event history and the CSV export keep a retired row.
+
+Deriving it needs evidence of an absence, and there are exactly two sources:
+
+1. **A complete snapshot blob** (`WandererApp.Scout.Snapshot`,
+   `POST .../scout/structures/snapshot`). A structure the blob should have
+   seen and did not gets an absence tick; two ticks from distinct visits 30
+   minutes apart promote it to `:gone`.
+2. **A dwell in the coverage ledger** (`WandererApp.Scout.Absence`, run from
+   `WandererApp.Scout.Coverage`'s ingest). Because the client only posts a
+   blob when it has something to list, the LAST structure in a system can
+   never be retired by (1): the system empties, the blobs stop, and the row
+   shouts forever. Measured 2026-10-08: five of the seven stale `Unanchoring`
+   rows sat in systems whose newest coverage row was days newer than any
+   structure confirmation there. The scout flew the route, saw nothing, and
+   had no way to say so.
+
+Coverage is weaker evidence than a blob, so (2) is fenced three ways and each
+fence has a test in `test/integration/scout_absence_test.exs`:
+
+|Fence|Why|
+|---|---|
+|`anoms \| sigs \| grid` only|A `visit` is a gate-to-gate pass and proves nothing about what is on d-scan|
+|Structure must be stale by ≥ 2h|The blob lands on ARRIVAL, the coverage row when the work ends; measured dwells (147 visit→grid pairs) run mean 5 min, p95 11 min, max 16.3 min, so a shorter grace would let a visit retire what it just confirmed|
+|`Absence.feed_live?/1`|Some structure, anywhere, confirmed within 6h of this observation. A client with no structure watch keeps posting coverage, and reading that as "nothing is out there" would wipe the watchlist|
+
+Both witnesses share one tick (`Snapshot.absent/4`), so the promotion rule,
+the event row and the "never drag a structure backwards" guard are defined
+once. The event's `changed_fields` carries `"coverage:<kind>"` when the
+ledger was the witness, so the drill-down says which one retired it.
+
+Two related fixes landed with it:
+
+* **A positionless row is diffable.** `in_scope?/2` used to require a stored
+  position, which the retired per-row feed never wrote — so 33 rows (7 of
+  them `Unanchoring`) were immortal, sitting on the boards while blobs
+  cleared their neighbours in the same systems. A complete blob is the only
+  evidence such a row will ever get, so it counts; one absence takes it off
+  the boards, `:gone` still needs two, and a sighting both restores it and
+  finally stores a position.
+* **An empty blob is sayable.** `structures: []` plus `steady_ids: []` is
+  refused by default (a client bug must not read as "the system is empty"),
+  but accepted with `allow_empty: true` — the same convention as the
+  signature-sync endpoint. A client that posts it retires an emptied
+  system's last structure directly, without waiting for the coverage witness.
+
 ## The page
 
 `/scout` is **three categories over one LiveView** — Structures, Spawns and
