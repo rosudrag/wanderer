@@ -86,7 +86,8 @@ defmodule WandererAppWeb.ScoutPlannerLive do
 
   alias WandererApp.Api.{MapSolarSystem, ScoutSystemCoverage}
   alias WandererApp.Identity.ScoutAccess
-  alias WandererApp.Scout.{Assignments, PlanWaypoints, Planner, Regions, Space, Split, Sweep}
+  alias WandererApp.Scout.{Assignments, PilotLocation, PlanWaypoints, Planner, Regions, Space}
+  alias WandererApp.Scout.{Split, Sweep}
   alias WandererApp.Scout.Targets
 
   @kinds ~w(visit anoms sigs grid)
@@ -266,7 +267,19 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            targets_result: nil,
            targets_error: nil,
            targets_loading?: false,
-           targets_token: 0
+           targets_token: 0,
+           # CHEWY PATCH (pilot start): follow the SELECTED pilot's own
+           # position instead of typing the system it is parked in. One
+           # flag for all three modes -- the control is the same
+           # sentence in each -- and in sweep mode it pins every split
+           # part to ITS pilot too. `pilot_start_status` is what the
+           # resolve answered, rendered at the control: an ESI read can
+           # refuse, and a start that silently did not move is the bug
+           # the searchable picker was added to fix.
+           pilot_start?: false,
+           pilot_start_status: nil,
+           pilot_start_loading?: false,
+           pilot_start_token: 0
          )
          |> load()}
     end
@@ -312,6 +325,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            origin_q: "",
            origin_matches: []
          )
+         |> unfollow_pilot()
          |> load()
          |> persist_filters()}
 
@@ -324,6 +338,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     {:noreply,
      socket
      |> assign(origin_id: nil, origin_name: nil, origin_q: "", origin_matches: [])
+     |> unfollow_pilot()
      |> load()
      |> persist_filters()}
   end
@@ -442,22 +457,74 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     {:noreply, socket |> assign(security: @security_keys) |> load() |> persist_filters()}
   end
 
+  # With `pilot_start?` on, Refresh re-reads where the pilots ARE before
+  # recomputing -- that is the whole difference between a followed start
+  # and a typed one. `resolve_pilot_start/1` reloads the mode itself
+  # once ESI answers, so this branch must not also load: two reads, two
+  # tokens, and the first answer thrown away.
   def handle_event("refresh", _params, socket) do
-    {:noreply,
-     case socket.assigns.mode do
-       :sweep -> socket |> load_sweep() |> maybe_load_region_heat(force: true)
-       :targets -> load_targets(socket)
-       _rank -> load(socket)
-     end}
+    if socket.assigns.pilot_start? do
+      {:noreply, resolve_pilot_start(socket)}
+    else
+      {:noreply,
+       case socket.assigns.mode do
+         :sweep -> socket |> load_sweep() |> maybe_load_region_heat(force: true)
+         :targets -> load_targets(socket)
+         _rank -> load(socket)
+       end}
+    end
   end
 
   def handle_event("select_character", %{"character_eve_id" => eve_id}, socket) do
     # Validated against the user's OWN characters, not trusted from the
     # form: this id decides whose autopilot gets rewritten.
     if Enum.any?(socket.assigns.characters, &(&1.eve_id == eve_id)) do
-      {:noreply, assign(socket, character_eve_id: eve_id)}
+      socket = assign(socket, character_eve_id: eve_id)
+
+      # Following a pilot means following THIS pilot: picking another
+      # one with the toggle on has to move the start, or the page says
+      # it is starting where a character it no longer names is parked.
+      if socket.assigns.pilot_start? do
+        {:noreply, resolve_pilot_start(socket)}
+      else
+        {:noreply, socket}
+      end
     else
       {:noreply, socket}
+    end
+  end
+
+  # CHEWY PATCH (pilot start): "take the selected pilot's starting
+  # position". Every start on this page was a system SEARCH -- read the
+  # name off the game client, type it back into the browser, once per
+  # pilot, every time anybody undocks somewhere else. The token this app
+  # already holds answers it directly
+  # (`WandererApp.Scout.PilotLocation`), so this is a toggle, not a
+  # fourth picker.
+  #
+  # It FOLLOWS, rather than filling the box once: the resolve re-runs
+  # when the pilot changes and on Refresh, and any manual start action
+  # turns it off (`unfollow_pilot/1`) -- two sources for one value with
+  # neither winning is how a route opens somewhere the page did not say.
+  def handle_event("toggle_pilot_start", _params, socket) do
+    if socket.assigns.pilot_start? do
+      {:noreply,
+       socket
+       |> assign(
+         pilot_start?: false,
+         pilot_start_status: nil,
+         pilot_start_loading?: false,
+         # Drops an in-flight resolve: switching the toggle off must not
+         # be undone a second later by the answer it already asked for.
+         pilot_start_token: socket.assigns.pilot_start_token + 1
+       )
+       |> persist_filters()}
+    else
+      {:noreply,
+       socket
+       |> assign(pilot_start?: true)
+       |> resolve_pilot_start()
+       |> persist_filters()}
     end
   end
 
@@ -588,6 +655,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
         {:noreply,
          socket
          |> assign(sweep_start: value, sweep_start_name: Map.get(params, "name"))
+         |> unfollow_pilot()
          |> load_sweep()
          |> persist_filters()}
 
@@ -600,6 +668,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     {:noreply,
      socket
      |> assign(sweep_start: nil, sweep_start_name: nil)
+     |> unfollow_pilot()
      |> load_sweep()
      |> persist_filters()}
   end
@@ -689,6 +758,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            sweep_start_q: "",
            sweep_start_slot: nil
          )
+         |> unfollow_pilot()
          |> load_targets()
          |> persist_filters()}
 
@@ -709,6 +779,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            sweep_start_q: "",
            sweep_start_matches: []
          )
+         |> unfollow_pilot()
          |> load_sweep()
          |> persist_filters()}
 
@@ -734,6 +805,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
          sweep_start_q: "",
          sweep_start_matches: []
        )
+       |> unfollow_pilot()
        |> load_split()
        |> persist_filters()}
     else
@@ -747,6 +819,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
         {:noreply,
          socket
          |> assign(sweep_starts: Map.delete(socket.assigns.sweep_starts, index))
+         |> unfollow_pilot()
          |> load_split()
          |> persist_filters()}
 
@@ -764,6 +837,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
        sweep_start_q: "",
        sweep_start_matches: []
      )
+     |> unfollow_pilot()
      |> load_split()
      |> persist_filters()}
   end
@@ -792,8 +866,16 @@ defmodule WandererAppWeb.ScoutPlannerLive do
       ) do
     with {index, ""} <- Integer.parse(idx),
          true <- Enum.any?(socket.assigns.characters, &(&1.eve_id == eve_id)) do
-      {:noreply,
-       assign(socket, sweep_pilots: Map.put(socket.assigns.sweep_pilots, index, eve_id))}
+      socket = assign(socket, sweep_pilots: Map.put(socket.assigns.sweep_pilots, index, eve_id))
+
+      # Same rule as the mode's own pilot select: with the toggle on,
+      # this part is pinned to where ITS character is, so changing the
+      # character has to move the pin.
+      if socket.assigns.pilot_start? do
+        {:noreply, resolve_pilot_start(socket)}
+      else
+        {:noreply, socket}
+      end
     else
       _ -> {:noreply, socket}
     end
@@ -995,6 +1077,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     {:noreply,
      socket
      |> assign(targets_start: nil, targets_start_name: nil)
+     |> unfollow_pilot()
      |> load_targets()
      |> persist_filters()}
   end
@@ -1029,8 +1112,17 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   def handle_event("ls_restore_#{@filter_store}", %{"value" => value}, socket) do
     case restore_filters(socket, value) do
       {:ok, socket} ->
-        {:noreply,
-         socket |> load() |> load_sweep() |> maybe_load_region_heat() |> maybe_load_targets()}
+        socket =
+          socket |> load() |> load_sweep() |> maybe_load_region_heat() |> maybe_load_targets()
+
+        # A restored "follow my pilot" has to actually follow it: the
+        # stored start is where that character was LAST time this page
+        # was open, which is the staleness the toggle exists to remove.
+        if socket.assigns.pilot_start? do
+          {:noreply, resolve_pilot_start(socket)}
+        else
+          {:noreply, socket}
+        end
 
       :unchanged ->
         {:noreply, socket}
@@ -1041,6 +1133,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     state = %{
       "origin_id" => socket.assigns.origin_id,
       "origin_name" => socket.assigns.origin_name,
+      "pilot_start" => socket.assigns.pilot_start?,
       "kind" => to_string(socket.assigns.kind),
       "limit" => socket.assigns.limit,
       "max_jumps" => socket.assigns.max_jumps,
@@ -1080,6 +1173,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
          assign(socket,
            origin_id: restore_origin_id(saved),
            origin_name: restore_origin_name(saved),
+           pilot_start?: restore_bool(saved, "pilot_start", false),
            kind: restore_kind(saved, socket.assigns.kind),
            limit: restore_limit(saved, socket.assigns.limit),
            max_jumps: restore_max_jumps(saved, socket.assigns.max_jumps),
@@ -1648,6 +1742,14 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     end
   end
 
+  def handle_async({:pilot_start, token}, result, socket) do
+    if token == socket.assigns.pilot_start_token do
+      {:noreply, apply_pilot_start(socket, result)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   defp apply_targets(socket, {:ok, {:ok, result}}) do
     assign(socket,
       targets_loading?: false,
@@ -1663,6 +1765,206 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   defp apply_targets(socket, {:exit, reason}) do
     Logger.error("[scout planner] targets task exited: #{inspect(reason)}")
     assign(socket, targets_loading?: false, targets_result: nil, targets_error: :targets_crashed)
+  end
+
+  # -------------------------------------------------------------------
+  # CHEWY PATCH (pilot start) -- resolving "where my pilot is" into
+  # whichever start this mode has, and saying so at the control.
+  # -------------------------------------------------------------------
+
+  defp unfollow_pilot(%{assigns: %{pilot_start?: false}} = socket), do: socket
+
+  defp unfollow_pilot(socket) do
+    assign(socket,
+      pilot_start?: false,
+      pilot_start_status: nil,
+      pilot_start_loading?: false,
+      pilot_start_token: socket.assigns.pilot_start_token + 1
+    )
+  end
+
+  # One authenticated ESI GET per pilot, so it runs in a task like every
+  # other read on this page: `get_character_location/2` can sit on the
+  # pool's full receive timeout, and this LiveView is the one the reader
+  # is clicking. Token semantics are the rest of the page's -- an answer
+  # that lands after the toggle moved is dropped.
+  defp resolve_pilot_start(socket) do
+    requests = pilot_start_requests(socket)
+    token = socket.assigns.pilot_start_token + 1
+
+    cond do
+      requests == [] ->
+        assign(socket,
+          pilot_start_token: token,
+          pilot_start_loading?: false,
+          pilot_start_status: %{level: :error, text: "No pilot to follow — pick one first."}
+        )
+
+      not connected?(socket) ->
+        assign(socket, pilot_start_token: token, pilot_start_loading?: false)
+
+      true ->
+        socket
+        |> assign(pilot_start_token: token, pilot_start_loading?: true)
+        |> start_async({:pilot_start, token}, fn ->
+          Enum.map(requests, fn {slot, eve_id} -> {slot, PilotLocation.resolve(eve_id)} end)
+        end)
+    end
+  end
+
+  # Which starts this mode HAS. Sweep mode is the only one with more
+  # than one: its own start plus a pin per split part, each following
+  # that part's own pilot -- the "keep my chars in same place" case the
+  # pinned-start picker exists for, with nobody typing four system
+  # names.
+  defp pilot_start_requests(socket) do
+    case socket.assigns.mode do
+      :sweep ->
+        pilot_request(:sweep, socket.assigns.character_eve_id) ++ part_pilot_requests(socket)
+
+      :targets ->
+        pilot_request(:targets, socket.assigns.character_eve_id)
+
+      _rank ->
+        pilot_request(:rank, socket.assigns.character_eve_id)
+    end
+  end
+
+  defp part_pilot_requests(%{assigns: %{sweep_k: k}}) when k <= 1, do: []
+
+  defp part_pilot_requests(socket) do
+    %{sweep_k: k, sweep_pilots: pilots} = socket.assigns
+
+    for index <- 0..(k - 1)//1,
+        eve_id = Map.get(pilots, index),
+        not is_nil(eve_id),
+        do: {{:part, index}, eve_id}
+  end
+
+  defp pilot_request(_slot, nil), do: []
+  defp pilot_request(slot, eve_id), do: [{slot, eve_id}]
+
+  defp apply_pilot_start(socket, {:ok, results}) when is_list(results) do
+    {socket, placed, failures} =
+      Enum.reduce(results, {socket, [], []}, fn
+        {slot, {:ok, location}}, {acc, placed, failures} ->
+          {place_pilot_start(acc, slot, location), [{slot, location} | placed], failures}
+
+        {slot, {:error, reason}}, {acc, placed, failures} ->
+          {acc, placed, [{slot, reason} | failures]}
+      end)
+
+    socket
+    |> assign(
+      pilot_start_loading?: false,
+      pilot_start_status:
+        pilot_start_status(Enum.reverse(placed), Enum.reverse(failures), socket.assigns)
+    )
+    |> reload_mode()
+  end
+
+  defp apply_pilot_start(socket, {:exit, reason}) do
+    Logger.error("[scout planner] pilot start task exited: #{inspect(reason)}")
+
+    assign(socket,
+      pilot_start_loading?: false,
+      pilot_start_status: %{level: :error, text: "Reading your pilot's position crashed."}
+    )
+  end
+
+  defp place_pilot_start(socket, :rank, %{solar_system_id: id, name: name}),
+    do: assign(socket, origin_id: id, origin_name: name, origin_q: "", origin_matches: [])
+
+  defp place_pilot_start(socket, :sweep, %{solar_system_id: id, name: name}),
+    do: assign(socket, sweep_start: id, sweep_start_name: name)
+
+  defp place_pilot_start(socket, :targets, %{solar_system_id: id, name: name}),
+    do: assign(socket, targets_start: id, targets_start_name: name)
+
+  defp place_pilot_start(socket, {:part, index}, %{solar_system_id: id, name: name}),
+    do:
+      assign(socket,
+        sweep_starts: Map.put(socket.assigns.sweep_starts, index, %{id: id, name: name})
+      )
+
+  # Reported AT the control, like `k`'s "3 parts, longest 94 jumps": the
+  # thing this toggle changes (the start) renders in a panel below a
+  # table that can be hundreds of rows.
+  defp pilot_start_status([], [], _assigns),
+    do: %{level: :error, text: "No pilot to follow — pick one first."}
+
+  defp pilot_start_status(placed, failures, assigns) do
+    main = Enum.find(placed, fn {slot, _location} -> slot in [:rank, :sweep, :targets] end)
+    parts = Enum.count(placed, fn {slot, _location} -> match?({:part, _index}, slot) end)
+
+    text =
+      [main_start_text(main), parts_text(parts), failures_text(failures, assigns)]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" · ")
+
+    level =
+      cond do
+        placed == [] -> :error
+        failures != [] -> :warn
+        stale_source?(main) -> :warn
+        true -> :ok
+      end
+
+    %{level: level, text: text}
+  end
+
+  defp main_start_text(nil), do: nil
+
+  defp main_start_text({_slot, %{name: name, source: :esi}}), do: "starting in #{name}"
+
+  # Said out loud, because it is a DIFFERENT fact: not "where this pilot
+  # is" but "where the tracker last saw it", which may be days old or
+  # another session entirely.
+  defp main_start_text({_slot, %{name: name, source: :tracked}}),
+    do: "starting in #{name} (last tracked position, ESI would not answer)"
+
+  defp parts_text(0), do: nil
+  defp parts_text(1), do: "1 part pinned to its pilot"
+  defp parts_text(count), do: "#{count} parts pinned to their pilots"
+
+  defp failures_text([], _assigns), do: nil
+
+  defp failures_text(failures, assigns) do
+    reason = failures |> hd() |> elem(1) |> pilot_start_reason()
+
+    case length(failures) do
+      1 -> "#{failed_pilot_name(hd(failures), assigns)} could not be located: #{reason}"
+      n -> "#{n} pilots could not be located: #{reason}"
+    end
+  end
+
+  defp failed_pilot_name({:rank, _reason}, assigns),
+    do: character_name(assigns.characters, assigns.character_eve_id)
+
+  defp failed_pilot_name({:sweep, _reason}, assigns),
+    do: character_name(assigns.characters, assigns.character_eve_id)
+
+  defp failed_pilot_name({:targets, _reason}, assigns),
+    do: character_name(assigns.characters, assigns.character_eve_id)
+
+  defp failed_pilot_name({{:part, index}, _reason}, assigns),
+    do: character_name(assigns.characters, Map.get(assigns.sweep_pilots, index))
+
+  defp pilot_start_reason(:unknown_character), do: "this instance does not track that character"
+  defp pilot_start_reason(:no_location), do: "ESI reported no system for it"
+  defp pilot_start_reason({:token, reason}), do: esi_reason(reason)
+  defp pilot_start_reason({:esi, reason}), do: esi_reason(reason)
+  defp pilot_start_reason(reason), do: esi_reason(reason)
+
+  defp stale_source?({_slot, %{source: :tracked}}), do: true
+  defp stale_source?(_main), do: false
+
+  defp reload_mode(socket) do
+    case socket.assigns.mode do
+      :sweep -> load_sweep(socket)
+      :targets -> load_targets(socket)
+      _rank -> load(socket)
+    end
   end
 
   defp apply_rank(socket, {:ok, {:ok, %{rank: rank, plan: plan}}}) do

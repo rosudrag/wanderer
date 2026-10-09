@@ -160,13 +160,23 @@ defmodule WandererAppWeb.ScoutComponents do
   classes apart (the planner's dropped `mb-4` in one branch) -- the kind
   of drift that is invisible in review and obvious the moment a reader
   switches category and the gap under the toolbar changes size.
+
+  CHEWY PATCH: it STICKS. `/scout`'s scroll container is the page's own
+  `<main class="overflow-auto">`, and a structures tab is six boards
+  tall, so by the time a reader reached Abandoned the window selector,
+  the search box and the space chips were all off-screen: narrowing
+  meant scrolling back up and losing the row you were reading. Sticky
+  needs an OPAQUE background -- the resting `bg-neutral-900/30` let
+  table rows show through it -- and no `overflow-hidden` between here
+  and `<main>`, which is why this is a direct child of it on both pages.
   """
   def scout_toolbar(assigns) do
     ~H"""
     <div
       id={@id}
       class={[
-        "flex flex-wrap items-center gap-2 mb-4 p-2 rounded-lg border border-neutral-800 bg-neutral-900/30",
+        "sticky top-0 z-20 flex flex-wrap items-center gap-2 mb-4 p-2 rounded-lg",
+        "border border-neutral-800 bg-neutral-950/95 backdrop-blur-sm",
         @class
       ]}
     >
@@ -216,32 +226,52 @@ defmodule WandererAppWeb.ScoutComponents do
   # CHEWY PATCH: the board key `WandererAppWeb.ScoutDiscord` formats this
   # panel's rows under. Set it and the header grows a "Discord" button.
   attr :copy, :string, default: nil
+  # CHEWY PATCH: this board has no rows. See the doc below.
+  attr :empty, :boolean, default: false
+  attr :empty_text, :string, default: nil
   slot :inner_block, required: true
 
   @doc """
   A titled section. `count` renders as a chip beside the title — the
   number a reader wants before deciding whether to read the table, and
   the one thing a collapsed `<h2>` could never carry.
+
+  CHEWY PATCH: `empty` collapses it to ONE LINE. A board with no rows
+  used to cost a header, a seven-column `<thead>` and a padded "Nothing
+  anchoring right now." row — about a fifth of a screen each, six of
+  them on a quiet structures tab, which pushed the one board that DID
+  have rows below the fold. The sentence survives, inline in the header,
+  so the distinction between "this board is empty" and "this board is
+  not on the page" is still explicit.
   """
   def panel(assigns) do
     ~H"""
     <section
       id={@id}
       class={[
-        "mb-5 rounded-lg border border-neutral-800 bg-neutral-900/30 overflow-hidden",
+        "rounded-lg border border-neutral-800 bg-neutral-900/30 overflow-hidden",
+        if(@empty, do: "mb-2", else: "mb-5"),
         @class
       ]}
     >
       <header class="flex items-center gap-2 px-3 py-2 border-b border-neutral-800 bg-neutral-900/50">
-        <h2 class="text-xs font-semibold uppercase tracking-wider text-gray-300 whitespace-nowrap">
+        <h2 class={[
+          "text-xs font-semibold uppercase tracking-wider whitespace-nowrap",
+          if(@empty, do: "text-gray-500", else: "text-gray-300")
+        ]}>
           {@title}
         </h2>
         <span :if={@count} class={["badge badge-sm font-mono border-0", count_class(@tone)]}>
           {@count}
         </span>
-        <span :if={@hint} class="text-xs text-gray-500 truncate hidden md:inline">{@hint}</span>
+        <span :if={@empty && @empty_text} class="text-xs text-gray-600 truncate">
+          {@empty_text}
+        </span>
+        <span :if={!@empty && @hint} class="text-xs text-gray-500 truncate hidden md:inline">
+          {@hint}
+        </span>
         <button
-          :if={@copy}
+          :if={@copy && !@empty}
           type="button"
           phx-click="discord"
           phx-value-board={@copy}
@@ -251,7 +281,7 @@ defmodule WandererAppWeb.ScoutComponents do
           Discord
         </button>
       </header>
-      <div class="overflow-x-auto">
+      <div :if={!@empty} class="overflow-x-auto">
         {render_slot(@inner_block)}
       </div>
     </section>
@@ -356,31 +386,76 @@ defmodule WandererAppWeb.ScoutComponents do
   attr :hint, :string, default: nil
   attr :tone, :atom, default: :neutral, values: [:neutral, :urgent, :warn, :good]
   attr :id, :string, default: nil
+  # CHEWY PATCH: the board this number counts. Set it and the card
+  # becomes the control that shows only that board.
+  attr :board, :string, default: nil
+  attr :active, :boolean, default: false
 
-  @doc "One number in the strip under the toolbar."
+  @doc """
+  One number in the strip under the toolbar.
+
+  CHEWY PATCH: with `board` set it is also the page's board index. The
+  strip already carried exactly the seven counts a reader would click —
+  it just wasn't clickable, so reaching the Abandoned board from the
+  card that said `Abandoned 4` meant scrolling past four other tables.
+  Clicking solos that board; clicking the active one restores them all.
+  """
+  def stat(%{board: nil} = assigns) do
+    ~H"""
+    <div id={@id} class={stat_class(@tone, false)}>
+      <.stat_body label={@label} value={@value} hint={@hint} tone={@tone} />
+    </div>
+    """
+  end
+
   def stat(assigns) do
     ~H"""
-    <div
+    <button
       id={@id}
-      class={[
-        "rounded-lg border px-3 py-2 bg-neutral-900/30",
-        @tone == :neutral && "border-neutral-800",
-        @tone == :urgent && "border-error/40 bg-error/5",
-        @tone == :warn && "border-warning/40 bg-warning/5",
-        @tone == :good && "border-success/40 bg-success/5"
-      ]}
+      type="button"
+      phx-click="focus_board"
+      phx-value-board={@board}
+      aria-pressed={to_string(@active)}
+      title={
+        if @active,
+          do: "Showing only this board — click to show every board again",
+          else: "Show only this board"
+      }
+      class={[stat_class(@tone, @active), "text-left hover:border-neutral-600 transition-colors"]}
     >
-      <div class="text-[10px] uppercase tracking-wider text-gray-500 truncate">{@label}</div>
-      <div class={[
-        "text-xl font-semibold tabular-nums leading-tight",
-        @tone == :urgent && "text-error",
-        @tone == :warn && "text-warning",
-        @tone == :good && "text-success"
-      ]}>
-        {@value}
-      </div>
-      <div class="text-[11px] text-gray-500 truncate h-4">{@hint}</div>
+      <.stat_body label={@label} value={@value} hint={@hint} tone={@tone} />
+    </button>
+    """
+  end
+
+  defp stat_class(tone, active) do
+    [
+      "rounded-lg border px-3 py-2 bg-neutral-900/30",
+      tone == :neutral && "border-neutral-800",
+      tone == :urgent && "border-error/40 bg-error/5",
+      tone == :warn && "border-warning/40 bg-warning/5",
+      tone == :good && "border-success/40 bg-success/5",
+      active && "ring-1 ring-gray-400 bg-neutral-800/60"
+    ]
+  end
+
+  attr :label, :string, required: true
+  attr :value, :string, required: true
+  attr :hint, :string, default: nil
+  attr :tone, :atom, required: true
+
+  defp stat_body(assigns) do
+    ~H"""
+    <div class="text-[10px] uppercase tracking-wider text-gray-500 truncate">{@label}</div>
+    <div class={[
+      "text-xl font-semibold tabular-nums leading-tight",
+      @tone == :urgent && "text-error",
+      @tone == :warn && "text-warning",
+      @tone == :good && "text-success"
+    ]}>
+      {@value}
     </div>
+    <div class="text-[11px] text-gray-500 truncate h-4">{@hint}</div>
     """
   end
 
@@ -571,6 +646,63 @@ defmodule WandererAppWeb.ScoutComponents do
     >
       {@status.text}
     </p>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :enabled, :boolean, required: true
+  attr :status, :map, default: nil
+  attr :loading, :boolean, default: false
+  attr :hint, :string, required: true
+
+  @doc """
+  CHEWY PATCH (pilot start): follow the selected pilot's own position
+  instead of typing the system it is parked in.
+
+  Every start on `/scout/planner` was a system SEARCH — read the name
+  off the game client, type it back into the browser, once per pilot,
+  every time anybody undocks somewhere else. This app already holds
+  each tracked character's token with `esi-location.read_location.v1`,
+  so the answer is one authenticated GET away
+  (`WandererApp.Scout.PilotLocation`).
+
+  It reports AT the control, like the `k` field does: this toggle's only
+  visible effect is a start system, and in sweep mode that is rendered
+  in a panel below a table that can be hundreds of rows.
+  """
+  def pilot_start_toggle(assigns) do
+    ~H"""
+    <label
+      class="flex min-w-0 items-start gap-1.5 text-[11px] text-gray-300 cursor-pointer col-span-2 sm:col-span-1"
+      title="Reads this pilot's current system from ESI and starts the route there. Re-read when you change pilot and on Refresh; picking or clearing a start by hand turns it off."
+    >
+      <input
+        type="checkbox"
+        id={@id}
+        checked={@enabled}
+        phx-click="toggle_pilot_start"
+        class="checkbox checkbox-xs mt-0.5"
+      />
+      <span class="min-w-0">
+        Start where my pilot is
+        <span :if={@loading} class="block text-orange-300">reading position…</span>
+        <span
+          :if={not @loading and @enabled and not is_nil(@status)}
+          id={"#{@id}-status"}
+          class={[
+            "block",
+            @status.level == :ok && "text-emerald-300",
+            @status.level == :warn && "text-amber-300",
+            @status.level == :error && "text-rose-300"
+          ]}
+        >
+          {@status.text}
+        </span>
+        <span :if={@loading or not @enabled or is_nil(@status)} class="block text-gray-500">
+          {@hint}
+        </span>
+      </span>
+    </label>
     """
   end
 

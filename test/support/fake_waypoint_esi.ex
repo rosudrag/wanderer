@@ -10,7 +10,9 @@ defmodule FakeWaypointEsi do
 
   def start_link(_opts \\ []) do
     case Agent.start_link(
-           fn -> %{online: true, waypoints: {:ok, ""}, fail_from: nil, calls: []} end,
+           fn ->
+             %{online: true, waypoints: {:ok, ""}, fail_from: nil, calls: [], location: nil}
+           end,
            name: __MODULE__
          ) do
       {:ok, pid} -> {:ok, pid}
@@ -24,8 +26,25 @@ defmodule FakeWaypointEsi do
       |> Map.put(:online, Keyword.get(opts, :online, true))
       |> Map.put(:waypoints, Keyword.get(opts, :waypoints, {:ok, ""}))
       |> Map.put(:fail_from, Keyword.get(opts, :fail_from))
+      # CHEWY PATCH (pilot start): what `GET /characters/{id}/location/`
+      # answers. `nil` means "not scripted" and is reported as a refusal,
+      # so a test that forgot to script it cannot pass by accident.
+      |> Map.put(:location, Keyword.get(opts, :location))
       |> Map.put(:calls, [])
     end)
+  end
+
+  def get_character_location(_eve_id, _opts) do
+    case Agent.get(__MODULE__, & &1.location) do
+      nil ->
+        {:error, :forbidden}
+
+      solar_system_id when is_integer(solar_system_id) ->
+        {:ok, %{"solar_system_id" => solar_system_id}}
+
+      other ->
+        other
+    end
   end
 
   def waypoint_calls, do: Agent.get(__MODULE__, &Enum.reverse(&1.calls))

@@ -195,6 +195,16 @@
             title="Narrows the ranking to these regions — empty means no narrowing"
           />
         </div>
+
+        <%!-- CHEWY PATCH (pilot start): the origin is the one thing nothing
+              ranks without, and it was always typed. --%>
+        <.pilot_start_toggle
+          id="scout-rank-pilot-start"
+          enabled={@pilot_start?}
+          status={@pilot_start_status}
+          loading={@pilot_start_loading?}
+          hint="the origin follows the selected pilot"
+        />
       </div>
 
       <div class="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-neutral-800/70">
@@ -502,6 +512,18 @@
             </span>
           </span>
         </label>
+
+        <%!-- CHEWY PATCH (pilot start): in sweep mode this pins the sweep's
+              own start AND every split part to its own pilot, which is the
+              "keep my chars in same place" case without typing k system
+              names. --%>
+        <.pilot_start_toggle
+          id="scout-sweep-pilot-start"
+          enabled={@pilot_start?}
+          status={@pilot_start_status}
+          loading={@pilot_start_loading?}
+          hint="sweep and each split part start where their pilot is"
+        />
       </div>
 
       <div class="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-neutral-800/70">
@@ -1094,6 +1116,17 @@
             <span class="block text-gray-500">unanchoring: first sighting + 7d</span>
           </span>
         </label>
+
+        <%!-- CHEWY PATCH (pilot start): the Start picker above is a NAME
+              search -- read the system off the game client, type it back
+              in. This reads it from ESI instead. --%>
+        <.pilot_start_toggle
+          id="scout-targets-pilot-start"
+          enabled={@pilot_start?}
+          status={@pilot_start_status}
+          loading={@pilot_start_loading?}
+          hint="the run opens where the selected pilot is parked"
+        />
       </div>
 
       <div class="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-neutral-800/70">

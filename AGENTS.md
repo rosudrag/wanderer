@@ -105,6 +105,20 @@ every structure board's `DISTINCT ON` orders only to pick the surviving row per 
 armor / hull is stored, exported and merge-significant but NOT rendered — a percentage triple read
 hours later is not actionable.
 
+**The boards are stacked, so three rules keep the stack readable.** Six structure boards share one
+column set and differ only in their leading time column, so a quiet tab used to be six screens of
+"Nothing anchoring right now." (1) An empty board collapses: `panel/1` takes `empty`/`empty_text`
+and renders ONE muted header line with no table — the sentence survives, so "empty" and "not on the
+page" stay distinguishable. (2) The summary strip IS the board index: a `stat/1` with `board` set is
+a button that solos that board (`show_board?/2`, the `Only <board> ✕` chip undoes it); it is a
+render-time filter, runs no read, and is deliberately not persisted. (3) `Now` is the one board that
+is not a read — `now_rows/1` folds unanchored + timers inside 6h + unanchoring bounds inside 48h out
+of rows the socket already holds, ten rows in deadline order, assigned in `load/1` and recomputed on
+the tick (a template cannot bind an intermediate value). Every row on it is still on its own board
+below; it is a lead, not a replacement. The toolbar is `sticky top-0` with an OPAQUE background and
+must stay a direct child of `<main class="overflow-auto">` — an `overflow-hidden` ancestor kills it.
+Any new board inherits all three.
+
 **The Unanchoring board's deadline is derived, because the wire has none.** A decommission reports
 no countdown (`timer_seconds` is reinforcement timers only), so the old "Comes out" column over
 `timer_expires_at` was structurally a column of em dashes and `by_deadline/1` sorted that board on
@@ -209,6 +223,25 @@ answers the other question nothing could: EVE applies waypoints to a RUNNING cli
 pushed at a logged-out pilot is accepted and discarded. Outcome, reason and stop number render
 beside the button (`ScoutComponents.route_outcome/1`) and go to the log as one line per push. Any
 future ESI write from this app inherits all three traps.
+
+**A start on `/scout/planner` can be read from the pilot instead of typed.** Asked for 2026-10-09:
+"need new toggle in scout planner route to be able to take the selected pilot starting position".
+Every start on that page was a NAME search — read the system off the game client, type it back into
+the browser, once per pilot, every time anybody undocks somewhere else — while this app already
+holds each tracked character's token with `esi-location.read_location.v1` in `default_scope`.
+`WandererApp.Scout.PilotLocation.resolve/1` is one authenticated GET
+(`/characters/{id}/location/`, `refresh_token?: true` so the GET path's `do_get_retry/5` refreshes
+an expired token — the trap `PlanWaypoints` documents), falling back to the character row's tracked
+`solar_system_id` ONLY when ESI refuses, and saying which source answered. One flag,
+`pilot_start?`, serves all three modes (rank's origin, the sweep's start, the targets run) and in
+sweep mode pins every split part to ITS OWN pilot — the "keep my chars in same place" case without
+typing k system names. It FOLLOWS rather than filling a box once: it re-resolves when the pilot
+changes, when a part's pilot changes and on Refresh, runs in a task with the page's usual monotonic
+token, and ANY manual start action (`select_origin`, `select_part_start`, every `clear_*`) turns it
+off through `unfollow_pilot/1` — two sources for one value with neither winning is how a route opens
+somewhere the page did not say. Failures are reported at the control
+(`ScoutComponents.pilot_start_toggle/1`), never silent, because a start that did not move looks
+exactly like one that did.
 
 **Scout structure intel is deduplicated twice, and both halves are load-bearing.** The eveknob
 client re-reports every structure on grid on every pass. Reads fold

@@ -476,6 +476,162 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     end
   end
 
+  # CHEWY PATCH (pilot start), asked for 2026-10-09: "need new toggle in
+  # scout planner route to be able to take the selected pilot starting
+  # position". Every start on this page was a NAME search -- read the
+  # system off the game client, type it back in, once per pilot. These
+  # assert the START MOVED, not that a checkbox rendered, and that a
+  # refusal is said out loud: a start that silently did not move is the
+  # exact failure the searchable picker was added to fix.
+  describe "starting where the pilot is" do
+    setup %{character: character} do
+      WandererApp.Cache.delete("scout:planner:adjacency")
+
+      {:ok, _pid} = FakeWaypointEsi.start_link()
+      Application.put_env(:wanderer_app, :esi_module, FakeWaypointEsi)
+
+      {:ok, character} =
+        WandererApp.Api.Character.update(character, %{
+          access_token: "test-access-token",
+          expires_at: DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_unix()
+        })
+
+      Cachex.del(:character_cache, character.id)
+
+      for {id, name} <- [
+            {990_800_001, "Pilotstart1"},
+            {990_800_002, "Pilotstart2"},
+            {990_800_003, "Pilotstart3"},
+            {990_800_004, "Pilotstart4"}
+          ] do
+        put_system(id, name)
+      end
+
+      for {a, b} <- [
+            {990_800_001, 990_800_002},
+            {990_800_002, 990_800_003},
+            {990_800_003, 990_800_004}
+          ] do
+        put_jump(a, b)
+      end
+
+      # Where the pilot is parked: another region, so it is never a
+      # sweep candidate and can only appear as the START.
+      put_system(990_800_099, "Pilotparked", 2, "Parked Region", 7, "0.9")
+      put_jump(990_800_099, 990_800_001)
+
+      reset_region_cache()
+
+      on_exit(fn -> Application.delete_env(:wanderer_app, :esi_module) end)
+
+      :ok
+    end
+
+    test "the sweep opens where ESI says the pilot is", %{conn: conn} do
+      FakeWaypointEsi.script(location: 990_800_099)
+
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
+
+      render_click(planner, "switch_mode", %{"mode" => "sweep"})
+      render_click(planner, "add_region", %{"scope" => "sweep", "id" => "1"})
+      sweep_html(planner)
+
+      render_click(planner, "toggle_pilot_start", %{})
+      html = sweep_html(planner)
+
+      assert html =~ "starting in Pilotparked"
+
+      result = :sys.get_state(planner.pid).socket.assigns.sweep_result
+
+      assert result.start == 990_800_099
+      refute 990_800_099 in Enum.map(result.stops, & &1.solar_system_id)
+    end
+
+    test "every split part is pinned to its own pilot", %{conn: conn, character: character} do
+      FakeWaypointEsi.script(location: 990_800_099)
+
+      # The second pilot needs a token of its own: a character this app
+      # cannot authenticate as is REPORTED, not silently skipped, which
+      # is the next test's job and would mask this one's.
+      second = insert(:character, %{user_id: character.user_id, name: "Second Scout"})
+
+      {:ok, second} =
+        WandererApp.Api.Character.update(second, %{
+          access_token: "test-access-token",
+          expires_at: DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_unix()
+        })
+
+      Cachex.del(:character_cache, second.id)
+
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
+
+      render_click(planner, "switch_mode", %{"mode" => "sweep"})
+      render_click(planner, "add_region", %{"scope" => "sweep", "id" => "1"})
+      sweep_html(planner)
+
+      render_change(planner, "update_sweep_k", %{"k" => "2"})
+      sweep_html(planner)
+
+      render_click(planner, "toggle_pilot_start", %{})
+      html = sweep_html(planner)
+
+      assert html =~ "2 parts pinned to their pilots"
+
+      starts = :sys.get_state(planner.pid).socket.assigns.sweep_starts
+
+      assert map_size(starts) == 2
+      assert Enum.all?(starts, fn {_index, start} -> start.id == 990_800_099 end)
+    end
+
+    test "a refused ESI read is reported and moves nothing", %{conn: conn} do
+      # Not scripted: the fake answers 403, and this character has no
+      # tracked location to fall back on either.
+      FakeWaypointEsi.script([])
+
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
+
+      render_click(planner, "switch_mode", %{"mode" => "sweep"})
+      render_click(planner, "add_region", %{"scope" => "sweep", "id" => "1"})
+      sweep_html(planner)
+
+      render_click(planner, "toggle_pilot_start", %{})
+      html = sweep_html(planner)
+
+      assert html =~ "could not be located"
+      assert html =~ "403"
+      assert is_nil(:sys.get_state(planner.pid).socket.assigns.sweep_start)
+    end
+
+    # The rank mode's origin is the one control nothing ranks without,
+    # and it was always typed.
+    test "the rank origin follows the pilot, and a manual pick stops it", %{conn: conn} do
+      FakeWaypointEsi.script(location: 990_800_099)
+
+      {:ok, view, _html} = live(conn, ~p"/scout/planner")
+      planner = planner_child(view)
+
+      render_click(planner, "toggle_pilot_start", %{})
+      html = render_async(planner)
+
+      assert html =~ "starting in Pilotparked"
+      assert :sys.get_state(planner.pid).socket.assigns.origin_id == 990_800_099
+
+      # Two sources for one value with neither winning is how a route
+      # opens somewhere the page did not say, so a hand-picked origin
+      # turns following off.
+      render_click(planner, "select_origin", %{"id" => "990800002", "name" => "Pilotstart2"})
+      render_async(planner)
+
+      assigns = :sys.get_state(planner.pid).socket.assigns
+
+      assert assigns.origin_id == 990_800_002
+      refute assigns.pilot_start?
+    end
+  end
+
   # CHEWY PATCH (scout planner security focus): "I would like to scout
   # Metropolis, specifically the lowsec systems". `Sweep.sweep/1` has
   # taken a `security:` band list since it shipped, and the sweep
