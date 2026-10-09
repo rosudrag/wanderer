@@ -16,6 +16,8 @@ defmodule WandererApp.Map.Routes do
     avoid_edencom: false,
     avoid_triglavian: false,
     include_thera: true,
+    # CHEWY PATCH: EVE Scout also publishes Turnur connections.
+    include_turnur: true,
     avoid: []
   }
 
@@ -124,7 +126,18 @@ defmodule WandererApp.Map.Routes do
                 {:ok, []}
             end
 
-          chains = remove_intersection([map_chains | thera_chains] |> List.flatten())
+          # CHEWY PATCH: Turnur chains are the same shape as Thera's.
+          {:ok, turnur_chains} =
+            case Map.get(routes_settings, :include_turnur, true) do
+              true ->
+                WandererApp.Server.TurnurDataFetcher.get_chain_pairs(routes_settings)
+
+              false ->
+                {:ok, []}
+            end
+
+          chains =
+            remove_intersection([map_chains | thera_chains ++ turnur_chains] |> List.flatten())
 
           chains =
             case routes_settings.include_cruise do

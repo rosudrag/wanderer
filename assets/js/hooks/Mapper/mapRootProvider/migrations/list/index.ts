@@ -10,4 +10,7 @@ import { to_7 } from './to_7.ts';
 import { to_8 } from './to_8.ts';
 import { MigrationStructure } from '@/hooks/Mapper/mapRootProvider/types.ts';
 
-export default [to_1, to_2, to_3, to_4, to_5, to_6, to_7, to_8] as MigrationStructure[];
+// CHEWY PATCH: Turnur connections routes setting migration.
+import { to_9 } from './to_9.ts';
+
+export default [to_1, to_2, to_3, to_4, to_5, to_6, to_7, to_8, to_9] as MigrationStructure[];

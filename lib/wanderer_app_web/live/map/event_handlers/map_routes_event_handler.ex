@@ -415,19 +415,23 @@ defmodule WandererAppWeb.MapRoutesEventHandler do
   def handle_ui_event(event, body, socket),
     do: MapCoreEventHandler.handle_ui_event(event, body, socket)
 
-  defp get_routes_settings(%{
-         "path_type" => path_type,
-         "include_mass_crit" => include_mass_crit,
-         "include_eol" => include_eol,
-         "include_frig" => include_frig,
-         "include_cruise" => include_cruise,
-         "avoid_wormholes" => avoid_wormholes,
-         "avoid_pochven" => avoid_pochven,
-         "avoid_edencom" => avoid_edencom,
-         "avoid_triglavian" => avoid_triglavian,
-         "include_thera" => include_thera,
-         "avoid" => avoid
-       }),
+  # CHEWY PATCH: `include_turnur` is read with Map.get, not matched, so a client
+  # whose stored settings predate the toggle still matches this clause.
+  defp get_routes_settings(
+         %{
+           "path_type" => path_type,
+           "include_mass_crit" => include_mass_crit,
+           "include_eol" => include_eol,
+           "include_frig" => include_frig,
+           "include_cruise" => include_cruise,
+           "avoid_wormholes" => avoid_wormholes,
+           "avoid_pochven" => avoid_pochven,
+           "avoid_edencom" => avoid_edencom,
+           "avoid_triglavian" => avoid_triglavian,
+           "include_thera" => include_thera,
+           "avoid" => avoid
+         } = routes_settings
+       ),
        do: %{
          path_type: path_type,
          include_mass_crit: include_mass_crit,
@@ -439,6 +443,7 @@ defmodule WandererAppWeb.MapRoutesEventHandler do
          avoid_edencom: avoid_edencom,
          avoid_triglavian: avoid_triglavian,
          include_thera: include_thera,
+         include_turnur: Map.get(routes_settings, "include_turnur", true),
          avoid: avoid
        }
 

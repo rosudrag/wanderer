@@ -18,6 +18,8 @@ const checkboxes: { label: string; propName: keyof RoutesFlagsType }[] = [
   { label: 'Include Frigate', propName: 'include_frig' },
   { label: 'Include Cruise', propName: 'include_cruise' },
   { label: 'Include Thera connections', propName: 'include_thera' },
+  // CHEWY PATCH: EVE Scout also publishes Turnur connections.
+  { label: 'Include Turnur connections', propName: 'include_turnur' },
   { label: 'Avoid Wormholes', propName: 'avoid_wormholes' },
   { label: 'Avoid Pochven', propName: 'avoid_pochven' },
   { label: 'Avoid Edencom systems', propName: 'avoid_edencom' },

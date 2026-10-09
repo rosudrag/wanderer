@@ -62,6 +62,8 @@ export type RoutesType = {
   include_frig: boolean;
   include_cruise: boolean;
   include_thera: boolean;
+  // CHEWY PATCH: EVE Scout also publishes Turnur connections.
+  include_turnur: boolean;
   avoid_wormholes: boolean;
   avoid_pochven: boolean;
   avoid_edencom: boolean;

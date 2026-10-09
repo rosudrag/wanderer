@@ -39,6 +39,8 @@ export const DEFAULT_ROUTES_SETTINGS: RoutesType = {
   include_frig: true,
   include_cruise: true,
   include_thera: true,
+  // CHEWY PATCH: EVE Scout also publishes Turnur connections.
+  include_turnur: true,
   avoid_wormholes: false,
   avoid_pochven: false,
   avoid_edencom: false,
