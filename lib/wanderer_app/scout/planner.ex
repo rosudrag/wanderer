@@ -486,7 +486,7 @@ defmodule WandererApp.Scout.Planner do
     }
 
     kind_row = Map.get(kind_coverage, resolved.kind)
-    observed = kind_row && kind_row.observed_at
+    observed = observed_for(resolved.kind, coverage)
     age_s = if observed, do: DateTime.diff(now, observed, :second), else: -1
 
     need =
@@ -559,6 +559,35 @@ defmodule WandererApp.Scout.Planner do
       row -> row.observed_at
     end
   end
+
+  @doc """
+  CHEWY PATCH: the observation that answers "have we covered this system
+  for `kind`".
+
+  Exact for every kind but `:visit`, which is the weakest claim in the
+  ladder and is IMPLIED by all of them: you cannot d-scan anomalies, probe
+  signatures or tour belts in a system without being in it. Anything else
+  reads a `:visit` plan as "nobody has ever been here" for systems a client
+  demonstrably flew through, which is what happened: measured 2026-10-10 on
+  live data, 232 systems across Derelik/Heimatar/Metropolis carried an
+  `anoms` row with a real `sig_count` and no `visit` row at all, because
+  that client only emitted `visit` under one behaviour. Those systems
+  ranked `:unseen` forever and kept coming back to the top of every plan.
+
+  Takes the already-built per-kind timestamp map, so it costs three
+  comparisons and no extra read.
+  """
+  @spec observed_for(kind(), %{kind() => DateTime.t() | nil}) :: DateTime.t() | nil
+  def observed_for(:visit, coverage) do
+    [coverage.visit, coverage.anoms, coverage.sigs, coverage.grid]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      times -> Enum.max(times, DateTime)
+    end
+  end
+
+  def observed_for(kind, coverage), do: Map.get(coverage, kind)
 
   # ---------------------------------------------------------------------
   # Classification -- `security` is a STRING column; parse once.

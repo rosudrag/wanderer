@@ -328,6 +328,51 @@ defmodule WandererApp.ScoutSweepTest do
     end
   end
 
+  # CHEWY PATCH: `:visit` is the weakest claim in the ladder and every
+  # other kind implies it -- a client cannot record anomalies in a system
+  # it was not in. Before this, a client that emitted `anoms` but not
+  # `visit` (measured 2026-10-10: 232 real systems across three regions)
+  # left every one of them `:unseen` for a visit-kind plan, forever.
+  describe "visit coverage is implied by every other kind" do
+    test "an anoms-only system is fresh for kind: :visit, in the sweep and in region_heat" do
+      region_id = 991_603
+
+      anoms_only = 991_600_901
+      never_seen = 991_600_902
+
+      put_system_in_region(anoms_only, "IVA", region_id, "Implied Visit", 7, "0.9")
+      put_system_in_region(never_seen, "IVB", region_id, "Implied Visit", 7, "0.9")
+      put_jump(anoms_only, never_seen)
+      put_jump(never_seen, anoms_only)
+
+      # Inside the 6h visit TTL, outside the 2h anoms one: the row is
+      # STALE as anoms and still proves presence as a visit, which is
+      # what makes this a different answer per kind rather than a
+      # blanket "any row means covered".
+      put_coverage(anoms_only, :anoms, DateTime.add(DateTime.utc_now(), -10_800, :second))
+
+      assert {:ok, visit} =
+               Sweep.sweep(scope: {:systems, [anoms_only, never_seen]}, kind: :visit)
+
+      # Fresh for :visit => dropped from the stop set entirely.
+      assert Enum.map(visit.stops, & &1.solar_system_id) == [never_seen]
+
+      assert {:ok, anoms} =
+               Sweep.sweep(scope: {:systems, [anoms_only, never_seen]}, kind: :anoms)
+
+      assert %{reason: :stale} =
+               Enum.find(anoms.stops, &(&1.solar_system_id == anoms_only))
+
+      # The table a region is picked from must agree with the sweep it
+      # produces, or the counts and the route disagree on the same data.
+      assert %{systems: 2, covered: 1, unseen: 1} =
+               heat_row(Sweep.region_heat(:visit, [:hs]), region_id)
+
+      assert %{systems: 2, covered: 0, stale: 1, unseen: 1} =
+               heat_row(Sweep.region_heat(:anoms, [:hs]), region_id)
+    end
+  end
+
   # -----------------------------------------------------------------
   # Fixture helpers
   # -----------------------------------------------------------------

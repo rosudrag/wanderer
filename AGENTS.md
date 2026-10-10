@@ -260,6 +260,23 @@ in ~450 ms at `limit: 50` and ~800 ms at `limit: 100`. The page already runs eve
 so that lands as a spinner, not a frozen LiveView. Stop count is still `limit` (picker tops out at
 100, wire `@max_limit 100`), and the ESI push is one POST per stop.
 
+**`visit` coverage is IMPLIED by every other kind, and that is a server-side rule.** Reported
+2026-10-10: "i have ran the route planner with visit mode for many regions but all systems still
+say unseen". They had. The ledger keys coverage on `(solar_system_id, kind)` and
+`Sweep.build_candidate/4` read `kind` EXACTLY, so a system with a 20-minute-old `anoms` row and no
+`visit` row was `:unseen` for a visit-kind plan forever — and re-ranked to the top of every one.
+Measured on the live DB that day: Delve 97/97 and Stain 132/132 systems carried `visit`, while
+Derelik 117, Heimatar 83 and Metropolis 75 carried `anoms` with real `sig_count`s and **zero**
+`visit`, because eveknob only emitted that kind from `obj_Scout.CheckSystemChange` — i.e. only
+while the Scout behaviour was the selected one (fixed client-side too: `obj_SystemIntel.iss`, a
+frame atom, now owns the arrival edge in every mode including paused). `Planner.observed_for/2`
+resolves `:visit` as the newest of all four kinds — you cannot d-scan anomalies in a system you
+were not in — and `Sweep.region_heat/2` joins a per-system LATEST-coverage subquery for the same
+reason, because the table a region is picked from must count what the sweep it produces will
+actually skip. Every other kind stays exact: a 3h-old `anoms` row is `:stale` as anoms and
+`:fresh` as a visit, which is the point. Regression: `test/integration/scout_sweep_test.exs`
+"visit coverage is implied by every other kind".
+
 **Scout structure intel is deduplicated twice, and both halves are load-bearing.** The eveknob
 client re-reports every structure on grid on every pass. Reads fold
 (`DISTINCT ON (structure_id) ORDER BY observed_at DESC`) — the live timer table was missing that

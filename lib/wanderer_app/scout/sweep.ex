@@ -402,7 +402,11 @@ defmodule WandererApp.Scout.Sweep do
       grid: Map.get(kind_coverage, :grid)
     }
 
-    observed = Map.get(kind_coverage, resolved.kind)
+    # `:visit` is implied by every other kind -- see
+    # `Planner.observed_for/2`'s doc. The sweep's membership (what is
+    # `:fresh` and therefore dropped) rides on this too, so the two modes
+    # agree about what "covered" means.
+    observed = Planner.observed_for(resolved.kind, coverage)
     age_s = if observed, do: DateTime.diff(now, observed, :second), else: -1
     reason = reason_for(observed, age_s, Planner.ttl_seconds(resolved.kind, sys.system_class))
 
@@ -864,25 +868,31 @@ defmodule WandererApp.Scout.Sweep do
     |> Enum.uniq()
   end
 
+  # CHEWY PATCH: the join is a per-system LATEST-coverage subquery, not the
+  # raw table, because `:visit` is implied by every other kind
+  # (`Planner.observed_for/2`) and a plain `kind == 'visit'` join would
+  # count a system as unseen that `sweep/1` is about to call fresh -- the
+  # two must agree or the table you pick a region from lies about the
+  # sweep you get. One row per system either way, so the counts below are
+  # unchanged for every other kind.
   defp run_region_heat(kind, class_ids) do
     ttl = Planner.ttl_seconds(kind, nil)
     now = NaiveDateTime.utc_now()
     cutoff = NaiveDateTime.add(now, -trunc(ttl), :second)
-    kind_str = Atom.to_string(kind)
 
     from(ms in @map_solar_system_table,
       where: ms.system_class in ^class_ids and not is_nil(ms.region_id),
-      left_join: cov in ^@coverage_table,
-      on: cov.solar_system_id == ms.solar_system_id and cov.kind == ^kind_str,
+      left_join: cov in subquery(latest_coverage_query(kind)),
+      on: cov.solar_system_id == ms.solar_system_id,
       group_by: [ms.region_id, ms.region_name],
       order_by: [asc: ms.region_name],
       select: %{
         region_id: ms.region_id,
         region_name: ms.region_name,
         systems: count(ms.solar_system_id),
-        covered: filter(count(cov.id), cov.observed_at >= ^cutoff),
-        stale: filter(count(cov.id), cov.observed_at < ^cutoff),
-        unseen: filter(count(ms.solar_system_id), is_nil(cov.id)),
+        covered: filter(count(cov.observed_at), cov.observed_at >= ^cutoff),
+        stale: filter(count(cov.observed_at), cov.observed_at < ^cutoff),
+        unseen: filter(count(ms.solar_system_id), is_nil(cov.observed_at)),
         median_age_s:
           filter(
             fragment(
@@ -896,6 +906,31 @@ defmodule WandererApp.Scout.Sweep do
     )
     |> Repo.all()
     |> Enum.map(&finalize_region_heat_row/1)
+  end
+
+  # Newest coverage row per system for `kind` -- every kind for `:visit`,
+  # since being in a system is implied by anything else recorded there.
+  defp latest_coverage_query(:visit) do
+    from(c in @coverage_table,
+      group_by: c.solar_system_id,
+      select: %{
+        solar_system_id: c.solar_system_id,
+        observed_at: max(c.observed_at)
+      }
+    )
+  end
+
+  defp latest_coverage_query(kind) do
+    kind_str = Atom.to_string(kind)
+
+    from(c in @coverage_table,
+      where: c.kind == ^kind_str,
+      group_by: c.solar_system_id,
+      select: %{
+        solar_system_id: c.solar_system_id,
+        observed_at: max(c.observed_at)
+      }
+    )
   end
 
   defp finalize_region_heat_row(row), do: %{row | median_age_s: round_or_nil(row.median_age_s)}
