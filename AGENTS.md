@@ -398,6 +398,18 @@ instead (`test/integration/scout_plan_api_test.exs` flips `:scout_planner_enable
   must first mint `invite_<uuid>` in `WandererApp.Cache` and pass it through, the way
   `characters_live.ex`'s `"authorize"` handler and `corp_management_live.ex`'s `"request_director_access"`
   handler both do. A plain `<.link href={~p"/auth/eve?…"}>` is dead on this deployment.
+- **A new ESI scope must be ticked on the EVE APPLICATION first, and until it is, adding one
+  breaks EVERY login.** EVE SSO answers
+  `{"error":"invalid_scope","error_description":"The requested '…' scope is not valid."}` and
+  refuses the whole authorize request — not just the new scope — so a scope appended to
+  `default_scope` takes sign-in down for everybody, not only for the feature that wanted it.
+  Measured 2026-10-10 with `esi-characters.read_notifications.v1`: the scope NAME was correct,
+  the application behind `EVE_CLIENT_ID` simply did not have it enabled at
+  developers.eveonline.com. Nothing in this repo can detect or work around it. So the order is:
+  tick the scope on the application (and on every `EVE_CLIENT_*` app a tracking pool might use —
+  `TrackingConfigUtils.get_active_pool!/0` picks which client the login goes out with), THEN turn
+  the flag on. Rolling back is a flag flip plus `.\deploy.ps1`, no rebuild, because the image
+  already carries the code.
 - **Boolean env vars are `String.to_existing_atom`'d** (`config/runtime.exs`, the upstream idiom every
   flag follows). A trailing space — `WANDERER_IDENTITY_SUITE=true ` — crashes the container at boot
   with `not an already existing atom`. Loud, not silent, but baffling until you know.
