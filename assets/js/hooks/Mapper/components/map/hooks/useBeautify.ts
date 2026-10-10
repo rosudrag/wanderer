@@ -4,13 +4,10 @@ import { createElement, useCallback, useRef, useState } from 'react';
 import { useMapRootState } from '@/hooks/Mapper/mapRootProvider';
 import { OutCommand } from '@/hooks/Mapper/types/mapHandlers.ts';
 import { useToast } from '@/hooks/Mapper/ToastProvider.tsx';
-import {
-  beautifyLayout,
-  BeautifyAxis,
-  KSpaceMode,
-  LayoutEdgeInput,
-  LayoutNodeInput,
-} from '@/hooks/Mapper/components/map/layout';
+import { BeautifyAxis, KSpaceMode, LayoutEdgeInput, LayoutNodeInput } from '@/hooks/Mapper/components/map/layout';
+// CHEWY PATCH: runs the solve off the main thread (beautify.worker.ts) with
+// a synchronous in-process fallback — see beautifyClient.ts's header.
+import { runBeautify } from '@/hooks/Mapper/components/map/layout/beautifyClient';
 import { BeautifyUndoToastContent } from '@/hooks/Mapper/components/map/hooks/BeautifyUndoToastContent.tsx';
 
 export type BeautifyScope = 'all' | 'selection';
@@ -119,7 +116,7 @@ export const useBeautify = () => {
       setIsBeautifying(true);
 
       try {
-        const result = await beautifyLayout(nodes, edges, {
+        const result = await runBeautify(nodes, edges, {
           axis,
           rootId: scope === 'selection' ? null : rootId,
           hubs,

@@ -9,7 +9,12 @@
 // regions, rounding) are considered. The safety net makes "no two nodes
 // ever share a cell" a hard invariant regardless of upstream logic.
 
-import { countOffAngleEdges, segmentHitsNodeBox } from './geometry';
+import {
+  countOffAngleEdges,
+  NODE_HALF_H_CELLS,
+  NODE_HALF_W_CELLS,
+  segmentHitsNodeBox,
+} from './geometry';
 import type { CellCoord, LayoutBox, LayoutQuality } from './types';
 
 interface Rect {
@@ -18,6 +23,16 @@ interface Rect {
   minRow: number;
   maxRow: number;
 }
+
+// Dev-only profiling counters (enable with LAYOUT_PROFILE env var)
+const PROFILE = typeof process !== 'undefined' && process.env.LAYOUT_PROFILE === '1';
+const callCounts = {
+  findCrossingPairs: 0,
+  findEdgeOverlapPairs: 0,
+  findNodeOcclusions: 0,
+  violationScore: 0,
+  reduceCrossings: 0,
+};
 
 const rectOf = (cells: Map<string, CellCoord>): Rect => {
   let minCol = Infinity;
@@ -43,6 +58,93 @@ const shiftRect = (r: Rect, dCol: number, dRow: number): Rect => ({
   minRow: r.minRow + dRow,
   maxRow: r.maxRow + dRow,
 });
+// CHEWY PATCH: Spatial grid index to replace O(E²) all-pairs scans.
+// Only edges/nodes whose bounding boxes intersect can possibly interact.
+// Exported (with the counting functions below) so the equivalence test in
+// __tests__/spatial-index.test.ts can call the real indexed vs. naive code
+// paths directly, instead of asserting against a parallel reimplementation.
+export interface SpatialIndex {
+  buckets: Map<string, number[]>;
+  bucketSize: number;
+}
+
+export const buildEdgeIndex = (edges: CrossingEdge[], cells: Map<string, CellCoord>, bucketSize: number): SpatialIndex => {
+  const buckets = new Map<string, number[]>();
+  for (let i = 0; i < edges.length; i++) {
+    const edge = edges[i],
+      pa = cells.get(edge.source),
+      pb = cells.get(edge.target);
+    if (!pa || !pb) continue;
+    const minCol = Math.floor(Math.min(pa.col, pb.col) / bucketSize);
+    const maxCol = Math.floor(Math.max(pa.col, pb.col) / bucketSize);
+    const minRow = Math.floor(Math.min(pa.row, pb.row) / bucketSize);
+    const maxRow = Math.floor(Math.max(pa.row, pb.row) / bucketSize);
+    for (let bc = minCol; bc <= maxCol; bc++) {
+      for (let br = minRow; br <= maxRow; br++) {
+        const key = `${bc},${br}`;
+        if (!buckets.has(key)) buckets.set(key, []);
+        buckets.get(key)!.push(i);
+      }
+    }
+  }
+  return { buckets, bucketSize };
+};
+
+export const buildNodeIndex = (cells: Map<string, CellCoord>, bucketSize: number): Map<string, string[]> => {
+  const buckets = new Map<string, string[]>();
+  for (const [nodeId, cell] of cells) {
+    const bc = Math.floor(cell.col / bucketSize),
+      br = Math.floor(cell.row / bucketSize);
+    const key = `${bc},${br}`;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(nodeId);
+  }
+  return buckets;
+};
+
+const queryEdgeCandidates = (e: CrossingEdge, cells: Map<string, CellCoord>, idx: SpatialIndex): Set<number> => {
+  const pa = cells.get(e.source),
+    pb = cells.get(e.target);
+  if (!pa || !pb) return new Set();
+  const minCol = Math.floor(Math.min(pa.col, pb.col) / idx.bucketSize);
+  const maxCol = Math.floor(Math.max(pa.col, pb.col) / idx.bucketSize);
+  const minRow = Math.floor(Math.min(pa.row, pb.row) / idx.bucketSize);
+  const maxRow = Math.floor(Math.max(pa.row, pb.row) / idx.bucketSize);
+  const cand = new Set<number>();
+  for (let bc = minCol; bc <= maxCol; bc++) {
+    for (let br = minRow; br <= maxRow; br++) {
+      const bucket = idx.buckets.get(`${bc},${br}`);
+      if (bucket) bucket.forEach(i => cand.add(i));
+    }
+  }
+  return cand;
+};
+
+const queryNodeCandidates = (
+  pa: CellCoord,
+  pb: CellCoord,
+  ni: Map<string, string[]>,
+  sz: number
+): Set<string> => {
+  // Pad edge bbox by node box half-extents: a node whose box overlaps the
+  // segment must be found, even if the node's cell is just outside the edge's
+  // cell bbox.
+  const padCol = Math.ceil(NODE_HALF_W_CELLS);
+  const padRow = Math.ceil(NODE_HALF_H_CELLS);
+  const minCol = Math.floor((Math.min(pa.col, pb.col) - padCol) / sz);
+  const maxCol = Math.floor((Math.max(pa.col, pb.col) + padCol) / sz);
+  const minRow = Math.floor((Math.min(pa.row, pb.row) - padRow) / sz);
+  const maxRow = Math.floor((Math.max(pa.row, pb.row) + padRow) / sz);
+
+  const cand = new Set<string>();
+  for (let bc = minCol; bc <= maxCol; bc++) {
+    for (let br = minRow; br <= maxRow; br++) {
+      const bucket = ni.get(`${bc},${br}`);
+      if (bucket) bucket.forEach((id) => cand.add(id));
+    }
+  }
+  return cand;
+};
 
 /** Rects overlap (including the required 1-cell gutter) when they are not separated by at least one empty cell on every axis. */
 const overlaps = (a: Rect, b: Rect): boolean =>
@@ -221,7 +323,7 @@ const dedupeCells = (ordered: Array<{ id: string; cell: CellCoord }>): Map<strin
 // canonically accepted, and displacement-capped — so fixing occlusion does
 // not reopen the exact cascade the stability rewrite closed.
 
-interface CrossingEdge {
+export interface CrossingEdge {
   source: string;
   target: string;
 }
@@ -263,14 +365,40 @@ const segmentsIntersect = (
   return false;
 };
 
-const countCrossings = (edges: CrossingEdge[], cells: Map<string, CellCoord>): number => {
+export const countCrossings = (edges: CrossingEdge[], cells: Map<string, CellCoord>, index?: SpatialIndex): number => {
+  if (!index) {
+    // Fallback: naive O(E²) scan (backward compatible)
+    let total = 0;
+    for (let i = 0; i < edges.length; i++) {
+      const a = edges[i];
+      const pa = cells.get(a.source);
+      const pb = cells.get(a.target);
+      if (!pa || !pb) continue;
+      for (let j = i + 1; j < edges.length; j++) {
+        const b = edges[j];
+        if (a.source === b.source || a.source === b.target || a.target === b.source || a.target === b.target) continue;
+        const pc = cells.get(b.source);
+        const pd = cells.get(b.target);
+        if (!pc || !pd) continue;
+        if (segmentsIntersect(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) total++;
+      }
+    }
+    return total;
+  }
+  // Indexed: query candidates only
   let total = 0;
+  const seen = new Set<string>();
   for (let i = 0; i < edges.length; i++) {
     const a = edges[i];
     const pa = cells.get(a.source);
     const pb = cells.get(a.target);
     if (!pa || !pb) continue;
-    for (let j = i + 1; j < edges.length; j++) {
+    const candidates = queryEdgeCandidates(a, cells, index);
+    for (const j of candidates) {
+      if (i >= j) continue;
+      const pairKey = `${i},${j}`;
+      if (seen.has(pairKey)) continue;
+      seen.add(pairKey);
       const b = edges[j];
       if (a.source === b.source || a.source === b.target || a.target === b.source || a.target === b.target) continue;
       const pc = cells.get(b.source);
@@ -325,20 +453,48 @@ const edgesOverlap = (
   return Math.min(aHi, bHi) > Math.max(0, bLo);
 };
 
-const countEdgeOverlapPairs = (edges: CrossingEdge[], cells: Map<string, CellCoord>): number => {
+export const countEdgeOverlapPairs = (edges: CrossingEdge[], cells: Map<string, CellCoord>, index?: SpatialIndex): number => {
+  if (!index) {
+    // Fallback: naive O(E²) scan
+    let total = 0;
+    for (let i = 0; i < edges.length; i++) {
+      const a = edges[i];
+      if (a.source === a.target) continue;
+      const pa = cells.get(a.source);
+      const pb = cells.get(a.target);
+      if (!pa || !pb) continue;
+      for (let j = i + 1; j < edges.length; j++) {
+        const b = edges[j];
+        if (b.source === b.target) continue;
+        const pc = cells.get(b.source);
+        const pd = cells.get(b.target);
+        if (!pc || !pd) continue;
+        if (edgesOverlap(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) total++;
+      }
+    }
+    return total;
+  }
+  // Indexed: query candidates only. NOTE: Unlike countCrossings, this deliberately checks shared-endpoint pairs.
   let total = 0;
+  const seen = new Set<string>();
   for (let i = 0; i < edges.length; i++) {
     const a = edges[i];
     if (a.source === a.target) continue;
     const pa = cells.get(a.source);
     const pb = cells.get(a.target);
     if (!pa || !pb) continue;
-    for (let j = i + 1; j < edges.length; j++) {
+    const candidates = queryEdgeCandidates(a, cells, index);
+    for (const j of candidates) {
+      if (i >= j) continue;
+      const pairKey = `${i},${j}`;
+      if (seen.has(pairKey)) continue;
+      seen.add(pairKey);
       const b = edges[j];
       if (b.source === b.target) continue;
       const pc = cells.get(b.source);
       const pd = cells.get(b.target);
       if (!pc || !pd) continue;
+      // NOTE: Deliberately NO endpoint check (differs from countCrossings)
       if (edgesOverlap(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) total++;
     }
   }
@@ -366,15 +522,39 @@ const countEdgeOverlapPairs = (edges: CrossingEdge[], cells: Map<string, CellCoo
 const nodeOccludesEdge = (px: number, py: number, ax: number, ay: number, bx: number, by: number): boolean =>
   segmentHitsNodeBox({ col: ax, row: ay }, { col: bx, row: by }, { col: px, row: py });
 
-const countNodeOcclusions = (edges: CrossingEdge[], cells: Map<string, CellCoord>): number => {
+export const countNodeOcclusions = (
+  edges: CrossingEdge[],
+  cells: Map<string, CellCoord>,
+  nodeIndex?: Map<string, string[]>,
+  bucketSize?: number,
+): number => {
+  if (!nodeIndex || !bucketSize) {
+    // Fallback: naive O(E*N) scan
+    let total = 0;
+    for (const edge of edges) {
+      if (edge.source === edge.target) continue;
+      const pa = cells.get(edge.source);
+      const pb = cells.get(edge.target);
+      if (!pa || !pb) continue;
+      for (const [nodeId, p] of cells) {
+        if (nodeId === edge.source || nodeId === edge.target) continue;
+        if (nodeOccludesEdge(p.col, p.row, pa.col, pa.row, pb.col, pb.row)) total++;
+      }
+    }
+    return total;
+  }
+  // Indexed: query candidates only
   let total = 0;
   for (const edge of edges) {
     if (edge.source === edge.target) continue;
     const pa = cells.get(edge.source);
     const pb = cells.get(edge.target);
     if (!pa || !pb) continue;
-    for (const [nodeId, p] of cells) {
+    const candidates = queryNodeCandidates(pa, pb, nodeIndex, bucketSize);
+    for (const nodeId of candidates) {
       if (nodeId === edge.source || nodeId === edge.target) continue;
+      const p = cells.get(nodeId);
+      if (!p) continue;
       if (nodeOccludesEdge(p.col, p.row, pa.col, pa.row, pb.col, pb.row)) total++;
     }
   }
@@ -393,11 +573,7 @@ const countNodeOcclusions = (edges: CrossingEdge[], cells: Map<string, CellCoord
  * of O(E^2 + E*N)) and monotone: it only accepts strictly-improving moves, so
  * the global score falls every accept and the pass cannot cycle.
  */
-export const localViolationScore = (
-  edges: CrossingEdge[],
-  cells: Map<string, CellCoord>,
-  nodeId: string,
-): number => {
+export const localViolationScore = (edges: CrossingEdge[], cells: Map<string, CellCoord>, nodeId: string): number => {
   const incidentIndices: number[] = [];
   for (let i = 0; i < edges.length; i++) {
     const edge = edges[i];
@@ -444,6 +620,90 @@ export const localViolationScore = (
       const edge = edges[i];
       if (edge.source === edge.target) continue;
       if (edge.source === nodeId || edge.target === nodeId) continue;
+      const pa = cells.get(edge.source);
+      const pb = cells.get(edge.target);
+      if (!pa || !pb) continue;
+      if (nodeOccludesEdge(self.col, self.row, pa.col, pa.row, pb.col, pb.row)) occlusions++;
+    }
+  }
+
+  return crossings * CROSSING_WEIGHT + overlapPairs * OVERLAP_WEIGHT + occlusions * OCCLUSION_WEIGHT;
+};
+
+/**
+ * CHEWY PATCH: `localViolationScore` generalised to TWO nodes moving at
+ * once (a swap trial) — the part of `violationScore` that `idA`'s AND
+ * `idB`'s positions together can change, each pair counted exactly once.
+ *
+ * Naively summing `localViolationScore(idA) + localViolationScore(idB)`
+ * double-counts any crossing/overlap pair where one edge is incident to
+ * `idA` and the other to `idB` (both calls would see that pair, once as
+ * "an edge of idA vs. some other edge", once as "an edge of idB vs. some
+ * other edge"). This instead unions both nodes' incident-edge sets up
+ * front and runs the SAME single dedup pass `localViolationScore` uses
+ * (skip a pair already visited the other way round), so every pair with at
+ * least one incident edge — including the idA<->idB pairs — is counted
+ * once. Occlusion mirrors the same union: `idA`/`idB` as occluder is only
+ * checked against edges NOT incident to either (incident edges are already
+ * covered by the first loop, which checks every node — including idA/idB
+ * themselves — as a candidate occluder of an incident edge).
+ */
+export const pairViolationScore = (
+  edges: CrossingEdge[],
+  cells: Map<string, CellCoord>,
+  idA: string,
+  idB: string,
+): number => {
+  const incidentIndices: number[] = [];
+  for (let i = 0; i < edges.length; i++) {
+    const edge = edges[i];
+    if (edge.source === edge.target) continue;
+    if (edge.source === idA || edge.target === idA || edge.source === idB || edge.target === idB) {
+      incidentIndices.push(i);
+    }
+  }
+  const incidentSet = new Set(incidentIndices);
+
+  let crossings = 0;
+  let overlapPairs = 0;
+  for (const i of incidentIndices) {
+    const a = edges[i];
+    const pa = cells.get(a.source);
+    const pb = cells.get(a.target);
+    if (!pa || !pb) continue;
+    for (let j = 0; j < edges.length; j++) {
+      if (j === i) continue;
+      const b = edges[j];
+      if (b.source === b.target) continue;
+      // Pairs where BOTH edges are in the union are visited twice; keep the first.
+      if (incidentSet.has(j) && j < i) continue;
+      const pc = cells.get(b.source);
+      const pd = cells.get(b.target);
+      if (!pc || !pd) continue;
+      if (edgesOverlap(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) overlapPairs++;
+      if (a.source === b.source || a.source === b.target || a.target === b.source || a.target === b.target) continue;
+      if (segmentsIntersect(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) crossings++;
+    }
+  }
+
+  let occlusions = 0;
+  for (const i of incidentIndices) {
+    const edge = edges[i];
+    const pa = cells.get(edge.source);
+    const pb = cells.get(edge.target);
+    if (!pa || !pb) continue;
+    for (const [otherId, p] of cells) {
+      if (otherId === edge.source || otherId === edge.target) continue;
+      if (nodeOccludesEdge(p.col, p.row, pa.col, pa.row, pb.col, pb.row)) occlusions++;
+    }
+  }
+  for (const selfId of [idA, idB]) {
+    const self = cells.get(selfId);
+    if (!self) continue;
+    for (let i = 0; i < edges.length; i++) {
+      if (incidentSet.has(i)) continue; // already covered above
+      const edge = edges[i];
+      if (edge.source === edge.target) continue;
       const pa = cells.get(edge.source);
       const pb = cells.get(edge.target);
       if (!pa || !pb) continue;
@@ -501,14 +761,45 @@ interface CrossingPair {
  * the SAME crossing, instead of any two candidates that happen to be near
  * each other.
  */
-const findCrossingPairs = (edges: CrossingEdge[], cells: Map<string, CellCoord>): CrossingPair[] => {
+const findCrossingPairs = (
+  edges: CrossingEdge[],
+  cells: Map<string, CellCoord>,
+  index?: SpatialIndex,
+): CrossingPair[] => {
   const pairs: CrossingPair[] = [];
+  if (!index) {
+    // Fallback: naive O(E²) scan
+    for (let i = 0; i < edges.length; i++) {
+      const a = edges[i];
+      const pa = cells.get(a.source);
+      const pb = cells.get(a.target);
+      if (!pa || !pb) continue;
+      for (let j = i + 1; j < edges.length; j++) {
+        const b = edges[j];
+        if (a.source === b.source || a.source === b.target || a.target === b.source || a.target === b.target) continue;
+        const pc = cells.get(b.source);
+        const pd = cells.get(b.target);
+        if (!pc || !pd) continue;
+        if (segmentsIntersect(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) {
+          pairs.push({ a, b });
+        }
+      }
+    }
+    return pairs;
+  }
+  // Indexed: query candidates only
+  const seen = new Set<string>();
   for (let i = 0; i < edges.length; i++) {
     const a = edges[i];
     const pa = cells.get(a.source);
     const pb = cells.get(a.target);
     if (!pa || !pb) continue;
-    for (let j = i + 1; j < edges.length; j++) {
+    const candidates = queryEdgeCandidates(a, cells, index);
+    for (const j of candidates) {
+      if (i >= j) continue;
+      const pairKey = `${i},${j}`;
+      if (seen.has(pairKey)) continue;
+      seen.add(pairKey);
       const b = edges[j];
       if (a.source === b.source || a.source === b.target || a.target === b.source || a.target === b.target) continue;
       const pc = cells.get(b.source);
@@ -528,15 +819,48 @@ interface OverlapPair {
 }
 
 /** Same predicate as `countEdgeOverlapPairs`, collected as pairs for candidate-node derivation below. */
-const findEdgeOverlapPairs = (edges: CrossingEdge[], cells: Map<string, CellCoord>): OverlapPair[] => {
+const findEdgeOverlapPairs = (
+  edges: CrossingEdge[],
+  cells: Map<string, CellCoord>,
+  index?: SpatialIndex,
+): OverlapPair[] => {
+  if (PROFILE) callCounts.findEdgeOverlapPairs++;
   const pairs: OverlapPair[] = [];
+  if (!index) {
+    // Fallback: naive O(E²) scan
+    for (let i = 0; i < edges.length; i++) {
+      const a = edges[i];
+      if (a.source === a.target) continue;
+      const pa = cells.get(a.source);
+      const pb = cells.get(a.target);
+      if (!pa || !pb) continue;
+      for (let j = i + 1; j < edges.length; j++) {
+        const b = edges[j];
+        if (b.source === b.target) continue;
+        const pc = cells.get(b.source);
+        const pd = cells.get(b.target);
+        if (!pc || !pd) continue;
+        if (edgesOverlap(pa.col, pa.row, pb.col, pb.row, pc.col, pc.row, pd.col, pd.row)) {
+          pairs.push({ a, b });
+        }
+      }
+    }
+    return pairs;
+  }
+  // Indexed: query candidates only. NOTE: Deliberately checks shared-endpoint pairs.
+  const seen = new Set<string>();
   for (let i = 0; i < edges.length; i++) {
     const a = edges[i];
     if (a.source === a.target) continue;
     const pa = cells.get(a.source);
     const pb = cells.get(a.target);
     if (!pa || !pb) continue;
-    for (let j = i + 1; j < edges.length; j++) {
+    const candidates = queryEdgeCandidates(a, cells, index);
+    for (const j of candidates) {
+      if (i >= j) continue;
+      const pairKey = `${i},${j}`;
+      if (seen.has(pairKey)) continue;
+      seen.add(pairKey);
       const b = edges[j];
       if (b.source === b.target) continue;
       const pc = cells.get(b.source);
@@ -556,15 +880,41 @@ interface NodeOcclusion {
 }
 
 /** Same predicate as `countNodeOcclusions`, collected for candidate-node derivation (see reduceCrossings below). */
-const findNodeOcclusions = (edges: CrossingEdge[], cells: Map<string, CellCoord>): NodeOcclusion[] => {
+const findNodeOcclusions = (
+  edges: CrossingEdge[],
+  cells: Map<string, CellCoord>,
+  nodeIndex?: Map<string, string[]>,
+  bucketSize?: number,
+): NodeOcclusion[] => {
+  if (PROFILE) callCounts.findNodeOcclusions++;
   const occlusions: NodeOcclusion[] = [];
+  if (!nodeIndex || !bucketSize) {
+    // Fallback: naive O(E*N) scan
+    for (const edge of edges) {
+      if (edge.source === edge.target) continue;
+      const pa = cells.get(edge.source);
+      const pb = cells.get(edge.target);
+      if (!pa || !pb) continue;
+      for (const [nodeId, p] of cells) {
+        if (nodeId === edge.source || nodeId === edge.target) continue;
+        if (nodeOccludesEdge(p.col, p.row, pa.col, pa.row, pb.col, pb.row)) {
+          occlusions.push({ nodeId, edge });
+        }
+      }
+    }
+    return occlusions;
+  }
+  // Indexed: query candidates only
   for (const edge of edges) {
     if (edge.source === edge.target) continue;
     const pa = cells.get(edge.source);
     const pb = cells.get(edge.target);
     if (!pa || !pb) continue;
-    for (const [nodeId, p] of cells) {
+    const candidates = queryNodeCandidates(pa, pb, nodeIndex, bucketSize);
+    for (const nodeId of candidates) {
       if (nodeId === edge.source || nodeId === edge.target) continue;
+      const p = cells.get(nodeId);
+      if (!p) continue;
       if (nodeOccludesEdge(p.col, p.row, pa.col, pa.row, pb.col, pb.row)) {
         occlusions.push({ nodeId, edge });
       }
@@ -589,7 +939,7 @@ const CROSSING_WEIGHT = 1;
 const OVERLAP_WEIGHT = 1000;
 const OCCLUSION_WEIGHT = 1000;
 
-const violationScore = (edges: CrossingEdge[], cells: Map<string, CellCoord>): number =>
+export const violationScore = (edges: CrossingEdge[], cells: Map<string, CellCoord>): number =>
   countCrossings(edges, cells) * CROSSING_WEIGHT +
   countEdgeOverlapPairs(edges, cells) * OVERLAP_WEIGHT +
   countNodeOcclusions(edges, cells) * OCCLUSION_WEIGHT;
@@ -743,13 +1093,35 @@ export const reduceCrossings = (
     if (!o) return 0;
     return Math.hypot(cell.col - o.col, cell.row - o.row);
   };
+  // CHEWY PATCH: swap trials (below) deliberately still score with the full
+  // naive `violationScore` — a swap moves TWO nodes at once, and naively
+  // summing `localViolationScore(lo) + localViolationScore(hi)`
+  // double-counts any crossing/overlap pair where one edge touches lo and
+  // the other touches hi, so the identity the relocate trials rely on does
+  // not hold here without extra bookkeeping. A tried alternative — route
+  // the swap score through a FRESHLY rebuilt spatial index every trial
+  // (always correct, never stale) instead of the naive scan — was measured
+  // SLOWER, not faster: on the 200-system synthetic lattice profiled in
+  // docs/chewy/layout-bench-profile.md, rebuilding buildEdgeIndex/
+  // buildNodeIndex (string-keyed Map inserts, O(E) every trial) for every
+  // swap trial cost more than the O(E^2) scan it replaced, because swap
+  // trial COUNT scales with crossingPairs^2 while the index-build itself
+  // has real constant-factor overhead that doesn't amortize at that trial
+  // count. Reverted; swaps are the smaller share of trials per sweep
+  // (relocation trials dominate movableCandidates * NUDGE_OFFSETS), so this
+  // stays naive on purpose rather than adding complexity with no payoff.
+  const BUCKET_SIZE = 8;
 
   let iterations = 0;
 
   while (hard > 0 && iterations < MAX_CROSSING_ITERATIONS) {
-    const crossingPairs = findCrossingPairs(edges, result);
-    const overlapPairs = findEdgeOverlapPairs(edges, result);
-    const occlusions = findNodeOcclusions(edges, result);
+    // Build spatial indices for this sweep (const to avoid rebuilds per-trial)
+    const edgeIndex = buildEdgeIndex(edges, result, BUCKET_SIZE);
+    const nodeIndex = buildNodeIndex(result, BUCKET_SIZE);
+
+    const crossingPairs = findCrossingPairs(edges, result, edgeIndex);
+    const overlapPairs = findEdgeOverlapPairs(edges, result, edgeIndex);
+    const occlusions = findNodeOcclusions(edges, result, nodeIndex, BUCKET_SIZE);
     if (crossingPairs.length === 0 && overlapPairs.length === 0 && occlusions.length === 0) break;
     const currentLength = totalEdgeLength(edges, result);
 
@@ -783,8 +1155,19 @@ export const reduceCrossings = (
     const candidates: CrossingCandidate[] = [];
 
     // Relocation trials: every candidate node x every free adjacent cell.
+    // CHEWY PATCH: scored via `localViolationScore`'s delta rather than a
+    // full `violationScore` recompute per trial. Moving exactly one node
+    // leaves every OTHER term of the global score unchanged (the doc
+    // comment on `localViolationScore` proves this), so
+    // `hard - local(before) + local(after)` IS the exact post-trial global
+    // score — not an approximation — while costing O(deg*E) instead of
+    // O(E^2 + E*N) per trial. `localBefore` depends only on `id`'s OWN
+    // current cell plus the sweep-start graph, both fixed across every
+    // offset tried for this id, so it is computed once per candidate, not
+    // once per offset.
     for (const id of movableCandidates) {
       const cellNow = result.get(id)!;
+      const localBefore = localViolationScore(edges, result, id);
       for (const [dCol, dRow] of NUDGE_OFFSETS) {
         if (iterations >= MAX_CROSSING_ITERATIONS) break;
         const to = { col: cellNow.col + dCol, row: cellNow.row + dRow };
@@ -793,7 +1176,19 @@ export const reduceCrossings = (
         if (displacement > MAX_NODE_DISPLACEMENT_CELLS) continue;
         if (isCellAllowed && !isCellAllowed(id, to)) continue;
         result.set(id, to);
-        const next = violationScore(edges, result);
+        const localAfter = localViolationScore(edges, result, id);
+        const next = hard - localBefore + localAfter;
+        // CHEWY PATCH (tried and reverted): a `localLengthBefore +
+        // incidentEdgeLength(after)` delta here (mirroring the score
+        // delta above) measured BYTE-DIFFERENT bench output
+        // (`--compare` regressed on `mixed`'s round-trip stability at
+        // k=5) — floating-point summation is not associative, so
+        // `currentLength - local(before) + local(after)` is not
+        // guaranteed bit-identical to a fresh full-array sum, and this
+        // length only breaks ties in `candidateCompare`, exactly where a
+        // last-bit difference can flip the winner. Reverted to the full
+        // recompute; the identity holds in real-number terms but not in
+        // IEEE-754, unlike the integer violation-score delta above.
         const nextLength = totalEdgeLength(edges, result);
         iterations++;
         result.set(id, cellNow);
@@ -836,9 +1231,11 @@ export const reduceCrossings = (
           if (displacementFrom(hi, cellLo) > MAX_NODE_DISPLACEMENT_CELLS) continue;
           if (isCellAllowed && (!isCellAllowed(lo, cellHi) || !isCellAllowed(hi, cellLo))) continue;
 
+          const localBefore = pairViolationScore(edges, result, lo, hi);
           result.set(lo, cellHi);
           result.set(hi, cellLo);
-          const next = violationScore(edges, result);
+          const localAfter = pairViolationScore(edges, result, lo, hi);
+          const next = hard - localBefore + localAfter;
           const nextLength = totalEdgeLength(edges, result);
           iterations++;
           result.set(lo, cellLo);
@@ -884,8 +1281,15 @@ export const reduceCrossings = (
         if (touched.has(candidate.id)) continue;
         if (occupied.has(key(candidate.to))) continue; // target taken by an earlier accepted move this sweep
         const cellNow = result.get(candidate.id)!;
+        // CHEWY PATCH: same local-delta identity as the trial loop above,
+        // re-evaluated against the CURRENT `result`/`hard` (which already
+        // reflects any earlier accepted move this sweep) rather than the
+        // sweep-start state the trial score used — still exact, since the
+        // identity holds for a single-node move from any starting state.
+        const localBefore = localViolationScore(edges, result, candidate.id);
         result.set(candidate.id, candidate.to);
-        const next = violationScore(edges, result);
+        const localAfter = localViolationScore(edges, result, candidate.id);
+        const next = hard - localBefore + localAfter;
         iterations++;
         if (next < hard) {
           occupied.delete(key(cellNow));
@@ -900,9 +1304,11 @@ export const reduceCrossings = (
         if (touched.has(candidate.idLo) || touched.has(candidate.idHi)) continue;
         const cellLo = result.get(candidate.idLo)!;
         const cellHi = result.get(candidate.idHi)!;
+        const localBefore = pairViolationScore(edges, result, candidate.idLo, candidate.idHi);
         result.set(candidate.idLo, candidate.cellForLo);
         result.set(candidate.idHi, candidate.cellForHi);
-        const next = violationScore(edges, result);
+        const localAfter = pairViolationScore(edges, result, candidate.idLo, candidate.idHi);
+        const next = hard - localBefore + localAfter;
         iterations++;
         if (next < hard) {
           hard = next;
@@ -917,6 +1323,10 @@ export const reduceCrossings = (
     }
 
     if (!appliedAny) break;
+  }
+
+  if (PROFILE) {
+    console.error('[LAYOUT_PROFILE]', JSON.stringify(callCounts));
   }
 
   return result;
