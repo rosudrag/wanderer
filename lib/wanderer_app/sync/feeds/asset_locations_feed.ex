@@ -41,6 +41,11 @@ defmodule WandererApp.Sync.Feeds.AssetLocationsFeed do
   @page_size 1000
   @max_pages 20
 
+  # An asset's parent chain: item in a container in a ship in a
+  # structure is four deep. 32 is far past anything EVE allows and
+  # exists only so a cycle cannot hang a sync task.
+  @max_depth 32
+
   @doc """
   `WandererApp.Sync.Registry`'s scope resolver: one scope per character
   holding the assets scope. Re-read every tick, so consent starts and
@@ -90,12 +95,7 @@ defmodule WandererApp.Sync.Feeds.AssetLocationsFeed do
         _gone -> scope
       end
 
-    stored =
-      rows
-      |> Enum.map(&location_id/1)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
-      |> then(&Seeding.replace(character, &1))
+    stored = rows |> root_locations() |> then(&Seeding.replace(character, &1))
 
     Logger.debug("[Scout.Seeding] #{character.name}: #{stored} armed location(s)")
 
@@ -104,6 +104,53 @@ defmodule WandererApp.Sync.Feeds.AssetLocationsFeed do
 
   def upsert(_scope, _data), do: :ok
 
+  @doc """
+  Every id this character's assets ultimately SIT IN.
+
+  Assets are a TREE, which the first cut of this missed: only an item
+  dropped loose in a structure's hangar reports that structure as its
+  `location_id`. Put it in a container, or leave it in a ship parked
+  there, and the `location_id` is that container's or ship's `item_id`
+  — and the structure never appears in the list at all, so a hull that
+  IS seeded reads as `seed it` on the page.
+
+  Measured 2026-10-10 on live data: 228 stored locations matched 4 of
+  27 unanchoring structures.
+
+  So walk each asset up through its parents until the id it sits in is
+  not itself one of this character's items; that root is a structure, a
+  station or a solar system. Everything an item is nested inside goes to
+  asset safety with it, so the root is exactly the right answer.
+
+  The walk is capped: ESI has never returned a cycle, but a cycle here
+  would be an infinite loop inside a sync task.
+  """
+  @spec root_locations([map()]) :: [integer()]
+  def root_locations(rows) do
+    parents =
+      rows
+      |> Enum.reduce(%{}, fn row, acc ->
+        case {integer(row["item_id"]), integer(row["location_id"])} do
+          {{:ok, item_id}, {:ok, location_id}} -> Map.put(acc, item_id, location_id)
+          _incomplete -> acc
+        end
+      end)
+
+    parents
+    |> Map.values()
+    |> Enum.map(&root(&1, parents, @max_depth))
+    |> Enum.uniq()
+  end
+
+  defp root(id, _parents, 0), do: id
+
+  defp root(id, parents, depth) do
+    case Map.fetch(parents, id) do
+      {:ok, parent} -> root(parent, parents, depth - 1)
+      :error -> id
+    end
+  end
+
   @impl true
   def retention_days, do: :infinity
 
@@ -111,6 +158,19 @@ defmodule WandererApp.Sync.Feeds.AssetLocationsFeed do
   # it did not see, which is the only staleness this table can have.
   @impl true
   def purge_stale(_scope), do: :ok
+
+  # Every value on this wire may arrive as a string; the ids are 64-bit,
+  # so a float coercion would quietly lose the low digits.
+  defp integer(value) when is_integer(value), do: {:ok, value}
+
+  defp integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {number, ""} -> {:ok, number}
+      _not_an_id -> :error
+    end
+  end
+
+  defp integer(_value), do: :error
 
   # -- paging ---------------------------------------------------------------
 
@@ -147,15 +207,4 @@ defmodule WandererApp.Sync.Feeds.AssetLocationsFeed do
       other -> {:error, other}
     end
   end
-
-  defp location_id(%{"location_id" => id}) when is_integer(id), do: id
-
-  defp location_id(%{"location_id" => id}) when is_binary(id) do
-    case Integer.parse(id) do
-      {number, _rest} -> number
-      :error -> nil
-    end
-  end
-
-  defp location_id(_row), do: nil
 end

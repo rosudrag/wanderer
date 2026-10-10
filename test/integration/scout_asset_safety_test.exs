@@ -259,7 +259,10 @@ defmodule WandererApp.ScoutAssetSafetyTest do
       character = pilot("Hauler", "90000011", "esi-assets.read_assets.v1")
 
       assert 1 == Seeding.replace(character, [60_003_760, 30_000_142, @structure_id])
-      assert Map.keys(Seeding.armed_by([60_003_760, 30_000_142, @structure_id])) == [@structure_id]
+
+      assert Map.keys(Seeding.armed_by([60_003_760, 30_000_142, @structure_id])) == [
+               @structure_id
+             ]
     end
 
     test "split/1 keeps board order and separates the hulls that need an item" do
@@ -288,6 +291,55 @@ defmodule WandererApp.ScoutAssetSafetyTest do
 
       assert WandererApp.Sync.Feeds.AssetSafetyFeed in modules
       assert WandererApp.Sync.Feeds.AssetLocationsFeed in modules
+    end
+  end
+
+  describe "root_locations/1 — assets are a tree" do
+    alias WandererApp.Sync.Feeds.AssetLocationsFeed
+
+    @structure 1_055_339_465_036
+    @station 60_003_760
+
+    # The defect this exists for, measured on live data 2026-10-10: only
+    # an item dropped LOOSE in a structure's hangar reports that
+    # structure as its `location_id`. Put it in a container, or leave it
+    # in a ship parked there, and `location_id` is that container's or
+    # ship's `item_id` — the structure never appears at all, and a hull
+    # that IS seeded reads as "seed it" on the page. 228 stored
+    # locations matched 4 of 27 unanchoring structures.
+    test "an item nested in a container in a ship still names the structure" do
+      rows = [
+        %{"item_id" => 1, "location_id" => @structure},
+        %{"item_id" => 2, "location_id" => 1},
+        %{"item_id" => 3, "location_id" => 2},
+        %{"item_id" => 4, "location_id" => @station}
+      ]
+
+      roots = AssetLocationsFeed.root_locations(rows)
+
+      assert @structure in roots
+      assert @station in roots
+      # Nothing the character OWNS is a location in its own right.
+      refute 1 in roots
+      refute 2 in roots
+    end
+
+    test "a cycle cannot hang the sync task" do
+      rows = [
+        %{"item_id" => 1, "location_id" => 2},
+        %{"item_id" => 2, "location_id" => 1}
+      ]
+
+      assert AssetLocationsFeed.root_locations(rows) != nil
+    end
+
+    test "string ids off the wire are coerced, and incomplete rows dropped" do
+      rows = [
+        %{"item_id" => "1", "location_id" => to_string(@structure)},
+        %{"location_id" => 999_999_999_999_999}
+      ]
+
+      assert AssetLocationsFeed.root_locations(rows) == [@structure]
     end
   end
 
