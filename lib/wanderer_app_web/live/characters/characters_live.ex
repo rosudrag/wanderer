@@ -184,12 +184,31 @@ defmodule WandererAppWeb.CharactersLive do
     |> assign(:page_title, "Characters")
   end
 
-  defp apply_action(socket, :authorize, _params) do
+  # CHEWY PATCH: `character_id` is optional and only ever a DEFAULT for
+  # the wallet checkbox.
+  #
+  # Re-authorising is now something the page actively asks for (the
+  # stale-scope banner), and the modal it sends you to had the wallet
+  # box unchecked every time -- so following that prompt on a character
+  # that HAD wallet access would have silently revoked it, since EVE
+  # grants exactly what the login requested. The box arrives ticked for
+  # a character that already granted it; unticking it is still a real
+  # choice a user can make.
+  defp apply_action(socket, :authorize, params) do
     socket
     |> assign(:active_page, :characters)
     |> assign(:page_title, "Authorize Character - Characters")
-    |> assign(:form, to_form(%{}))
+    |> assign(:form, to_form(%{"track_wallet" => refreshing_wallet?(socket, params)}))
   end
+
+  defp refreshing_wallet?(socket, %{"character_id" => eve_id}) do
+    case Enum.find(socket.assigns.characters, &(&1.eve_id == eve_id)) do
+      nil -> false
+      character -> Map.get(character, :track_wallet?, false)
+    end
+  end
+
+  defp refreshing_wallet?(_socket, _params), do: false
 
   defp map_ui_character(character) do
     can_track_wallet? = WandererApp.Character.can_track_wallet?(character)
@@ -208,6 +227,15 @@ defmodule WandererAppWeb.CharactersLive do
     ])
     |> Map.put_new(:show_wallet_balance?, can_track_wallet?)
     |> maybe_add_wallet_balance(character, can_track_wallet?)
+    # CHEWY PATCH: a token can be perfectly valid and still be missing a
+    # permission this deployment started asking for after it was issued.
+    # See WandererApp.Character.Scopes -- that is a different failure
+    # from the `invalid_token` flag below and needs its own badge,
+    # because the two look identical from the outside: everything works
+    # except the one feature nobody thinks to check.
+    |> Map.put_new(:missing_scopes, WandererApp.Character.Scopes.missing(character))
+    |> Map.put_new(:missing_scopes_summary, WandererApp.Character.Scopes.summary(character))
+    |> Map.put_new(:track_wallet?, WandererApp.Character.Scopes.wallet?(character))
     |> Map.put_new(:ship, WandererApp.Character.get_ship(character))
     |> Map.put_new(:location, WandererApp.Character.get_location(character))
     |> Map.put_new(:invalid_token, is_nil(character.access_token))

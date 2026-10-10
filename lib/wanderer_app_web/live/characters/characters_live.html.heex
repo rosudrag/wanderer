@@ -99,6 +99,28 @@
       </button>
     </div>
   </div>
+  <%!-- CHEWY PATCH: the permissions this deployment asks for can grow
+        after a character was authorised, and EVE never widens an
+        existing token -- so the character keeps working everywhere
+        EXCEPT the new feature, silently, until somebody logs it in
+        again. Nothing said so before this banner. See
+        WandererApp.Character.Scopes. --%>
+  <div
+    :if={Enum.any?(@characters, &(&1.missing_scopes != []))}
+    role="alert"
+    class="alert alert-warning mt-4"
+    id="characters-stale-scopes-alert"
+  >
+    <.icon name="hero-exclamation-triangle-solid" class="w-6 h-6 shrink-0" />
+    <span>
+      {Enum.count(@characters, &(&1.missing_scopes != []))} of your characters
+      <strong>granted fewer EVE permissions than this instance now uses</strong>
+      — those features stay silently empty for them. Use
+      <.icon name="hero-arrow-path-solid" class="w-4 h-4 inline" />
+      <span class="font-semibold">Refresh Authorization</span>
+      on each one; it is one EVE login and nothing else changes.
+    </span>
+  </div>
   <div
     :if={@mode == :blocks}
     class="gap-4 grid grid-cols-1 lg:grid-cols-4 md:grid-cols-3 sm:grid-cols-2 mt-4"
@@ -199,6 +221,15 @@
             >
               <.icon name="hero-exclamation-triangle" class="text-red-500 h-4 w-4" />
             </div>
+            <div
+              :if={character.missing_scopes != []}
+              class="tooltip"
+              data-tip={"Missing EVE permissions: #{character.missing_scopes_summary}. Refresh authorization to grant them."}
+            >
+              <span class="badge badge-sm badge-warning gap-1">
+                <.icon name="hero-arrow-path-solid" class="h-3 w-3" /> permissions
+              </span>
+            </div>
           </div>
           <div class="card-actions justify-end">
             <.link
@@ -209,9 +240,13 @@
               <.icon name="hero-user-solid" class="w-4 h-4 hover:text-white" />
             </.link>
             <.link
-              patch={~p"/characters/authorize"}
+              patch={~p"/characters/authorize?character_id=#{character.eve_id}"}
               class="tooltip tooltip-bottom"
-              data-tip="Refresh Authorization"
+              data-tip={
+                if character.missing_scopes != [],
+                  do: "Refresh Authorization — grants the missing permissions",
+                  else: "Refresh Authorization"
+              }
             >
               <.icon name="hero-arrow-path-solid" class="w-4 h-4 hover:text-white " />
             </.link>
@@ -250,6 +285,17 @@
         <.link navigate={~p"/characters/#{character.eve_id}"} class="hover:text-white underline">
           {character.name}
         </.link>
+      </:col>
+      <:col :let={character} label="Permissions">
+        <.link
+          :if={character.missing_scopes != []}
+          patch={~p"/characters/authorize?character_id=#{character.eve_id}"}
+          class="badge badge-sm badge-warning gap-1 tooltip tooltip-bottom"
+          data-tip={"Missing: #{character.missing_scopes_summary}"}
+        >
+          <.icon name="hero-arrow-path-solid" class="h-3 w-3" /> refresh
+        </.link>
+        <span :if={character.missing_scopes == []} class="text-xs text-gray-500">ok</span>
       </:col>
       <:col :let={character} label="Corporation">
         {character
