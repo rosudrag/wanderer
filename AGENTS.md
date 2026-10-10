@@ -246,6 +246,20 @@ somewhere the page did not say. Failures are reported at the control
 (`ScoutComponents.pilot_start_toggle/1`), never silent, because a start that did not move looks
 exactly like one that did.
 
+**`/scout/planner`'s `Max jumps` has no ceiling, and `0` means none.** Reported 2026-10-10: "i see
+you have put an artificial limit of max waypoints of 40 ... game allows infinite". It was the rank
+mode's jump BUDGET, capped at 40 in three places (`Planner`, `ScoutPlanAPIController`, the
+LiveView's `max="40"`), and it bound twice: it is also the radius of the candidate ball, so a
+50-stop request from Jita came back as 25 stops at `max_jumps: 25` — the route stopped when the
+budget ran out, not when the ranking did. All three caps are gone; `0` is the wire, UI and
+localStorage spelling of unlimited, and `:infinity` is the internal budget (`jump_budget/1` — note
+`:infinity - 5` raises, so `spend/2` is the one place that decrements). The default stays 25
+because it IS a cost knob: measured from Jita on the real graph (5268 nodes / 13978 edges, warm
+cache, no coverage rows) `max_jumps: 25` ranks 2756 candidates in ~80 ms, `max_jumps: 0` ranks 5228
+in ~450 ms at `limit: 50` and ~800 ms at `limit: 100`. The page already runs every read in a task,
+so that lands as a spinner, not a frozen LiveView. Stop count is still `limit` (picker tops out at
+100, wire `@max_limit 100`), and the ESI push is one POST per stop.
+
 **Scout structure intel is deduplicated twice, and both halves are load-bearing.** The eveknob
 client re-reports every structure on grid on every pass. Reads fold
 (`DISTINCT ON (structure_id) ORDER BY observed_at DESC`) — the live timer table was missing that

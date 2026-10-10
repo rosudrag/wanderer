@@ -89,7 +89,7 @@ defmodule WandererApp.Scout.Planner do
           origin: integer(),
           kind: kind(),
           limit: pos_integer(),
-          max_jumps: pos_integer(),
+          max_jumps: pos_integer() | 0 | :infinity,
           regions: [integer()],
           security: [security_key()],
           avoid: [integer()],
@@ -180,7 +180,6 @@ defmodule WandererApp.Scout.Planner do
   @default_security [:hs, :ls, :ns]
 
   @default_max_jumps 25
-  @max_jumps_cap 40
 
   @default_rank_limit 50
   @default_plan_limit 10
@@ -214,6 +213,21 @@ defmodule WandererApp.Scout.Planner do
   `opts[:limit]` stops and `opts[:max_jumps]` cumulative jumps. See
   moduledoc; not a TSP solve -- design section 6 is explicit that this
   is intentional, because the ranking is re-queried after every leg.
+
+  `max_jumps: 0` (or `:infinity`) removes the jump budget: the walk runs
+  until `:limit` stops are taken or nothing scoped is left. EVE caps no
+  route, so this is a COST knob, not a rule -- the budget is ALSO the
+  radius of the candidate ball (`build_candidate_pool/1`), so unbounded
+  means a BFS plus a metadata read over the whole k-space graph (5268
+  nodes / 13978 edges, measured 2026-10-10) instead of a neighbourhood.
+
+  Measured from Jita over that real graph, warm adjacency cache, no
+  coverage rows (every system `:unseen`, the worst pool):
+  `max_jumps: 25` ranked 2756 candidates in ~80 ms and the budget
+  truncated the route at 25 stops however many were asked for;
+  `max_jumps: 0` ranked 5228 in ~450 ms at `limit: 50` and ~800 ms at
+  `limit: 100`, returning the full 50/100 stops. The default stays
+  #{@default_max_jumps} for that reason; the operator opts into the rest.
   """
   @spec plan(opts()) :: {:ok, result()} | {:error, atom()}
   def plan(opts) do
@@ -309,11 +323,7 @@ defmodule WandererApp.Scout.Planner do
          origin: origin,
          kind: kind,
          limit: opts |> Map.get(:limit, default_limit) |> positive_int(default_limit),
-         max_jumps:
-           opts
-           |> Map.get(:max_jumps, @default_max_jumps)
-           |> positive_int(@default_max_jumps)
-           |> min(@max_jumps_cap),
+         max_jumps: opts |> Map.get(:max_jumps, @default_max_jumps) |> jump_budget(),
          regions: opts |> Map.get(:regions, []) |> List.wrap() |> Enum.filter(&is_integer/1),
          security: opts |> Map.get(:security, @default_security) |> normalize_security(),
          avoid: opts |> Map.get(:avoid, []) |> List.wrap() |> Enum.filter(&is_integer/1),
@@ -371,6 +381,19 @@ defmodule WandererApp.Scout.Planner do
 
   defp positive_int(value, _default) when is_integer(value) and value > 0, do: value
   defp positive_int(_value, default), do: default
+
+  # The jump budget doubles as the BFS depth cap, so "no limit" has to be
+  # a value `depth < max_depth` and `budget <= 0` both answer correctly.
+  # `:infinity` is it: in Erlang's term order every integer sorts BEFORE
+  # every atom, so an integer depth is always `<` it and it is never
+  # `<= 0`. `0` is the WIRE spelling of the same thing (a number input
+  # and a localStorage int cannot carry an atom); anything else
+  # unparseable falls back to the default rather than silently running
+  # unbounded.
+  defp jump_budget(:infinity), do: :infinity
+  defp jump_budget(0), do: :infinity
+  defp jump_budget(value) when is_integer(value) and value > 0, do: value
+  defp jump_budget(_value), do: @default_max_jumps
 
   # ---------------------------------------------------------------------
   # Candidate pool -- shared by rank/1 and plan/1. Scored against
@@ -631,7 +654,7 @@ defmodule WandererApp.Scout.Planner do
             gate_graph,
             combined_graph,
             best.solar_system_id,
-            budget - best.jumps,
+            spend(budget, best.jumps),
             limit - 1,
             weights,
             [best | acc]
@@ -639,6 +662,13 @@ defmodule WandererApp.Scout.Planner do
       end
     end
   end
+
+  # `:infinity - 5` is an ArithmeticError, so the one place the budget is
+  # decremented has to say what unbounded means. Nowhere else needs a
+  # clause: `:infinity <= 0` is false and `depth < :infinity` is true,
+  # both by term order.
+  defp spend(:infinity, _jumps), do: :infinity
+  defp spend(budget, jumps), do: budget - jumps
 
   defp finalize_stop(stop, jumps, leg, weights) do
     terms = %{stop.terms | distance: jumps}

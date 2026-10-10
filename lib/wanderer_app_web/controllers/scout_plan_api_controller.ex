@@ -48,7 +48,6 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
   @max_limit 100
 
   @default_max_jumps 25
-  @max_max_jumps 40
 
   # Section 9's cross-region note: a scope beyond this is the same
   # algorithm over a bigger candidate set (~450 systems at 3 regions)
@@ -324,9 +323,29 @@ defmodule WandererAppWeb.ScoutPlanAPIController do
     params |> Map.get("limit") |> parse_pos_int(@default_limit) |> min(@max_limit)
   end
 
+  # `max_jumps` has NO ceiling: EVE puts none on a route, and the
+  # planner's budget is a cost knob, not a rule (see
+  # `WandererApp.Scout.Planner.plan/1`). `max_jumps=0` is the wire
+  # spelling of "no limit"; an unparseable value still falls back to the
+  # default rather than running unbounded.
   defp fetch_max_jumps(params) do
-    params |> Map.get("max_jumps") |> parse_pos_int(@default_max_jumps) |> min(@max_max_jumps)
+    case Map.get(params, "max_jumps") do
+      nil -> @default_max_jumps
+      value -> parse_jump_budget(value)
+    end
   end
+
+  defp parse_jump_budget(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {0, ""} -> 0
+      {n, ""} when n > 0 -> n
+      _ -> @default_max_jumps
+    end
+  end
+
+  defp parse_jump_budget(0), do: 0
+  defp parse_jump_budget(n) when is_integer(n) and n > 0, do: n
+  defp parse_jump_budget(_value), do: @default_max_jumps
 
   defp parse_pos_int(nil, default), do: default
 

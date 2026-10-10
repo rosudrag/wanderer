@@ -96,11 +96,11 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   @limits [10, 25, 50, 100]
   @default_limit 25
 
-  # Mirrors the planner's own default/cap (contract, design section 5) --
-  # a control that accepted more than the planner would honour would
-  # just be a lie about what "40" does.
+  # The planner's own default. There is no ceiling: `0` is "no limit"
+  # here, on the wire and in `Planner.plan/1` alike -- EVE caps no
+  # route, so the budget is a cost knob (it is also the radius of the
+  # candidate ball) and the operator owns it.
   @default_max_jumps 25
-  @max_jumps_cap 40
 
   @security_keys [:hs, :ls, :ns, :wh, :pochven]
   @default_security [:hs, :ls, :ns]
@@ -370,7 +370,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
 
   def handle_event("update_max_jumps", %{"max_jumps" => value}, socket) do
     case Integer.parse(value) do
-      {n, ""} when n > 0 and n <= @max_jumps_cap ->
+      {n, ""} when n >= 0 ->
         {:noreply, socket |> assign(max_jumps: n) |> load() |> persist_filters()}
 
       _ ->
@@ -1296,7 +1296,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   defp restore_limit(_saved, default), do: default
 
   defp restore_max_jumps(%{"max_jumps" => n}, default) when is_integer(n) do
-    if n > 0 and n <= @max_jumps_cap, do: n, else: default
+    if n >= 0, do: n, else: default
   end
 
   defp restore_max_jumps(_saved, default), do: default

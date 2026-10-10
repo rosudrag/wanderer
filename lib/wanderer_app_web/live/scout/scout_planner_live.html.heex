@@ -169,16 +169,16 @@
           </form>
         </.field>
 
-        <.field label="Max jumps" hint="hard cap 40">
+        <.field label="Max jumps" hint={if @max_jumps == 0, do: "no limit", else: "0 = no limit"}>
           <form phx-change="update_max_jumps">
             <input
               type="number"
               name="max_jumps"
               id="scout-planner-max-jumps"
-              min="1"
-              max="40"
+              min="0"
               value={@max_jumps}
               phx-debounce="400"
+              title="Cumulative jump budget for the route, and the radius of the candidate ball. 0 removes both -- the whole of k-space is ranked, which costs a second or two more per read."
               class="input input-sm input-bordered bg-neutral-950/60 w-full"
             />
           </form>

@@ -15,7 +15,7 @@ defmodule WandererApp.ScoutPlannerTest do
     B = highsec, 1 jump, never scouted.
     C = nullsec, 2 jumps, scouted recently (fresh).
     D = highsec, 1 jump, always excluded via opts[:avoid].
-    E = nullsec, 3 jumps -- outside max_jumps: 2 in every test below.
+    E = nullsec, 3 jumps -- outside `max_jumps: 2`, inside `max_jumps: 0`.
   """
 
   use WandererApp.DataCase, async: false
@@ -113,6 +113,21 @@ defmodule WandererApp.ScoutPlannerTest do
       assert stop_b.reason == :stale
       assert stop_b.terms.need == 5.0
     end
+
+    test "max_jumps: 0 removes the ball entirely" do
+      assert {:ok, capped} =
+               Planner.rank(origin: @a, kind: :sigs, max_jumps: 2, security: [:hs, :ns])
+
+      assert {:ok, unlimited} =
+               Planner.rank(origin: @a, kind: :sigs, max_jumps: 0, security: [:hs, :ns])
+
+      refute @e in Enum.map(capped.stops, & &1.solar_system_id)
+
+      stop_e = Enum.find(unlimited.stops, &(&1.solar_system_id == @e))
+
+      assert stop_e.jumps == 3
+      assert stop_e.leg == :gate
+    end
   end
 
   describe "plan/1 against the real graph" do
@@ -133,6 +148,26 @@ defmodule WandererApp.ScoutPlannerTest do
         assert stop.solar_system_id in [@a, @b, @c]
         assert stop.leg == :gate
       end)
+    end
+
+    test "max_jumps: 0 walks past the default budget without an arithmetic error" do
+      assert {:ok, result} =
+               Planner.plan(
+                 origin: @a,
+                 kind: :sigs,
+                 limit: 10,
+                 max_jumps: 0,
+                 avoid: [@d],
+                 security: [:hs, :ns]
+               )
+
+      ids = Enum.map(result.stops, & &1.solar_system_id)
+
+      # Every reachable, non-avoided, in-band system, E included -- it
+      # sits at 3 jumps, which the `max_jumps: 2` test above excludes.
+      assert @e in ids
+      assert Enum.sum(Enum.map(result.stops, & &1.jumps)) >= 3
+      refute @a in ids
     end
   end
 

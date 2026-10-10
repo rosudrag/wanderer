@@ -165,6 +165,38 @@ defmodule WandererAppWeb.ScoutPlannerLiveTest do
     assert html =~ "990300002"
   end
 
+  # The control used to be `max="40"` and the planner clamped to match,
+  # so a route could never reach anything further out however many stops
+  # were asked for. EVE caps no route; `0` is this page's "no limit".
+  test "max jumps 0 ranks past the old 40-jump ceiling", %{conn: conn} do
+    WandererApp.Cache.delete("scout:planner:adjacency")
+
+    # A 1-jump chain so the far end sits beyond a deliberately tiny
+    # budget: the assertion is about the budget, not about distance.
+    put_system(990_310_001, "Budgetalpha")
+    put_system(990_310_002, "Budgetbravo")
+    put_system(990_310_003, "Budgetcharlie")
+    put_jump(990_310_001, 990_310_002)
+    put_jump(990_310_002, 990_310_003)
+
+    {:ok, view, _html} = live(conn, ~p"/scout/planner")
+    planner = planner_child(view)
+
+    render_click(planner, "select_origin", %{"id" => "990310001", "name" => "Budgetalpha"})
+    render_async(planner)
+
+    render_change(planner, "update_max_jumps", %{"max_jumps" => "1"})
+    capped = render_async(planner)
+
+    assert capped =~ "990310002"
+    refute capped =~ "990310003"
+
+    render_change(planner, "update_max_jumps", %{"max_jumps" => "0"})
+    unlimited = render_async(planner)
+
+    assert unlimited =~ "990310003"
+  end
+
   test "each scout page links to the other", %{conn: conn} do
     {:ok, _view, intel_html} = live(conn, ~p"/scout")
     assert intel_html =~ ~s(href="/scout/planner")
