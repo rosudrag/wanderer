@@ -1,19 +1,21 @@
 import { useMemo } from 'react';
 import { MapSolarSystemType } from '../map.types';
 import { NodeProps } from 'reactflow';
-import { useMapRootState } from '@/hooks/Mapper/mapRootProvider';
+import { useMapRootSelector } from '@/hooks/Mapper/mapRootProvider';
 import { useMapGetOption } from '@/hooks/Mapper/mapRootProvider/hooks/api';
-import { useMapState } from '@/hooks/Mapper/components/map/MapProvider';
+import { useMapSelector, useMapState } from '@/hooks/Mapper/components/map/MapProvider';
 import { useDoubleClick } from '@/hooks/Mapper/hooks/useDoubleClick';
 import { Regions, REGIONS_MAP, SPACE_TO_CLASS } from '@/hooks/Mapper/constants';
 import { isWormholeSpace } from '@/hooks/Mapper/components/map/helpers/isWormholeSpace';
 import { getSystemClassStyles } from '@/hooks/Mapper/components/map/helpers';
-import { sortWHClasses } from '@/hooks/Mapper/helpers';
+import { EMPTY_CHARACTERS, sortWHClasses } from '@/hooks/Mapper/helpers';
 import { CharacterTypeRaw, OutCommand, PingType, SystemSignature, WormholeDataRaw } from '@/hooks/Mapper/types';
 import { useUnsplashedSignatures } from './useUnsplashedSignatures';
 import { useSystemName } from './useSystemName';
 import { LabelInfo, useLabelsInfo } from './useLabelsInfo';
 import { getSystemStaticInfo } from '@/hooks/Mapper/mapRootProvider/hooks/useLoadSystemStatic';
+
+const EMPTY_SIGNATURES: SystemSignature[] = [];
 
 export interface SolarSystemNodeVars {
   id: string;
@@ -40,8 +42,6 @@ export interface SolarSystemNodeVars {
   locked: boolean;
   hubs: string[];
   name: string | null;
-  isConnecting: boolean;
-  hoverNodeId: string | null;
   charactersInSystem: Array<CharacterTypeRaw>;
   userCharacters: string[];
   unsplashedLeft: Array<SystemSignature>;
@@ -53,7 +53,11 @@ export interface SolarSystemNodeVars {
   temporaryName?: string | null;
   description: string | null;
   comments_count: number | null;
-  systemHighlighted: string | undefined;
+  // Whether THIS system is the one currently highlighted (e.g. by a search/center-on-system
+  // action) - a boolean, not the raw highlighted system id, so a highlight landing on a DIFFERENT
+  // system doesn't change this node's own selected value's identity. See `MapProvider.tsx`'s
+  // `useMapSelector` doc: select scalars, not the shared field, to avoid an unrelated fan-out.
+  systemHighlighted: boolean;
 }
 
 export const useSolarSystemNode = (props: NodeProps<MapSolarSystemType>): SolarSystemNodeVars => {
@@ -71,10 +75,23 @@ export const useSolarSystemNode = (props: NodeProps<MapSolarSystemType>): SolarS
     comments_count,
   } = data;
 
-  const {
-    storedSettings: { interfaceSettings },
-    data: { systemSignatures: mapSystemSignatures, pings },
-  } = useMapRootState();
+  // Selector-based, not `useMapRootState()`: this hook runs once per node, so a plain
+  // `useMapRootState()` read here would re-subscribe every node to every OTHER field on
+  // `MapRootContextProps` (windowsSettings, comments, charactersCache, ...) via
+  // `MapRootContext`'s native React propagation, on top of the system-specific slices below. See
+  // docs/chewy/map-perf-findings.md.
+  const isShowUnsplashedSignatures = useMapRootSelector(
+    ['interfaceSettings'],
+    d => d.interfaceSettings.isShowUnsplashedSignatures,
+  );
+  const systemSigs = useMapRootSelector(
+    ['systemSignatures'],
+    d => d.systemSignatures[solar_system_id] ?? EMPTY_SIGNATURES,
+  );
+  const isRally = useMapRootSelector(
+    ['pings'],
+    d => !!d.pings.find(x => x.solar_system_id === solar_system_id && x.type === PingType.Rally),
+  );
 
   const systemStaticInfo = useMemo(() => {
     return getSystemStaticInfo(solar_system_id)!;
@@ -93,34 +110,36 @@ export const useSolarSystemNode = (props: NodeProps<MapSolarSystemType>): SolarS
     constellation_name,
   } = systemStaticInfo;
 
-  const { isShowUnsplashedSignatures } = interfaceSettings;
   const isTempSystemNameEnabled = useMapGetOption('show_temp_system_name') === 'true';
   const isShowLinkedSigId = useMapGetOption('show_linked_signature_id') === 'true';
   const isShowLinkedSigIdTempName = useMapGetOption('show_linked_signature_id_temp_name') === 'true';
 
-  const {
-    data: {
-      characters,
-      wormholesData,
-      hubs,
-      userCharacters,
-      isConnecting,
-      hoverNodeId,
-      visibleNodes,
-      showKSpaceBG,
-      isThickConnections,
-      systemHighlighted,
-    },
-    outCommand,
-  } = useMapState();
+  const { outCommand } = useMapState();
 
-  const visible = useMemo(() => visibleNodes.has(id), [id, visibleNodes]);
+  // Every one of these selects a SCALAR or a field that only changes when it's actually relevant
+  // to THIS node, so a hover/drag/pan touching the shared map-wide state (`hoverNodeId`,
+  // `visibleNodes`, `isConnecting`) only re-renders the node(s) whose own selected value flips -
+  // not all N nodes on the map. See docs/chewy/map-perf-findings.md. `showHandlers` declares BOTH
+  // `isConnecting` and `hoverNodeId` even though `isConnecting || hoverNodeId === id` short-
+  // circuits past `hoverNodeId` on any render where `isConnecting` is already `true` - the
+  // declared-keys list is what the selector COULD read, not just what it read on one render (the
+  // dev-mode assertion in `useMapSelector` would otherwise never trip on a render where the
+  // branch happens not to be taken, while this node would silently stop reacting to hover for the
+  // rest of the session once `isConnecting` had been `true` even once).
+  const visible = useMapSelector(['visibleNodes'], d => d.visibleNodes.has(id));
+  const showHandlers = useMapSelector(['isConnecting', 'hoverNodeId'], d => d.isConnecting || d.hoverNodeId === id);
+  const isThickConnections = useMapSelector(['isThickConnections'], d => d.isThickConnections);
+  const showKSpaceBG = useMapSelector(['showKSpaceBG'], d => d.showKSpaceBG);
+  const systemHighlighted = useMapSelector(['systemHighlighted'], d => d.systemHighlighted === solar_system_id);
+  const wormholesData = useMapSelector(['wormholesData'], d => d.wormholesData);
+  const userCharacters = useMapSelector(['userCharacters'], d => d.userCharacters);
+  const hubs = useMapSelector(['hubs'], d => d.hubs);
+  const charactersBucket = useMapSelector(
+    ['charactersBySystem'],
+    d => d.charactersBySystem.get(parseInt(solar_system_id, 10)) ?? EMPTY_CHARACTERS,
+  );
 
-  const systemSigs = useMemo(() => mapSystemSignatures[solar_system_id] || [], [solar_system_id, mapSystemSignatures]);
-
-  const charactersInSystem = useMemo(() => {
-    return characters.filter(c => c.location?.solar_system_id === parseInt(solar_system_id) && c.online);
-  }, [characters, solar_system_id]);
+  const charactersInSystem = useMemo(() => charactersBucket.filter(c => c.online), [charactersBucket]);
 
   const isWormhole = isWormholeSpace(system_class);
 
@@ -151,8 +170,6 @@ export const useSolarSystemNode = (props: NodeProps<MapSolarSystemType>): SolarS
     });
   });
 
-  const showHandlers = isConnecting || hoverNodeId === id;
-
   const space = showKSpaceBG ? REGIONS_MAP[region_id] : '';
   const regionClass = showKSpaceBG ? SPACE_TO_CLASS[space] || null : null;
 
@@ -168,11 +185,6 @@ export const useSolarSystemNode = (props: NodeProps<MapSolarSystemType>): SolarS
   const { unsplashedLeft, unsplashedRight } = useUnsplashedSignatures(systemSigs, isShowUnsplashedSignatures);
 
   const hubsAsStrings = useMemo(() => hubs.map(item => item.toString()), [hubs]);
-
-  const isRally = useMemo(
-    () => !!pings.find(x => x.solar_system_id === solar_system_id && x.type === PingType.Rally),
-    [pings, solar_system_id],
-  );
 
   const regionName = useMemo(() => {
     if (region_id === Regions.Pochven) {
@@ -206,8 +218,6 @@ export const useSolarSystemNode = (props: NodeProps<MapSolarSystemType>): SolarS
     locked,
     hubs: hubsAsStrings,
     name,
-    isConnecting,
-    hoverNodeId,
     charactersInSystem,
     unsplashedLeft,
     unsplashedRight,

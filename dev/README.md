@@ -139,3 +139,10 @@ built-in `fetch`. If the `playwright` package happens to be installed
 already it also takes a screenshot; otherwise it skips that part with a
 clear message and still reports the HTTP-level result.
 
+## Map Beautifier Profiling
+
+`node dev/layout-bench.mjs` — Quality & stability gate validation for all 5 core scenarios (yugen, chain, kspace-wide, mixed, occlusion). Runs ~5 seconds. Output: wall-clock times, crossing/overlap/occlusion counts, determinism checks, round-trip stability deltas.
+
+`node dev/layout-profile.mjs [--scenario lattice-N]` — Scaling profile: generates synthetic N-node lattice graphs (default: N=50/100/200/400/800) and measures cold solve time and incremental solve time (+5 systems) with 3 runs each, reporting median. Used to evaluate layout-engine performance on different map sizes. `--json <path>` to save results as JSON.
+
+`node dev/layout-cpuprofile.mjs [--scenario name] [--top N]` — CPU-profile hotspot analyzer: runs the engine under an in-process V8 profiler (`node:inspector`) for three built-in synthetic scenarios (`kspace-lattice-N`, `wormhole-chain-N`, `mixed-real-N`, N=100 by default) and prints the top self-time functions (file:line, sample count) per scenario, plus the engine's own `LAYOUT_PROFILE=1` call counters. Writes `.cpuprofile` files + a `summary.json` to `tmp/prof/` (openable in Chrome DevTools). Used to find real hotspots rather than guess from wall-clock alone — see `docs/chewy/layout-bench-profile.md`.

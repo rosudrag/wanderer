@@ -27,6 +27,15 @@ export default {
       },
     },
   },
+  // CHEWY PATCH: the map beautifier's layout engine now runs in a module
+  // worker (assets/js/hooks/Mapper/components/map/layout/beautify.worker.ts)
+  // so a large synthetic-map solve does not block the main thread. The
+  // worker's own module graph is code-split (the engine dynamically
+  // imports its regionLayouts.json dataset), which Vite's default worker
+  // output format ('iife') refuses to bundle at all — 'es' is required.
+  worker: {
+    format: 'es',
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'js'),

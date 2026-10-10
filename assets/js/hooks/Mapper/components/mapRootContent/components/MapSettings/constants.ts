@@ -176,6 +176,14 @@ export const UI_CHECKBOXES_PROPS: SettingsListItem[] = [
     label: 'Enable soft background',
     type: 'checkbox',
   },
+  {
+    // CHEWY PATCH: ReactFlow onlyRenderVisibleElements toggle - off by default, see Map.tsx.
+    prop: 'onlyRenderVisibleElements',
+    label: 'Only render visible map elements',
+    type: 'checkbox',
+    helperText:
+      'Faster on large maps. A connection to a system you have never scrolled to may stay invisible until you do.',
+  },
 ];
 
 export const THEME_OPTIONS = [

@@ -6,6 +6,7 @@ import {
   CommandCharacterUpdated,
   CommandPresentCharacters,
 } from '@/hooks/Mapper/types';
+import { indexCharactersBySystem } from '@/hooks/Mapper/helpers';
 import { useCallback, useRef } from 'react';
 
 export const useCommandsCharacters = () => {
@@ -33,25 +34,29 @@ export const useCommandsCharacters = () => {
       // 2. Any remaining items in updatedMap are NEW characters → add them
       const newCharacters = Array.from(updatedMap.values());
 
-      return { characters: [...merged, ...newCharacters] };
+      const characters = [...merged, ...newCharacters];
+      return { characters, charactersBySystem: indexCharactersBySystem(characters) };
     });
   }, []);
 
   const characterAdded = useCallback((value: CommandCharacterAdded) => {
     ref.current.update(state => {
-      return { characters: [...state.characters.filter(x => x.eve_id !== value.eve_id), value] };
+      const characters = [...state.characters.filter(x => x.eve_id !== value.eve_id), value];
+      return { characters, charactersBySystem: indexCharactersBySystem(characters) };
     });
   }, []);
 
   const characterRemoved = useCallback((value: CommandCharacterRemoved) => {
     ref.current.update(state => {
-      return { characters: [...state.characters.filter(x => x.eve_id !== value.eve_id)] };
+      const characters = [...state.characters.filter(x => x.eve_id !== value.eve_id)];
+      return { characters, charactersBySystem: indexCharactersBySystem(characters) };
     });
   }, []);
 
   const characterUpdated = useCallback((value: CommandCharacterUpdated) => {
     ref.current.update(state => {
-      return { characters: [...state.characters.filter(x => x.eve_id !== value.eve_id), value] };
+      const characters = [...state.characters.filter(x => x.eve_id !== value.eve_id), value];
+      return { characters, charactersBySystem: indexCharactersBySystem(characters) };
     });
   }, []);
 

@@ -4,3 +4,4 @@ export * from './getSystemById';
 export * from './getEveImageUrl';
 export * from './toastHelpers';
 export * from './recenterSystems';
+export * from './indexCharactersBySystem';

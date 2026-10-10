@@ -29,6 +29,8 @@ repomix*
 
 # Temporary files, for example, from tests.
 /tmp/
+# Build artifacts from asset tools (jest output, tsc reports)
+/assets/tmp/
 
 
 .env

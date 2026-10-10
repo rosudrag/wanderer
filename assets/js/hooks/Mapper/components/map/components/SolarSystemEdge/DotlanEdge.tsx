@@ -11,16 +11,11 @@ import clsx from 'clsx';
 import { ConnectionType, MassState, ShipSizeStatus, SolarSystemConnection, TimeStatus } from '@/hooks/Mapper/types';
 import { PrimeIcons } from 'primereact/api';
 import { WdTooltipWrapper } from '@/hooks/Mapper/components/ui-kit/WdTooltipWrapper';
-import { useMapState } from '@/hooks/Mapper/components/map/MapProvider.tsx';
-import { SHIP_SIZES_DESCRIPTION, SHIP_SIZES_NAMES_SHORT } from '@/hooks/Mapper/components/map/constants.ts';
+import { useMapSelector } from '@/hooks/Mapper/components/map/MapProvider.tsx';
+import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH, SHIP_SIZES_DESCRIPTION, SHIP_SIZES_NAMES_SHORT } from '@/hooks/Mapper/components/map/constants.ts';
 import { TooltipPosition } from '@/hooks/Mapper/components/ui-kit';
 import { getSystemStaticInfo } from '@/hooks/Mapper/mapRootProvider/hooks/useLoadSystemStatic';
 import { SHIP_SIZES_COLORS } from './SolarSystemEdge';
-
-// Nodes are placed as 130x34 boxes (see convertSystem2Node.ts); used as a fallback only, the real
-// bounds are read from ReactFlow's node internals below.
-const DEFAULT_NODE_WIDTH = 130;
-const DEFAULT_NODE_HEIGHT = 34;
 
 type Point = { x: number; y: number };
 type Boundary = 'none' | 'constellation' | 'region';
@@ -57,9 +52,7 @@ export const DotlanEdge = ({ id, source, target, markerEnd, style, data }: EdgeP
   // coloured by Dotlan's constellation/region boundary semantics instead of the flat gate green.
   const isBoundaryColored = !isWormhole && !isBridge;
 
-  const {
-    data: { isThickConnections },
-  } = useMapState();
+  const isThickConnections = useMapSelector(['isThickConnections'], d => d.isThickConnections);
 
   const [hovered, setHovered] = useState(false);
 

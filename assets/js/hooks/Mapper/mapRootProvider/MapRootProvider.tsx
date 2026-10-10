@@ -1,5 +1,5 @@
-import { ContextStoreDataUpdate, useContextStore } from '@/hooks/Mapper/utils';
-import { createContext, Dispatch, ForwardedRef, forwardRef, SetStateAction, useContext } from 'react';
+import { ContextStoreDataUpdate, ContextStoreListener, ContextStoreUnsubscribe, useContextSelector, useContextStore } from '@/hooks/Mapper/utils';
+import { createContext, Dispatch, ForwardedRef, forwardRef, SetStateAction, useContext, useEffect, useReducer, useRef } from 'react';
 import {
   ActivitySummary,
   CommandLinkSignatureToSystem,
@@ -32,6 +32,8 @@ import {
   RoutesType,
   // CHEWY PATCH: map beautifier settings.
   BeautifySettings,
+  // CHEWY PATCH: map region/wormhole-chain collapse settings.
+  MapGroupsSettings,
 } from '@/hooks/Mapper/mapRootProvider/types.ts';
 import {
   DEFAULT_KILLS_WIDGET_SETTINGS,
@@ -44,6 +46,8 @@ import {
   STORED_INTERFACE_DEFAULT_VALUES,
   // CHEWY PATCH: map beautifier settings.
   DEFAULT_BEAUTIFY_SETTINGS,
+  // CHEWY PATCH: map region/wormhole-chain collapse settings.
+  DEFAULT_MAP_GROUPS_SETTINGS,
 } from '@/hooks/Mapper/mapRootProvider/constants.ts';
 import { useMapUserSettings } from '@/hooks/Mapper/mapRootProvider/hooks/useMapUserSettings.ts';
 import { useGlobalHooks } from '@/hooks/Mapper/mapRootProvider/hooks/useGlobalHooks.ts';
@@ -63,6 +67,20 @@ export type MapRootData = MapUnionTypes & {
   loadingPublicRoutes: boolean;
   map_slug: string | null;
   expiredCharacters: string[];
+  // Mirrors `storedSettings.interfaceSettings` (separate, localStorage-backed React state, not
+  // part of this store) into the store so `useMapRootSelector` can select a single field out of
+  // it (e.g. `isShowUnsplashedSignatures`) without the caller also subscribing to every OTHER
+  // field on `MapRootContextProps` the way a plain `useMapRootState()` read would. Kept in sync
+  // by a `useEffect` in `MapRootProvider` below - one extra frame behind the real value on a
+  // settings change, which is a user-initiated, rare event, not the frequent server-pushed
+  // writes (characters/kills/signatures) this store exists to isolate.
+  interfaceSettings: InterfaceStoredSettings;
+  // Mirrors `storedSettings.settingsGroups` (same reasoning as `interfaceSettings` above) so
+  // `useMapGroups.ts` (the map region/wormhole-chain collapse choke point, called once in
+  // `Map.tsx`'s `MapComp`) can select these without re-subscribing the whole canvas to every
+  // other `MapRootContextProps` field.
+  collapsedGroupKeys: string[];
+  groupPositions: Record<string, { x: number; y: number }>;
 };
 
 const INITIAL_DATA: MapRootData = {
@@ -110,6 +128,9 @@ const INITIAL_DATA: MapRootData = {
   loadingPublicRoutes: false,
   map_slug: null,
   expiredCharacters: [],
+  interfaceSettings: STORED_INTERFACE_DEFAULT_VALUES,
+  collapsedGroupKeys: [],
+  groupPositions: {},
 };
 
 export enum InterfaceStoredSettingsProps {
@@ -160,6 +181,9 @@ export interface MapRootContextProps {
     // CHEWY PATCH: map beautifier settings.
     settingsBeautify: BeautifySettings;
     settingsBeautifyUpdate: Dispatch<SetStateAction<BeautifySettings>>;
+    // CHEWY PATCH: map region/wormhole-chain collapse settings.
+    settingsGroups: MapGroupsSettings;
+    settingsGroupsUpdate: Dispatch<SetStateAction<MapGroupsSettings>>;
     isReady: boolean;
     hasOldSettings: boolean;
     getSettingsForExport(): string | undefined;
@@ -168,6 +192,18 @@ export interface MapRootContextProps {
     checkOldSettings(): void;
   };
 }
+
+// Every key `MapRootData` has, computed once at module scope: used to restore "re-render on any
+// store write" for every PLAIN `useMapRootState()` consumer (89 files at the time of writing -
+// see docs/chewy/map-perf-findings.md) that has not been converted to `useMapRootSelector`.
+// `useContextStore` no longer forces its OWNER (`MapRootProvider`) to re-render internally on
+// `update()` (that mechanism was removed so per-key-selector consumers aren't woken on
+// irrelevant writes - see `useContextStore.ts`), so without this, `MapRootProvider` would simply
+// stop re-rendering on character/kill/signature/etc. updates, and every one of its 89 unconverted
+// consumers would silently go stale. Subscribing to every key here exactly reconstructs the OLD
+// behavior (the whole Provider re-rendered on any `update()` call, through its own React state),
+// just driven explicitly through `subscribe` instead of implicitly through `useContextStore`.
+const ALL_MAP_ROOT_DATA_KEYS = Object.keys(INITIAL_DATA) as (keyof MapRootData)[];
 
 const MapRootContext = createContext<MapRootContextProps>({
   update: () => {},
@@ -214,6 +250,9 @@ const MapRootContext = createContext<MapRootContextProps>({
     // CHEWY PATCH: map beautifier settings.
     settingsBeautify: DEFAULT_BEAUTIFY_SETTINGS,
     settingsBeautifyUpdate: () => null,
+    // CHEWY PATCH: map region/wormhole-chain collapse settings.
+    settingsGroups: DEFAULT_MAP_GROUPS_SETTINGS,
+    settingsGroupsUpdate: () => null,
     isReady: false,
     hasOldSettings: false,
     getSettingsForExport: () => '',
@@ -221,6 +260,28 @@ const MapRootContext = createContext<MapRootContextProps>({
     resetSettings: () => null,
     checkOldSettings: () => null,
   },
+});
+
+// Narrow, STABLE context used only by `useMapRootSelector`: identity never changes for the
+// Provider's lifetime (frozen via `useRef`, same pattern as `MapProvider.tsx`'s
+// `contextValueRef`). This is deliberately a SEPARATE context from `MapRootContext` (whose value
+// is, and must stay, a fresh object on every `MapRootProvider` render so the 89 unconverted
+// `useMapRootState()` consumers keep reacting to `storedSettings`/`windowsSettings`/`comments`/
+// `charactersCache` changes exactly as before) - a selector-based consumer that instead called
+// `useContext(MapRootContext)` would still be woken by React's native context propagation on
+// EVERY one of those renders regardless of its own selector, defeating the point of selecting.
+interface MapRootStoreContextProps {
+  data: MapRootData;
+  update: ContextStoreDataUpdate<MapRootData>;
+  subscribe: (keys: (keyof MapRootData)[], listener: ContextStoreListener) => ContextStoreUnsubscribe;
+}
+
+const noopSubscribe = () => () => {};
+
+const MapRootStoreContext = createContext<MapRootStoreContextProps>({
+  data: { ...INITIAL_DATA },
+  update: () => {},
+  subscribe: noopSubscribe,
 });
 
 type MapRootProviderProps = {
@@ -238,9 +299,31 @@ const MapRootHandlers = forwardRef(({ children }: WithChildren, fwdRef: Forwarde
 
 // eslint-disable-next-line react/display-name
 export const MapRootProvider = ({ children, fwdRef, outCommand }: MapRootProviderProps) => {
-  const { update, ref } = useContextStore<MapRootData>({ ...INITIAL_DATA });
+  const { update, ref, subscribe } = useContextStore<MapRootData>({ ...INITIAL_DATA });
+
+  // Restores "the Provider re-renders on any store write" for the 89 unconverted
+  // `useMapRootState()` consumers - see `ALL_MAP_ROOT_DATA_KEYS`'s comment above.
+  const [, forceRerender] = useReducer((x: number) => x + 1, 0);
+  useEffect(() => subscribe(ALL_MAP_ROOT_DATA_KEYS, () => forceRerender()), [subscribe]);
 
   const storedSettings = useMapUserSettings(ref, outCommand);
+
+  // Mirrors `storedSettings.interfaceSettings` (independent, localStorage-backed React state)
+  // into the store so `useMapRootSelector` callers (e.g. `useSolarSystemNode.ts`,
+  // `SolarSystemEdge.tsx`) can select a single field out of it without pulling in a plain
+  // `useMapRootState()` read, which would re-subscribe them to every OTHER field on
+  // `MapRootContextProps` via `MapRootContext`'s (deliberately still-reactive) native propagation.
+  useEffect(() => {
+    update({ interfaceSettings: storedSettings.interfaceSettings });
+  }, [storedSettings.interfaceSettings, update]);
+
+  // Same mirroring reasoning, for the map region/wormhole-chain collapse settings.
+  useEffect(() => {
+    update({
+      collapsedGroupKeys: storedSettings.settingsGroups.collapsedGroups,
+      groupPositions: storedSettings.settingsGroups.groupPositions,
+    });
+  }, [storedSettings.settingsGroups, update]);
 
   const { windowsSettings, toggleWidgetVisibility, updateWidgetSettings, resetWidgets } =
     useStoreWidgets(storedSettings);
@@ -248,23 +331,27 @@ export const MapRootProvider = ({ children, fwdRef, outCommand }: MapRootProvide
   const comments = useComments({ outCommand });
   const charactersCache = useCharactersCache({ outCommand });
 
+  const storeContextRef = useRef<MapRootStoreContextProps>({ data: ref, update, subscribe });
+
   return (
-    <MapRootContext.Provider
-      value={{
-        update,
-        data: ref,
-        outCommand,
-        windowsSettings,
-        updateWidgetSettings,
-        toggleWidgetVisibility,
-        resetWidgets,
-        comments,
-        charactersCache,
-        storedSettings,
-      }}
-    >
-      <MapRootHandlers ref={fwdRef}>{children}</MapRootHandlers>
-    </MapRootContext.Provider>
+    <MapRootStoreContext.Provider value={storeContextRef.current}>
+      <MapRootContext.Provider
+        value={{
+          update,
+          data: ref,
+          outCommand,
+          windowsSettings,
+          updateWidgetSettings,
+          toggleWidgetVisibility,
+          resetWidgets,
+          comments,
+          charactersCache,
+          storedSettings,
+        }}
+      >
+        <MapRootHandlers ref={fwdRef}>{children}</MapRootHandlers>
+      </MapRootContext.Provider>
+    </MapRootStoreContext.Provider>
   );
 };
 
@@ -272,3 +359,20 @@ export const useMapRootState = () => {
   const context = useContext<MapRootContextProps>(MapRootContext);
   return context;
 };
+
+/**
+ * Subscribes a component to exactly the slice of `MapRootData` it needs - the per-node/per-edge
+ * equivalent of `useMapSelector` (`MapProvider.tsx`), for the hottest `useMapRootState()`
+ * consumers (one instance per node/edge on the map): only re-renders when `selector(data)`'s
+ * result actually changes AND only on an `update()` call that wrote one of the declared `keys`.
+ * Reads from the SEPARATE, stable `MapRootStoreContext`, not `MapRootContext` - see that
+ * context's comment for why a plain `useMapRootState()` read can't be made selective this way.
+ */
+export function useMapRootSelector<T>(
+  keys: (keyof MapRootData)[],
+  selector: (data: MapRootData) => T,
+  isEqual: (a: T, b: T) => boolean = Object.is,
+): T {
+  const context = useContext<MapRootStoreContextProps>(MapRootStoreContext);
+  return useContextSelector(context.data, context.subscribe, keys, selector, isEqual, 'useMapRootSelector');
+}

@@ -2,15 +2,13 @@ import { Node, useReactFlow } from 'reactflow';
 import { useCallback, useRef } from 'react';
 import { CommandUpdateSystems } from '@/hooks/Mapper/types/mapHandlers.ts';
 import { convertSystem2Node } from '../../helpers/index.ts';
-import { useMapState } from '@/hooks/Mapper/components/map/MapProvider.tsx';
+import { useMapSelector, useMapState } from '@/hooks/Mapper/components/map/MapProvider.tsx';
 
 export const useMapUpdateSystems = () => {
   const rf = useReactFlow();
 
-  const {
-    update,
-    data: { systems },
-  } = useMapState();
+  const { update } = useMapState();
+  const systems = useMapSelector(['systems'], d => d.systems);
 
   const ref = useRef({ systems, update });
   ref.current = { systems, update };

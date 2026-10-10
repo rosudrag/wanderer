@@ -12,5 +12,9 @@ import { MigrationStructure } from '@/hooks/Mapper/mapRootProvider/types.ts';
 
 // CHEWY PATCH: Turnur connections routes setting migration.
 import { to_9 } from './to_9.ts';
+// CHEWY PATCH: onlyRenderVisibleElements settings migration.
+import { to_10 } from './to_10.ts';
+// CHEWY PATCH: map region/wormhole-chain collapse settings migration.
+import { to_11 } from './to_11.ts';
 
-export default [to_1, to_2, to_3, to_4, to_5, to_6, to_7, to_8, to_9] as MigrationStructure[];
+export default [to_1, to_2, to_3, to_4, to_5, to_6, to_7, to_8, to_9, to_10, to_11] as MigrationStructure[];

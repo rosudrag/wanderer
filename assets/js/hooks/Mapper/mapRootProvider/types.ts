@@ -53,6 +53,8 @@ export type InterfaceStoredSettings = {
   dotlanBehavior: DotlanBehavior;
   // CHEWY PATCH: Dotlan-style straight connections toggle.
   dotlanStyleConnections: boolean;
+  // CHEWY PATCH: ReactFlow `onlyRenderVisibleElements` toggle - off by default, see Map.tsx.
+  onlyRenderVisibleElements: boolean;
 };
 
 export type RoutesType = {
@@ -122,6 +124,18 @@ export type BeautifySettings = {
   kspaceMode: KSpaceMode;
 };
 
+// CHEWY PATCH: map region/wormhole-chain collapse-to-single-node per-map state
+// (WANDERER_MAP_GROUPS). `collapsedGroups` is the list of currently-collapsed group keys
+// (`region:<region_id>` / `chain:<smallest member system id>` - see
+// components/map/groups/computeGroups.ts); `groupPositions` is the canvas position each
+// collapsed group's synthetic node was last dragged to, keyed by the same group key, so
+// expanding and re-collapsing (or a page reload) doesn't snap the group tile back to its
+// collapse-time centroid.
+export type MapGroupsSettings = {
+  collapsedGroups: string[];
+  groupPositions: Record<string, { x: number; y: number }>;
+};
+
 export type SettingsWrapper<T> = T;
 
 export type MapUserSettings = {
@@ -139,6 +153,8 @@ export type MapUserSettings = {
   jumpPlanner: SettingsWrapper<JumpPlannerSettings>;
   // CHEWY PATCH: map beautifier settings.
   beautify: SettingsWrapper<BeautifySettings>;
+  // CHEWY PATCH: map region/wormhole-chain collapse settings.
+  groups: SettingsWrapper<MapGroupsSettings>;
 };
 
 export type MapUserSettingsStructure = {
@@ -162,6 +178,8 @@ export enum SettingsTypes {
   jumpPlanner = 'jumpPlanner',
   // CHEWY PATCH: map beautifier settings.
   beautify = 'beautify',
+  // CHEWY PATCH: map region/wormhole-chain collapse settings.
+  groups = 'groups',
 }
 
 export type MigrationFunc = (prev: any) => any;

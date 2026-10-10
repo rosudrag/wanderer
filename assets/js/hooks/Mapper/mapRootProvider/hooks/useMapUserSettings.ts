@@ -120,6 +120,14 @@ export const useMapUserSettings = ({ map_slug }: MapRootData, outCommand: OutCom
     'beautify',
   );
 
+  // CHEWY PATCH: map region/wormhole-chain collapse settings.
+  const [settingsGroups, settingsGroupsUpdate] = useSettingsValueAndSetter(
+    mapUserSettings,
+    setMapUserSettings,
+    map_slug,
+    'groups',
+  );
+
   // HERE we MUST work with migrations
   useEffect(() => {
     if (isReady) {
@@ -228,6 +236,9 @@ export const useMapUserSettings = ({ map_slug }: MapRootData, outCommand: OutCom
     // CHEWY PATCH: map beautifier settings.
     settingsBeautify,
     settingsBeautifyUpdate,
+    // CHEWY PATCH: map region/wormhole-chain collapse settings.
+    settingsGroups,
+    settingsGroupsUpdate,
 
     getSettingsForExport,
     applySettings,

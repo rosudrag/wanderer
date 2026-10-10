@@ -22,6 +22,7 @@ defmodule WandererApp.Env do
   def private_branding?(), do: get_key(:private_branding, false)
   # CHEWY PATCH: map beautifier / tidy-insert layout feature flags, default off.
   def map_beautifier?(), do: get_key(:map_beautifier, false)
+  def map_groups?(), do: get_key(:map_groups, false)
   def tidy_insert?(), do: get_key(:tidy_insert, false)
   # CHEWY PATCH: cells of clearance between a wormhole chain and the k-space
   # system it hangs off, for both the beautifier and tidy insert. 0 (default)

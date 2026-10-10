@@ -13,6 +13,9 @@ export type MapOptions = {
   store_custom_labels: StringBoolean;
   // CHEWY PATCH: server-side map beautifier feature flag (WANDERER_MAP_BEAUTIFIER).
   beautifier_enabled?: StringBoolean;
+  // CHEWY PATCH: server-side map groups feature flag (WANDERER_MAP_GROUPS):
+  // region/wormhole-chain collapse-to-single-node on the map canvas.
+  groups_enabled?: StringBoolean;
   // CHEWY PATCH: cells of clearance between a wormhole chain and the k-space
   // system it hangs off (WANDERER_CHAIN_STANDOFF); "0" = upstream behaviour.
   chain_standoff_cells?: string;

@@ -21,6 +21,8 @@ import { useMapRootState } from '@/hooks/Mapper/mapRootProvider';
 import clsx from 'clsx';
 import { MenuItem } from 'primereact/menuitem';
 import { MenuItemWithInfo, WdMenuItem } from '@/hooks/Mapper/components/ui-kit';
+// CHEWY PATCH: map region/wormhole-chain collapse (WANDERER_MAP_GROUPS).
+import { computeGroups } from '@/hooks/Mapper/components/map/groups/computeGroups';
 
 export const useContextMenuSystemItems = ({
   onDeleteSystem,
@@ -52,13 +54,25 @@ export const useContextMenuSystemItems = ({
   const getUserRoutes = useUserRoute({ userHubs, systemId, onUserHubToggle });
 
   const {
-    data: { pings, isSubscriptionActive, options },
+    data: { pings, isSubscriptionActive, options, connections },
     // CHEWY PATCH: map beautifier chain-root selection.
-    storedSettings: { settingsBeautifyUpdate },
+    storedSettings: { settingsBeautifyUpdate, settingsGroupsUpdate },
   } = useMapRootState();
 
   // CHEWY PATCH: map beautifier chain-root selection.
   const isBeautifyEnabled = options.beautifier_enabled === 'true';
+
+  // CHEWY PATCH: map region/wormhole-chain collapse (WANDERER_MAP_GROUPS) - not a per-node hot
+  // path (this menu renders once, on right-click), so a plain `useMapRootState()` read plus
+  // recomputing `computeGroups` here is fine; `Map.tsx`'s own `useMapGroups` is the selector-
+  // isolated instance that matters for render-path cost.
+  const isGroupsEnabled = options.groups_enabled === 'true';
+  const systemGroup = useMemo(() => {
+    if (!isGroupsEnabled || !systemId) {
+      return undefined;
+    }
+    return Array.from(computeGroups(systems, connections).values()).find(g => g.systemIds.includes(systemId));
+  }, [isGroupsEnabled, systemId, systems, connections]);
 
   const ping = useMemo(() => (pings.length === 1 ? pings[0] : undefined), [pings]);
   const isShowPingBtn = useMemo(() => {
@@ -157,6 +171,23 @@ export const useContextMenuSystemItems = ({
             },
           ]
         : []),
+      // CHEWY PATCH: map region/wormhole-chain collapse (WANDERER_MAP_GROUPS).
+      ...(isGroupsEnabled && systemGroup
+        ? [
+            { separator: true },
+            {
+              label: systemGroup.kind === 'region' ? `Collapse region ${systemGroup.displayName}` : 'Collapse chain',
+              icon: PrimeIcons.MAP,
+              command: () =>
+                settingsGroupsUpdate(prev => ({
+                  ...prev,
+                  collapsedGroups: prev.collapsedGroups.includes(systemGroup.key)
+                    ? prev.collapsedGroups
+                    : [...prev.collapsedGroups, systemGroup.key],
+                })),
+            },
+          ]
+        : []),
       ...(system.locked && canLockSystem
         ? [
             {
@@ -225,5 +256,9 @@ export const useContextMenuSystemItems = ({
     // CHEWY PATCH: map beautifier chain-root selection.
     isBeautifyEnabled,
     settingsBeautifyUpdate,
+    // CHEWY PATCH: map region/wormhole-chain collapse (WANDERER_MAP_GROUPS).
+    isGroupsEnabled,
+    systemGroup,
+    settingsGroupsUpdate,
   ]);
 };

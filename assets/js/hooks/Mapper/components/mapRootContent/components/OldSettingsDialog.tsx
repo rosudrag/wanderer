@@ -7,7 +7,12 @@ import { Dialog } from 'primereact/dialog';
 import { Toast } from 'primereact/toast';
 import { useCallback, useRef } from 'react';
 import { WdButton } from '@/hooks/Mapper/components/ui-kit';
-import { DEFAULT_BEAUTIFY_SETTINGS, DEFAULT_JUMP_PLANNER_SETTINGS } from '@/hooks/Mapper/mapRootProvider/constants.ts';
+import {
+  DEFAULT_BEAUTIFY_SETTINGS,
+  DEFAULT_JUMP_PLANNER_SETTINGS,
+  // CHEWY PATCH: map region/wormhole-chain collapse settings default.
+  DEFAULT_MAP_GROUPS_SETTINGS,
+} from '@/hooks/Mapper/mapRootProvider/constants.ts';
 
 const createSettings = function <T>(lsSettings: string | null, defaultValues: T) {
   return lsSettings ? JSON.parse(lsSettings) : defaultValues;
@@ -47,6 +52,8 @@ export const OldSettingsDialog = () => {
         jumpPlanner: DEFAULT_JUMP_PLANNER_SETTINGS,
         // CHEWY PATCH: map beautifier settings default for legacy-settings export.
         beautify: DEFAULT_BEAUTIFY_SETTINGS,
+        // CHEWY PATCH: map region/wormhole-chain collapse settings default for legacy-settings export.
+        groups: DEFAULT_MAP_GROUPS_SETTINGS,
       };
 
       if (asFile) {

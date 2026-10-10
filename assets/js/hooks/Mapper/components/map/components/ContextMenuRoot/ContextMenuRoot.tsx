@@ -3,7 +3,7 @@ import { ContextMenu } from 'primereact/contextmenu';
 import { PrimeIcons } from 'primereact/api';
 import { MenuItem } from 'primereact/menuitem';
 import { PasteSystemsAndConnections } from '@/hooks/Mapper/components/map/components';
-import { useMapState } from '@/hooks/Mapper/components/map/MapProvider.tsx';
+import { useMapSelector } from '@/hooks/Mapper/components/map/MapProvider.tsx';
 import { checkPermissions } from '@/hooks/Mapper/components/map/helpers';
 import { MenuItemWithInfo, WdMenuItem } from '@/hooks/Mapper/components/ui-kit';
 import clsx from 'clsx';
@@ -13,6 +13,10 @@ export interface ContextMenuRootProps {
   pasteSystemsAndConnections: PasteSystemsAndConnections | undefined;
   onAddSystem(): void;
   onPasteSystemsAnsConnections(): void;
+  // CHEWY PATCH: map region/wormhole-chain collapse (WANDERER_MAP_GROUPS).
+  groupsEnabled?: boolean;
+  onCollapseAllRegions?(): void;
+  onExpandAllGroups?(): void;
 }
 
 export const ContextMenuRoot: React.FC<ContextMenuRootProps> = ({
@@ -20,10 +24,12 @@ export const ContextMenuRoot: React.FC<ContextMenuRootProps> = ({
   onAddSystem,
   onPasteSystemsAnsConnections,
   pasteSystemsAndConnections,
+  groupsEnabled,
+  onCollapseAllRegions,
+  onExpandAllGroups,
 }) => {
-  const {
-    data: { options, userPermissions },
-  } = useMapState();
+  const options = useMapSelector(['options'], d => d.options);
+  const userPermissions = useMapSelector(['userPermissions'], d => d.userPermissions);
 
   const items: MenuItem[] = useMemo(() => {
     const allowPaste = checkPermissions(userPermissions, options.allowed_paste_for);
@@ -34,6 +40,20 @@ export const ContextMenuRoot: React.FC<ContextMenuRootProps> = ({
         icon: PrimeIcons.PLUS,
         command: onAddSystem,
       },
+      ...(groupsEnabled
+        ? [
+            {
+              label: 'Collapse all regions',
+              icon: PrimeIcons.MAP,
+              command: onCollapseAllRegions,
+            },
+            {
+              label: 'Expand all',
+              icon: PrimeIcons.MAP_MARKER,
+              command: onExpandAllGroups,
+            },
+          ]
+        : []),
       ...(pasteSystemsAndConnections != null
         ? [
             {
@@ -65,7 +85,16 @@ export const ContextMenuRoot: React.FC<ContextMenuRootProps> = ({
           ]
         : []),
     ];
-  }, [userPermissions, options, onAddSystem, pasteSystemsAndConnections, onPasteSystemsAnsConnections]);
+  }, [
+    userPermissions,
+    options,
+    onAddSystem,
+    pasteSystemsAndConnections,
+    onPasteSystemsAnsConnections,
+    groupsEnabled,
+    onCollapseAllRegions,
+    onExpandAllGroups,
+  ]);
 
   return (
     <>

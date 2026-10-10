@@ -1,5 +1,11 @@
 import { ConnectionType, MassState, ShipSizeStatus } from '@/hooks/Mapper/types';
 
+// Matches convertSystem2Node.ts's `width`/`height` exactly - the box every node is created with.
+// Used as a defensive fallback wherever a ReactFlow-measured node's width/height might not have
+// landed yet (see SolarSystemEdge.tsx/DotlanEdge.tsx).
+export const DEFAULT_NODE_WIDTH = 130;
+export const DEFAULT_NODE_HEIGHT = 34;
+
 export enum SOLAR_SYSTEM_CLASS_IDS {
   ccp1 = -1,
   c1 = 1,

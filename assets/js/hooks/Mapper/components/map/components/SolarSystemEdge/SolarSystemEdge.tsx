@@ -7,11 +7,11 @@ import clsx from 'clsx';
 import { ConnectionType, MassState, ShipSizeStatus, SolarSystemConnection, TimeStatus } from '@/hooks/Mapper/types';
 import { PrimeIcons } from 'primereact/api';
 import { WdTooltipWrapper } from '@/hooks/Mapper/components/ui-kit/WdTooltipWrapper';
-import { useMapState } from '@/hooks/Mapper/components/map/MapProvider.tsx';
+import { useMapSelector } from '@/hooks/Mapper/components/map/MapProvider.tsx';
 import { SHIP_SIZES_DESCRIPTION, SHIP_SIZES_NAMES_SHORT } from '@/hooks/Mapper/components/map/constants.ts';
 import { TooltipPosition } from '@/hooks/Mapper/components/ui-kit';
 // CHEWY PATCH: read the live dotlan-style-connections setting so the renderer choice is reactive.
-import { useMapRootState } from '@/hooks/Mapper/mapRootProvider';
+import { useMapRootSelector } from '@/hooks/Mapper/mapRootProvider';
 import { DotlanEdge } from './DotlanEdge';
 
 const MAP_TRANSLATES: Record<string, string> = {
@@ -47,9 +47,13 @@ export const SolarSystemEdge = (props: EdgeProps<SolarSystemConnection>) => {
   // CHEWY PATCH: moved the dotlan-style-connections check into the component (was a module-level
   // flag baked into the edge `type` at build time in convertConnection2Edge.ts) so toggling the
   // setting re-renders every existing edge immediately instead of requiring a reconnect/reload.
-  const {
-    storedSettings: { interfaceSettings },
-  } = useMapRootState();
+  // Selector-based, not `useMapRootState()`: this component renders once per edge, so a plain
+  // `useMapRootState()` read would re-subscribe every edge to every OTHER field on
+  // `MapRootContextProps` - see docs/chewy/map-perf-findings.md.
+  const dotlanStyleConnections = useMapRootSelector(
+    ['interfaceSettings'],
+    d => d.interfaceSettings.dotlanStyleConnections,
+  );
 
   const { id, source, target, markerEnd, style, data } = props;
   const sourceNode = useStore(useCallback(store => store.nodeInternals.get(source), [source]));
@@ -58,13 +62,27 @@ export const SolarSystemEdge = (props: EdgeProps<SolarSystemConnection>) => {
   const isGate = data?.type === ConnectionType.gate;
   const isBridge = data?.type === ConnectionType.bridge;
 
-  const {
-    data: { isThickConnections },
-  } = useMapState();
+  const isThickConnections = useMapSelector(['isThickConnections'], d => d.isThickConnections);
 
   const [hovered, setHovered] = useState(false);
 
+  // Defensive guard, not the actual fix for "edge doesn't draw for an unmeasured node" (see
+  // docs/chewy/map-perf-findings.md "Hotspot 5"): `getEdgeParams`/`getHandleCoordsByPosition`
+  // need ReactFlow's measured `handleBounds` (real Handle DOM positions within the node), not
+  // just a width/height box - that can't be safely fabricated the way DotlanEdge's plain
+  // node-center + box-clip math can (DotlanEdge already falls back to the 130x34 box via
+  // `DEFAULT_NODE_WIDTH`/`DEFAULT_NODE_HEIGHT`, no change needed there). ReactFlow itself already
+  // gates this edge type out of the tree entirely until both endpoint nodes are measured
+  // (confirmed: an edge's component function is never even invoked for an unmeasured endpoint),
+  // so `edgesReady` should always be `true` by the time this component runs at all - this turns
+  // an otherwise-impossible-but-unverified NaN/crash into an explicit, documented no-render.
+  const edgesReady = !!(sourceNode?.width && sourceNode?.height && targetNode?.width && targetNode?.height);
+
   const [path, labelX, labelY, sx, sy, tx, ty, sourcePos, targetPos] = useMemo(() => {
+    if (!edgesReady) {
+      return [null, 0, 0, 0, 0, 0, 0, Position.Top, Position.Top] as const;
+    }
+
     const { sx, sy, tx, ty, sourcePos, targetPos } = getEdgeParams(sourceNode!, targetNode!);
 
     const offset = isThickConnections ? MAP_OFFSETS_TICK[targetPos] : MAP_OFFSETS[targetPos];
@@ -79,16 +97,16 @@ export const SolarSystemEdge = (props: EdgeProps<SolarSystemConnection>) => {
     });
 
     return [edgePath, labelX, labelY, sx, sy, tx, ty, sourcePos, targetPos];
-  }, [isThickConnections, sourceNode, targetNode]);
+  }, [edgesReady, isThickConnections, sourceNode, targetNode]);
 
   // CHEWY PATCH: delegate after every hook above has already run (rules of hooks require the same
   // hook order on every render, so this branch cannot sit before the useStore/useMapState/useState/
   // useMemo calls it would otherwise skip on the dotlan-enabled render path).
-  if (interfaceSettings.dotlanStyleConnections) {
+  if (dotlanStyleConnections) {
     return <DotlanEdge {...props} />;
   }
 
-  if (!sourceNode || !targetNode || !data) {
+  if (!sourceNode || !targetNode || !data || !edgesReady || path === null) {
     return null;
   }
 

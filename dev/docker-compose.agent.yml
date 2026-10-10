@@ -73,6 +73,7 @@ services:
       WANDERER_DEV_AUTH_TOKEN: "${WANDERER_DEV_AUTH_TOKEN:?set a >=16 char token, e.g. via 'export WANDERER_DEV_AUTH_TOKEN=openssl-rand-hex-24-output'}"
       # Fork-specific features, on here so an agent can actually exercise them.
       WANDERER_MAP_BEAUTIFIER: "true"
+      WANDERER_MAP_GROUPS: "true"
       WANDERER_TIDY_INSERT: "true"
       # Standoff in cells, and angle discipline — both default-off in
       # production config, both on here so they can actually be looked at.

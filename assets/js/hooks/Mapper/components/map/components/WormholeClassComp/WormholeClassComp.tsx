@@ -1,4 +1,4 @@
-import { useMapState } from '@/hooks/Mapper/components/map/MapProvider.tsx';
+import { useMapSelector } from '@/hooks/Mapper/components/map/MapProvider.tsx';
 import { WORMHOLE_CLASS_STYLES, WORMHOLES_ADDITIONAL_INFO } from '@/hooks/Mapper/components/map/constants.ts';
 import clsx from 'clsx';
 
@@ -6,9 +6,7 @@ interface WormholeClassComp {
   id: string;
 }
 export const WormholeClassComp = ({ id }: WormholeClassComp) => {
-  const {
-    data: { wormholesData },
-  } = useMapState();
+  const wormholesData = useMapSelector(['wormholesData'], d => d.wormholesData);
 
   const wormholeData = wormholesData[id];
   const wormholeDataAdditional = WORMHOLES_ADDITIONAL_INFO[wormholeData.dest];

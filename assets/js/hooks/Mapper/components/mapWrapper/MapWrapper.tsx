@@ -56,7 +56,7 @@ export const MapWrapper = ({ onShowJumpPlanner }: MapWrapperProps) => {
       linkSignatureToSystem,
       systemSignatures,
     },
-    storedSettings: { interfaceSettings, settingsLocal, mapSettings, mapSettingsUpdate },
+    storedSettings: { interfaceSettings, settingsLocal, mapSettings, mapSettingsUpdate, settingsGroupsUpdate },
   } = useMapRootState();
 
   const {
@@ -307,6 +307,7 @@ export const MapWrapper = ({ onShowJumpPlanner }: MapWrapperProps) => {
         minimapPlacement={minimapPosition}
         localShowShipName={settingsLocal.showShipName}
         defaultViewport={mapSettings.viewport}
+        settingsGroupsUpdate={settingsGroupsUpdate}
       />
 
       {openSettings != null && (

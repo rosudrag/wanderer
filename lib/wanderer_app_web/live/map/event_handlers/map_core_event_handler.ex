@@ -761,6 +761,9 @@ defmodule WandererAppWeb.MapCoreEventHandler do
     # CHEWY PATCH: expose the map beautifier feature flag to the client init payload.
     options = Map.put(options, "beautifier_enabled", to_string(WandererApp.Env.map_beautifier?()))
 
+    # CHEWY PATCH: expose the map groups (region/chain collapse) feature flag to the client init payload.
+    options = Map.put(options, "groups_enabled", to_string(WandererApp.Env.map_groups?()))
+
     # CHEWY PATCH: chain/k-space clearance used by the beautifier client-side.
     options =
       Map.put(options, "chain_standoff_cells", to_string(WandererApp.Env.chain_standoff_cells()))

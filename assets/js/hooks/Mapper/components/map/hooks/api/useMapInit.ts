@@ -5,13 +5,14 @@ import { CommandInit } from '@/hooks/Mapper/types/mapHandlers.ts';
 import { useCallback, useRef } from 'react';
 import { useReactFlow } from 'reactflow';
 import { convertConnection2Edge, convertSystem2Node } from '../../helpers';
+import { indexCharactersBySystem } from '@/hooks/Mapper/helpers';
 
 export const useMapInit = () => {
   const rf = useReactFlow();
-  const { data, update } = useMapState();
+  const { update } = useMapState();
 
-  const ref = useRef({ rf, data, update });
-  ref.current = { update, data, rf };
+  const ref = useRef({ rf, update });
+  ref.current = { update, rf };
 
   const updateSystems = useCallback((systems: SolarSystemRawType[]) => {
     const { rf } = ref.current;
@@ -51,6 +52,7 @@ export const useMapInit = () => {
 
       if (characters) {
         updateData.characters = characters.slice();
+        updateData.charactersBySystem = indexCharactersBySystem(updateData.characters);
       }
 
       if (user_characters) {

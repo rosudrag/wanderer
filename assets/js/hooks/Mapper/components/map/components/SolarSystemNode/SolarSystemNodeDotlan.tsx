@@ -170,7 +170,7 @@ export const SolarSystemNodeDotlan = memo((props: NodeProps<MapSolarSystemType>)
         </>
       )}
 
-      {nodeVars.systemHighlighted === nodeVars.solarSystemId && (
+      {nodeVars.systemHighlighted && (
         <div
           className={clsx('absolute top-[-4px] left-[-4px]', 'w-[calc(100%+8px)] h-[calc(100%+8px)]', 'animate-pulse')}
         >

@@ -208,6 +208,11 @@ tidy_insert =
   |> get_var_from_path_or_env("WANDERER_TIDY_INSERT", "false")
   |> String.to_existing_atom()
 
+map_groups =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_MAP_GROUPS", "false")
+  |> String.to_existing_atom()
+
 # CHEWY PATCH: connection traffic counter (see WandererApp.Map.ConnectionTraffic),
 # default off (upstream behaviour: count_of_passage is never written).
 connection_traffic =
@@ -303,6 +308,7 @@ config :wanderer_app,
   wallet_tracking_enabled: wallet_tracking_enabled,
   # CHEWY PATCH: map beautifier / tidy-insert feature flags.
   map_beautifier: map_beautifier,
+  map_groups: map_groups,
   tidy_insert: tidy_insert,
   # CHEWY PATCH: chain/k-space clearance, see WandererApp.Env.chain_standoff_cells/0.
   chain_standoff_cells: chain_standoff_cells,

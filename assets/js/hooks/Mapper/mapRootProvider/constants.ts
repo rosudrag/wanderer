@@ -13,6 +13,8 @@ import {
   RoutesType,
   // CHEWY PATCH: map beautifier settings.
   BeautifySettings,
+  // CHEWY PATCH: map region/wormhole-chain collapse settings.
+  MapGroupsSettings,
 } from '@/hooks/Mapper/mapRootProvider/types.ts';
 import { DEFAULT_WIDGETS, STORED_VISIBLE_WIDGETS_DEFAULT } from '@/hooks/Mapper/components/mapInterface/constants.tsx';
 
@@ -30,6 +32,8 @@ export const STORED_INTERFACE_DEFAULT_VALUES: InterfaceStoredSettings = {
   dotlanBehavior: DotlanBehavior.system,
   // CHEWY PATCH: Dotlan-style straight connections default on.
   dotlanStyleConnections: true,
+  // CHEWY PATCH: ReactFlow `onlyRenderVisibleElements` default off (see Map.tsx).
+  onlyRenderVisibleElements: false,
 };
 
 export const DEFAULT_ROUTES_SETTINGS: RoutesType = {
@@ -89,6 +93,12 @@ export const DEFAULT_BEAUTIFY_SETTINGS: BeautifySettings = {
   rootId: null,
   axis: 'left_to_right',
   kspaceMode: 'geographic',
+};
+
+// CHEWY PATCH: map region/wormhole-chain collapse default per-map state.
+export const DEFAULT_MAP_GROUPS_SETTINGS: MapGroupsSettings = {
+  collapsedGroups: [],
+  groupPositions: {},
 };
 
 export const getDefaultWidgetProps = () => ({
