@@ -67,10 +67,13 @@ defmodule WandererAppWeb.ScoutIntelLive do
   alias WandererApp.CachedInfo
   alias WandererApp.Identity.ScoutAccess
   alias WandererApp.Scout.Alerts
+  alias WandererApp.Scout.AssetSafety
+  alias WandererApp.Scout.Seeding
   alias WandererApp.Scout.Space
   alias WandererApp.Scout.Stats
   alias WandererApp.Scout.Unanchor
   alias WandererAppWeb.ScoutDiscord
+  alias WandererAppWeb.ScoutWaypoint
 
   @windows [{"24 hours", 1}, {"7 days", 7}, {"30 days", 30}, {"90 days", 90}]
   @default_days 7
@@ -90,6 +93,20 @@ defmodule WandererAppWeb.ScoutIntelLive do
   # A faction spawn seen today is worth a trip; older than that is
   # history, which is what the window-bounded log below the list is for.
   @fresh_seconds 24 * 3_600
+
+  # CHEWY PATCH: the structures tab's boards, in render order. The
+  # summary strip is keyed on these, so a card can solo its own board.
+  @boards ~w(asset_safety unarmed now unanchored timers anchoring unanchoring abandoned no_fuel archived log)
+
+  # CHEWY PATCH: how far ahead "Now" looks. A timer further out than
+  # this is something to plan around, not something to undock for, and
+  # it is still one click away on its own board.
+  @now_hours 6
+  # An unanchoring run has no wire timer, only a predicted upper bound,
+  # so it earns a wider horizon: by the time the bound is inside six
+  # hours the hull may already be gone.
+  @now_unanchoring_hours 48
+  @now_rows 10
 
   @impl true
   def mount(_params, _session, socket) do
@@ -125,6 +142,8 @@ defmodule WandererAppWeb.ScoutIntelLive do
          space_types: Space.types(),
          limit: @page,
          detail: nil,
+         board: nil,
+         now_board: [],
          discord: nil,
          spawn_detail: nil,
          systems: %{},
@@ -142,6 +161,23 @@ defmodule WandererAppWeb.ScoutIntelLive do
          more?: false,
          last_observed: %{structures: nil, spawns: nil},
          totals: nil,
+         # CHEWY PATCH: asset-safety triggers. Read on BOTH tabs like
+         # the unanchored alert, for the same reason -- it is an alert,
+         # not a table, and a reader on the spawns tab must still see it.
+         asset_safety_events: [],
+         asset_safety_watchers: %{count: 0, stalled: 0},
+         # CHEWY PATCH: `%{structure_id => [character_name]}` -- whether
+         # each unanchoring hull's trigger is armed, and by whom.
+         armed_by: %{},
+         unarmed_structures: [],
+         # CHEWY PATCH: whose autopilot the per-row `Fly to` button
+         # writes. A waypoint goes out with ONE character's token, so
+         # the page has to name which, and sorted by name because the
+         # account's own order is an insertion order nobody can predict
+         # and picking the wrong row flies the wrong pilot.
+         characters: pilots(socket),
+         character_eve_id: socket |> pilots() |> List.first() |> pilot_eve_id(),
+         waypoint_status: nil,
          # Lazy-mounted, then NEVER unmounted -- see `handle_params/3`.
          # Tearing the child down on a tab switch would throw away a
          # rank/sweep that cost real seconds to compute.
@@ -205,6 +241,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
       system_id: cat_filters.system_id,
       space: cat_filters.space,
       limit: @page,
+      board: nil,
       detail: nil,
       spawn_detail: nil,
       discord: nil
@@ -260,6 +297,26 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
   def handle_event("reset_space", _params, socket) do
     {:noreply, socket |> apply_filter(:space, Space.all()) |> load() |> persist_filters()}
+  end
+
+  # CHEWY PATCH: the summary strip is also the board index. Clicking a
+  # card shows only the board it counts; clicking the active card shows
+  # every board again. Purely a render-time filter -- no read runs, and
+  # nothing is persisted, because soloing a board is what a reader does
+  # for the next thirty seconds, not a preference.
+  def handle_event("focus_board", %{"board" => board}, socket) do
+    board =
+      cond do
+        board not in @boards -> nil
+        socket.assigns.board == board -> nil
+        true -> board
+      end
+
+    {:noreply, assign(socket, board: board)}
+  end
+
+  def handle_event("clear_board", _params, socket) do
+    {:noreply, assign(socket, board: nil)}
   end
 
   # The browser hands back the filters this page was last left with --
@@ -342,6 +399,89 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
   def handle_event("refresh", _params, socket), do: {:noreply, load(socket)}
 
+  # CHEWY PATCH: whose autopilot the per-row `Fly to` buttons write.
+  #
+  # Validated against the user's OWN characters rather than trusted from
+  # the form: this id decides whose in-game route gets rewritten, and
+  # the select is user-writable like any other form field.
+  def handle_event("select_character", %{"character_eve_id" => eve_id}, socket) do
+    if Enum.any?(socket.assigns.characters, &(&1.eve_id == eve_id)) do
+      {:noreply, assign(socket, character_eve_id: eve_id, waypoint_status: nil)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("select_character", _params, socket), do: {:noreply, socket}
+
+  # One row, one waypoint. Every board on this page is a list of places
+  # to go, and the step between reading one and flying it was: read the
+  # system name, alt-tab, type it into the game's own search, set
+  # destination. This is that step.
+  #
+  # It goes out as a one-stop PLAN through the same
+  # `WandererApp.Scout.PlanWaypoints` the planner's `Set route` uses,
+  # so it inherits the three things that call learned the hard way --
+  # the preflight that refreshes an expired token, reading ESI's actual
+  # answer (204 is the only success this endpoint documents), and
+  # noticing that EVE discards waypoints aimed at a logged-out client.
+  # `clear_other_waypoints` is true for a single stop, which is what
+  # "fly me there" means: it replaces the route rather than appending to
+  # whatever was left over from yesterday.
+  def handle_event("set_waypoint", %{"id" => id}, socket) do
+    %{characters: characters, character_eve_id: eve_id} = socket.assigns
+
+    case Integer.parse(to_string(id)) do
+      {solar_system_id, ""} ->
+        name = ScoutWaypoint.character_name(characters, eve_id)
+
+        status =
+          ScoutWaypoint.push(
+            [%{leg: :gate, solar_system_id: solar_system_id}],
+            eve_id,
+            name,
+            system_label(socket, solar_system_id)
+          )
+
+        {:noreply,
+         socket
+         |> assign(waypoint_status: status)
+         |> put_flash(if(status.level == :error, do: :error, else: :info), status.text)}
+
+      _not_a_system ->
+        {:noreply, socket}
+    end
+  end
+
+  # CHEWY PATCH: consent to the asset-safety trigger for ONE character.
+  #
+  # There is nothing to store and no form: the whole opt-in is an EVE
+  # SSO round trip, because the extra scope
+  # (`esi-characters.read_notifications.v1`) can only be granted at
+  # login — a refresh never widens a token. Log in as the character that
+  # seeds the structures and it starts being polled within one scheduler
+  # tick (`WandererApp.Sync.Feeds.AssetSafetyFeed.scopes/0` re-reads the
+  # character list every tick).
+  #
+  # `/auth/eve` is invite-gated whenever WANDERER_INVITES is on, so a
+  # plain link to it is dead on this deployment — mint the same
+  # short-lived cache token upstream's own "authorize" flow mints. Same
+  # trap, same fix as `CorpManagementLive`'s "request_director_access".
+  def handle_event("request_notification_access", _params, socket) do
+    active_pool = WandererApp.Character.TrackingConfigUtils.get_active_pool!()
+
+    {:ok, esi_config} = Cachex.get(:esi_auth_cache, "config_#{active_pool}")
+
+    WandererApp.Cache.put("invite_#{esi_config.uuid}", true, ttl: :timer.minutes(30))
+
+    # The cached "who is watching" answer is about to be wrong either
+    # way, and a stale "no character is watching" under a button the
+    # reader just used is the one message that must not survive.
+    AssetSafety.invalidate_watchers()
+
+    {:noreply, socket |> push_navigate(to: ~p"/auth/eve?invite=#{esi_config.uuid}")}
+  end
+
   # CHEWY PATCH: the boards, as a message a reader pastes into Discord.
   #
   # No query: it formats the rows this socket already holds, which is
@@ -417,11 +557,13 @@ defmodule WandererAppWeb.ScoutIntelLive do
     now = DateTime.utc_now()
 
     {:noreply,
-     assign(socket,
+     socket
+     |> assign(
        now: now,
        active_timers: Enum.filter(socket.assigns.active_timers, &running?(&1, now)),
        fresh_spawns: Enum.filter(socket.assigns.fresh_spawns, &fresh?(&1, now))
-     )}
+     )
+     |> assign_now_board()}
   end
 
   def handle_info({:scout_intel_ingested, kind}, socket) do
@@ -639,9 +781,16 @@ defmodule WandererAppWeb.ScoutIntelLive do
     socket
     |> assign(now: now, since: since)
     |> load_unanchored(filters)
+    |> load_asset_safety(filters)
     |> load_tab(tab, since, now, filters, limit)
     |> assign_freshness()
+    |> assign_now_board()
   end
+
+  # CHEWY PATCH: folded here rather than in the template, which cannot
+  # bind an intermediate value: five `now_rows/1` calls per render was
+  # the alternative, and it ticks every 30 seconds.
+  defp assign_now_board(socket), do: assign(socket, now_board: now_rows(socket.assigns))
 
   # The alert, read on BOTH tabs: a structure sitting unanchored is the
   # highest-value thing this log ever reports, and a reader who happens
@@ -655,6 +804,34 @@ defmodule WandererAppWeb.ScoutIntelLive do
     socket
     |> assign(unanchored_structures: rows)
     |> assign_systems([rows])
+  end
+
+  # CHEWY PATCH: the asset-safety trigger, also read on BOTH tabs.
+  #
+  # Unlike the unanchored alert this one DOES take the search box: its
+  # rows carry a structure name, an owner and the reporting character,
+  # which is the structures tab's vocabulary either way, and a reader
+  # who has narrowed the page to one corp means it here too.
+  #
+  # Inert — not even a query — unless the feature is on, because with
+  # the flag off nothing ever writes the table and the board is not
+  # rendered at all.
+  defp load_asset_safety(socket, filters) do
+    if asset_safety_enabled?() do
+      rows =
+        AssetSafety.recent(
+          now: socket.assigns.now,
+          system_id: filters.system_id,
+          q: filters.q,
+          space: filters.space
+        )
+
+      socket
+      |> assign(asset_safety_events: rows, asset_safety_watchers: AssetSafety.watchers())
+      |> assign_systems([rows])
+    else
+      socket
+    end
   end
 
   defp load_tab(socket, :structures, since, now, filters, limit) do
@@ -708,6 +885,30 @@ defmodule WandererAppWeb.ScoutIntelLive do
     {unanchoring_structures, _more} =
       read(ScoutStructure, :unanchoring, Map.put(filters, :since, since), limit)
 
+    # CHEWY PATCH: which of those hulls actually has one of our items in
+    # it, and therefore whether EVE will tell us the moment it comes out
+    # (`WandererApp.Scout.AssetSafety`). ONE query for the whole board,
+    # keyed on the ids already in hand -- never a scan of every hangar.
+    # Empty with the flag off, which is also what hides the board.
+    unanchoring_structures = by_predicted_out(unanchoring_structures)
+
+    armed_by =
+      if asset_safety_enabled?() do
+        Seeding.armed_by(Enum.map(unanchoring_structures, & &1.structure_id))
+      else
+        %{}
+      end
+
+    # The actionable half: a structure nobody has seeded will finish
+    # unanchoring in silence, and the Unanchoring board on its own gives
+    # a reader no way to notice that.
+    unarmed_structures =
+      if asset_safety_enabled?() do
+        Enum.reject(unanchoring_structures, &Map.has_key?(armed_by, &1.structure_id))
+      else
+        []
+      end
+
     # Suppressed findings, and the only place to undo one. Deliberately
     # not window-bounded -- see the `:archived` read action.
     {archived_structures, _more} = read(ScoutStructure, :archived, filters, limit)
@@ -727,7 +928,9 @@ defmodule WandererAppWeb.ScoutIntelLive do
       anchoring_structures: by_deadline(anchoring_structures),
       abandoned_structures: by_recent(abandoned_structures),
       no_fuel_structures: by_recent(no_fuel_structures),
-      unanchoring_structures: by_predicted_out(unanchoring_structures),
+      unanchoring_structures: unanchoring_structures,
+      armed_by: armed_by,
+      unarmed_structures: unarmed_structures,
       archived_structures: by_archived(archived_structures),
       more?: more_structures?,
       spawns: [],
@@ -777,6 +980,8 @@ defmodule WandererAppWeb.ScoutIntelLive do
       abandoned_structures: [],
       no_fuel_structures: [],
       unanchoring_structures: [],
+      armed_by: %{},
+      unarmed_structures: [],
       archived_structures: [],
       fresh_spawns: fresh_spawns
     )
@@ -949,6 +1154,83 @@ defmodule WandererAppWeb.ScoutIntelLive do
     end
   end
 
+  @doc false
+  # CHEWY PATCH: which boards the page is currently showing. `nil` is
+  # every board; anything else is the one a summary card soloed.
+  def show_board?(nil, _board), do: true
+  def show_board?(board, board), do: true
+  def show_board?(_focused, _board), do: false
+
+  @doc false
+  # CHEWY PATCH: the one board that is not a read.
+  #
+  # Everything else on this page reports STATE -- six boards, each a
+  # status family, each sorted on its own clock. None of them answered
+  # the question a scout actually opens the page with, which is "what do
+  # I undock for in the next hour": that answer is spread across three
+  # tables, and the two that matter most are often empty, so it is also
+  # several screens down.
+  #
+  # So: no query. The rows are already in the socket -- this folds the
+  # three time-critical families into one deadline order and keeps the
+  # soonest #{@now_rows}. Anything it shows is also on its own board
+  # below, deliberately: this is a lead, not a replacement.
+  def now_rows(assigns) do
+    %{
+      active_timers: timers,
+      unanchored_structures: unanchored,
+      unanchoring_structures: unanchoring,
+      now: now
+    } = assigns
+
+    timer_rows =
+      for row <- timers,
+          at = row.timer_expires_at,
+          at != nil,
+          DateTime.diff(at, now, :second) in 1..(@now_hours * 3_600),
+          do: %{kind: :timer, row: row, at: at}
+
+    unanchoring_rows =
+      for row <- unanchoring,
+          at = Unanchor.predicted_max_at(row),
+          at != nil,
+          DateTime.diff(at, now, :second) <= @now_unanchoring_hours * 3_600,
+          do: %{kind: :unanchoring, row: row, at: at}
+
+    # No deadline of its own: a hull sitting unanchored is loot for as
+    # long as nobody else finds it, which is why it sorts first rather
+    # than by a clock it does not have.
+    unanchored_rows = for row <- unanchored, do: %{kind: :unanchored, row: row, at: nil}
+
+    (unanchored_rows ++ timer_rows ++ unanchoring_rows)
+    |> Enum.sort_by(fn
+      %{at: nil} -> {0, 0}
+      %{at: at} -> {1, DateTime.to_unix(at)}
+    end)
+    |> Enum.take(@now_rows)
+  end
+
+  @doc false
+  def now_horizon_label, do: "next #{@now_hours}h"
+
+  @doc false
+  def now_kind_label(:timer), do: "timer"
+  def now_kind_label(:unanchored), do: "unanchored"
+  def now_kind_label(:unanchoring), do: "unanchoring"
+
+  @doc false
+  def now_kind_class(:unanchored), do: "bg-error border-error text-white"
+  def now_kind_class(:timer), do: "bg-warning/20 border-warning/40 text-warning"
+  def now_kind_class(:unanchoring), do: "bg-error/15 border-error/40 text-error"
+
+  @doc false
+  # CHEWY PATCH: the asset-safety trigger's own horizon, so the board's
+  # copy and the read that fills it can never disagree.
+  def asset_safety_horizon_days, do: AssetSafety.horizon_days()
+
+  @doc false
+  def asset_safety_enabled?, do: WandererApp.Env.scout_asset_safety_enabled?()
+
   defp discord_message(:digest, socket) do
     ScoutDiscord.message(:digest, discord_sections(socket), discord_opts(socket))
   end
@@ -964,7 +1246,16 @@ defmodule WandererAppWeb.ScoutIntelLive do
     case socket.assigns.tab do
       :structures ->
         Enum.map(
-          [:unanchored, :timers, :anchoring, :unanchoring, :abandoned, :no_fuel],
+          [
+            :asset_safety,
+            :unanchored,
+            :timers,
+            :anchoring,
+            :unarmed,
+            :unanchoring,
+            :abandoned,
+            :no_fuel
+          ],
           fn board ->
             {board, discord_rows(board, socket)}
           end
@@ -972,12 +1263,15 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
       :spawns ->
         [
+          {:asset_safety, socket.assigns.asset_safety_events},
           {:unanchored, socket.assigns.unanchored_structures},
           {:spawns, socket.assigns.fresh_spawns}
         ]
     end
   end
 
+  defp discord_rows(:asset_safety, socket), do: socket.assigns.asset_safety_events
+  defp discord_rows(:unarmed, socket), do: socket.assigns.unarmed_structures
   defp discord_rows(:unanchored, socket), do: socket.assigns.unanchored_structures
   defp discord_rows(:timers, socket), do: socket.assigns.active_timers
   defp discord_rows(:anchoring, socket), do: socket.assigns.anchoring_structures
@@ -1042,6 +1336,37 @@ defmodule WandererAppWeb.ScoutIntelLive do
       |> maybe_put("space", Space.to_param(assigns.space))
 
     "/scout/export.csv?" <> URI.encode_query(params)
+  end
+
+
+  # The pilots this user could fly. Sorted by name once, here, for the
+  # reason the planner sorts its own: a list you have to scan is where
+  # the wrong pilot gets picked.
+  # `current_user.characters` is loaded by `UserAuth.on_mount/4`, but a
+  # LiveView must not assume it: an unloaded relationship is a struct,
+  # not a list, and `||` does not catch it -- that is a crashed mount
+  # rather than an empty picker.
+  defp pilots(socket) do
+    case socket.assigns.current_user.characters do
+      characters when is_list(characters) ->
+        Enum.sort_by(characters, &String.downcase(to_string(&1.name)))
+
+      _not_loaded ->
+        []
+    end
+  end
+
+  defp pilot_eve_id(nil), do: nil
+  defp pilot_eve_id(%{eve_id: eve_id}), do: eve_id
+
+  # The name the page already resolved for that row, so the outcome
+  # sentence says "Jita" rather than "30000142". No query: if the id is
+  # on screen it is in `@systems` already.
+  defp system_label(socket, solar_system_id) do
+    case Map.get(socket.assigns.systems, solar_system_id) do
+      %{solar_system_name: name} when is_binary(name) and name != "" -> name
+      _unresolved -> "System #{solar_system_id}"
+    end
   end
 
   defp maybe_put(params, _key, nil), do: params

@@ -232,8 +232,11 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       Process.sleep(2_100)
       send(view.pid, :tick)
 
-      # No reload, no query: the tick alone retires it.
-      refute view |> element("#scout-active-timers") |> render() =~ "Expiring Astrahus"
+      # No reload, no query: the tick alone retires it. Scoped to the
+      # board with `has_element?/3` rather than `element/2`, because an
+      # empty board now collapses its table away entirely and looking
+      # that element up would raise instead of failing.
+      refute has_element?(view, "#scout-active-timers", "Expiring Astrahus")
     end
 
     test "search narrows the tables", %{conn: conn} do
@@ -572,19 +575,22 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       refute unanchoring =~ "km"
     end
 
-    test "both tables render an empty state when nothing matches", %{conn: conn} do
+    test "both boards collapse to a sentence when nothing matches", %{conn: conn} do
       structure(%{
         structure_id: 1_000_000_000_066,
         structure_name: "Nothing Special",
         status: "FullPower"
       })
 
-      {:ok, view, _html} = live(conn, ~p"/scout")
+      {:ok, _view, html} = live(conn, ~p"/scout")
 
-      assert view |> element("#scout-anchoring") |> render() =~ "Nothing anchoring right now."
-
-      assert view |> element("#scout-unanchoring") |> render() =~
-               "Nothing unanchoring right now."
+      # An empty board is ONE muted header line with no table: "empty"
+      # and "not on the page" stay distinguishable, which is the whole
+      # point of keeping the sentence.
+      assert html =~ "nothing anchoring right now"
+      assert html =~ "nothing unanchoring right now"
+      refute html =~ "scout-anchoring"
+      refute html =~ "scout-unanchoring"
     end
   end
 
@@ -696,7 +702,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       archived = render_click(view, "archive_structure", %{"id" => "1000000000300"})
 
       refute archived =~ "scout-unanchored-alert"
-      refute view |> element("#scout-unanchored") |> render() =~ "Archive Me Astrahus"
+      refute has_element?(view, "#scout-unanchored", "Archive Me Astrahus")
 
       # Not a delete: it moves to the board that undoes it, and the
       # ingest log still knows about it.
@@ -726,7 +732,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       })
 
       refute render_click(view, "refresh", %{}) =~ "scout-unanchored-alert"
-      refute view |> element("#scout-unanchored") |> render() =~ "Still Not There"
+      refute has_element?(view, "#scout-unanchored", "Still Not There")
     end
 
     test "an actual state change brings it back", %{conn: conn} do
@@ -739,7 +745,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/scout")
       render_click(view, "archive_structure", %{"id" => "1000000000302"})
-      refute view |> element("#scout-unanchored") |> render() =~ "Changed Astrahus"
+      refute has_element?(view, "#scout-unanchored", "Changed Astrahus")
 
       # `last_changed_at` is only ever moved by a `:changed` diff. A
       # second LATER than the archive, not the same one: the predicate
@@ -770,7 +776,7 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/scout")
       render_click(view, "archive_structure", %{"id" => "1000000000303"})
-      refute view |> element("#scout-unanchored") |> render() =~ "Undo Astrahus"
+      refute has_element?(view, "#scout-unanchored", "Undo Astrahus")
 
       restored = render_click(view, "restore_structure", %{"id" => "1000000000303"})
 
@@ -1322,6 +1328,234 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       {:ok, view, _html} = live(conn, ~p"/scout")
 
       refute render_click(view, "discord", %{"board" => "nonsense"}) =~ "scout-discord-text"
+    end
+  end
+
+  describe "the asset-safety trigger board" do
+    setup do
+      Application.put_env(:wanderer_app, :scout_asset_safety_enabled, true)
+      on_exit(fn -> Application.delete_env(:wanderer_app, :scout_asset_safety_enabled) end)
+      :ok
+    end
+
+    defp trigger(attrs) do
+      {:ok, row} =
+        WandererApp.Api.ScoutAssetSafety.create(
+          Map.merge(
+            %{
+              notification_id: System.unique_integer([:positive]),
+              type: "StructureItemsMovedToSafety",
+              character_eve_id: 2_112_625_428,
+              character_name: "Seed Pilot",
+              structure_id: 1_000_000_000_801,
+              solar_system_id: @jita,
+              structure_name: "Loose Astrahus",
+              notified_at: DateTime.utc_now() |> DateTime.truncate(:second)
+            },
+            attrs
+          ),
+          authorize?: false
+        )
+
+      row
+    end
+
+    test "a trigger reaches the banner and the board", %{conn: conn} do
+      trigger(%{structure_name: "Loose Astrahus"})
+
+      {:ok, _view, html} = live(conn, ~p"/scout")
+
+      assert html =~ "scout-asset-safety-alert"
+      assert html =~ "finished unanchoring"
+      assert html =~ "Loose Astrahus"
+      assert html =~ "Seed Pilot"
+    end
+
+    test "it reports a structure no sweep has ever seen", %{conn: conn} do
+      # The whole point of this feed: the only thing that has ever
+      # mentioned this id is EVE itself, so there is no
+      # `scout_structures_v1` row to take a name from.
+      trigger(%{structure_id: 1_000_000_000_802, structure_name: nil})
+
+      {:ok, _view, html} = live(conn, ~p"/scout")
+
+      assert html =~ "1000000000802"
+    end
+
+    test "the page says nobody is watching rather than looking merely quiet", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/scout")
+
+      assert html =~ "no character is watching"
+      assert html =~ "Watch notifications"
+    end
+
+    test "with the flag off the board, the banner and the button are gone", %{conn: conn} do
+      Application.put_env(:wanderer_app, :scout_asset_safety_enabled, false)
+      trigger(%{})
+
+      {:ok, _view, html} = live(conn, ~p"/scout")
+
+      refute html =~ "scout-asset-safety-alert"
+      refute html =~ "scout-asset-safety-table"
+      refute html =~ "Watch notifications"
+    end
+
+    test "it is pasteable into Discord as its own board", %{conn: conn} do
+      trigger(%{structure_name: "Loose Astrahus"})
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      paste = render_click(view, "discord", %{"board" => "asset_safety"})
+
+      assert paste =~ "Asset safety fired"
+      assert paste =~ "Loose Astrahus"
+      assert paste =~ "via Seed Pilot"
+    end
+  end
+
+  describe "the needs-seeding board" do
+    setup do
+      Application.put_env(:wanderer_app, :scout_asset_safety_enabled, true)
+      on_exit(fn -> Application.delete_env(:wanderer_app, :scout_asset_safety_enabled) end)
+
+      structure(%{
+        structure_id: 1_000_000_000_820,
+        structure_name: "Silent Astrahus",
+        status: "Unanchoring",
+        observed_at: ago(20)
+      })
+
+      :ok
+    end
+
+    defp arm(structure_id) do
+      {:ok, character} =
+        WandererApp.Api.Character.create(
+          %{
+            eve_id: "90000020",
+            name: "Seeder",
+            access_token: "token",
+            scopes: "esi-assets.read_assets.v1"
+          },
+          authorize?: false
+        )
+
+      WandererApp.Scout.Seeding.replace(character, [structure_id])
+    end
+
+    test "an unanchoring hull with nothing in it is listed and marked", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/scout")
+
+      assert html =~ "scout-unarmed-table"
+      assert html =~ "Silent Astrahus"
+      assert html =~ "seed it"
+    end
+
+    test "dropping an item in it takes it off the board and marks it armed", %{conn: conn} do
+      arm(1_000_000_000_820)
+
+      {:ok, _view, html} = live(conn, ~p"/scout")
+
+      # The board collapses to its empty line; the Unanchoring board
+      # still carries the row, now armed.
+      refute html =~ "scout-unarmed-table"
+      assert html =~ "every unanchoring structure we can see is armed"
+      assert html =~ "armed"
+    end
+
+    test "with the flag off there is no board and no trigger column", %{conn: conn} do
+      Application.put_env(:wanderer_app, :scout_asset_safety_enabled, false)
+
+      {:ok, _view, html} = live(conn, ~p"/scout")
+
+      refute html =~ "scout-unarmed-table"
+      refute html =~ "seed it"
+      refute html =~ "Needs seeding"
+    end
+
+    test "it pastes into Discord as its own errand list", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      paste = render_click(view, "discord", %{"board" => "unarmed"})
+
+      assert paste =~ "Unanchoring, nothing seeded"
+      assert paste =~ "Silent Astrahus"
+    end
+  end
+
+  describe "the per-row waypoint button" do
+    setup %{user: user} do
+      {:ok, _pid} = FakeWaypointEsi.start_link()
+      FakeWaypointEsi.script(online: true, waypoints: {:ok, ""})
+      Application.put_env(:wanderer_app, :esi_module, FakeWaypointEsi)
+      on_exit(fn -> Application.delete_env(:wanderer_app, :esi_module) end)
+
+      # The factory's create action accepts no token, and the push
+      # refuses to send without a usable one — correctly, which is the
+      # subject of its own test below.
+      {:ok, [character | _]} = WandererApp.Api.Character.active_by_user(%{user_id: user.id})
+
+      {:ok, character} =
+        WandererApp.Api.Character.update(character, %{
+          access_token: "test-access-token",
+          expires_at: DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_unix()
+        })
+
+      Cachex.del(:character_cache, character.id)
+
+      structure(%{
+        structure_id: 1_000_000_000_830,
+        structure_name: "Target Keepstar",
+        status: "Unanchored",
+        solar_system_id: @jita,
+        observed_at: ago(5)
+      })
+
+      %{character: character}
+    end
+
+    test "a row's button sets that system as the destination", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/scout")
+
+      assert html =~ "scout-pilot"
+
+      render_click(view, "set_waypoint", %{"id" => to_string(@jita)})
+
+      # clear_other_waypoints = true: "fly me there" replaces the route,
+      # it does not append to yesterday's.
+      assert [{@jita, true}] = FakeWaypointEsi.waypoint_calls()
+      assert render(view) =~ "Route set on"
+    end
+
+    test "a pilot whose client is not running is reported, not claimed", %{conn: conn} do
+      FakeWaypointEsi.script(online: false, waypoints: {:ok, ""})
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      render_click(view, "set_waypoint", %{"id" => to_string(@jita)})
+
+      assert render(view) =~ "not logged in"
+    end
+
+    test "ESI refusing the stop is reported with its reason", %{conn: conn} do
+      FakeWaypointEsi.script(online: true, fail_from: 0)
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      render_click(view, "set_waypoint", %{"id" => to_string(@jita)})
+
+      assert render(view) =~ "403 Forbidden"
+    end
+
+    test "a character this user does not own is refused", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      render_click(view, "select_character", %{"character_eve_id" => "99999999"})
+      render_click(view, "set_waypoint", %{"id" => to_string(@jita)})
+
+      # The selection was rejected, so the push still went to the user's
+      # own pilot rather than to an id typed into the form.
+      assert [{@jita, true}] = FakeWaypointEsi.waypoint_calls()
     end
   end
 

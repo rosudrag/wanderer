@@ -27,6 +27,15 @@ defmodule WandererApp.Esi do
   defdelegate get_character_online(character_eve_id, opts \\ []), to: WandererApp.Esi.ApiClient
   defdelegate get_character_ship(character_eve_id, opts \\ []), to: WandererApp.Esi.ApiClient
   defdelegate get_character_roles(character_eve_id, opts \\ []), to: WandererApp.Esi.ApiClient
+
+  # CHEWY PATCH: scout asset-safety trigger. Returns the 3-tuple /
+  # `:not_modified` etag shape, not the 2-tuple one its siblings above
+  # use. See WandererApp.Sync.Feeds.AssetSafetyFeed.
+  defdelegate get_character_notifications(character_eve_id, opts \\ []),
+    to: WandererApp.Esi.ApiClient
+
+  defdelegate get_character_assets(character_eve_id, opts \\ []), to: WandererApp.Esi.ApiClient
+
   defdelegate get_routes_custom(hubs, origin, params), to: WandererApp.Esi.ApiClient
   defdelegate get_routes_eve(hubs, origin, params, opts), to: WandererApp.Esi.ApiClient
   defdelegate search(character_eve_id, opts \\ []), to: WandererApp.Esi.ApiClient

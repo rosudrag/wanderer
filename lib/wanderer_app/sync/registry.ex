@@ -41,7 +41,8 @@ defmodule WandererApp.Sync.Registry do
   # @feeds-as-a-module-attribute compile time.
   defp default_feeds do
     [
-      corp_roster_feed()
+      corp_roster_feed(),
+      asset_safety_feed()
     ]
     |> List.flatten()
   end
@@ -49,6 +50,23 @@ defmodule WandererApp.Sync.Registry do
   defp corp_roster_feed do
     if WandererApp.Env.corp_roster_enabled?() do
       [{WandererApp.Sync.Feeds.CorpRosterFeed, &WandererApp.Sync.Feeds.CorpRosterFeed.scopes/0}]
+    else
+      []
+    end
+  end
+
+  # Two feeds, one flag: the notification feed is the trigger and the
+  # assets feed is the only thing that can say whether that trigger is
+  # armed. Shipping the first without the second means a watchlist that
+  # lies by omission, so they are not separately switchable.
+  defp asset_safety_feed do
+    if WandererApp.Env.scout_asset_safety_enabled?() do
+      [
+        {WandererApp.Sync.Feeds.AssetSafetyFeed,
+         &WandererApp.Sync.Feeds.AssetSafetyFeed.scopes/0},
+        {WandererApp.Sync.Feeds.AssetLocationsFeed,
+         &WandererApp.Sync.Feeds.AssetLocationsFeed.scopes/0}
+      ]
     else
       []
     end

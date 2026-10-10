@@ -127,6 +127,11 @@ scout_planner_enabled =
   |> get_var_from_path_or_env("WANDERER_SCOUT_PLANNER", "false")
   |> String.to_existing_atom()
 
+scout_asset_safety_enabled =
+  config_dir
+  |> get_var_from_path_or_env("WANDERER_SCOUT_ASSET_SAFETY", "false")
+  |> String.to_existing_atom()
+
 map_subscription_characters_limit =
   config_dir
   |> get_int_from_path_or_env("WANDERER_MAP_SUBSCRIPTION_CHARACTERS_LIMIT", 10_000)
@@ -347,6 +352,11 @@ config :wanderer_app,
   # CHEWY PATCH: scout refresh-queue ranking + plan endpoint, see
   # WandererApp.Env.scout_planner_enabled?/0 and WandererApp.Scout.Planner.
   scout_planner_enabled: scout_planner_enabled,
+  # CHEWY PATCH: scout asset-safety trigger (ESI notification feed), see
+  # WandererApp.Env.scout_asset_safety_enabled?/0 and
+  # WandererApp.Scout.AssetSafety. Also widens the SSO scope strings
+  # below -- with this off they are byte-identical to upstream's.
+  scout_asset_safety_enabled: scout_asset_safety_enabled,
   # CHEWY PATCH: DEV-ONLY authentication bypass token, see dev_auth_token above.
   dev_auth_token: dev_auth_token,
   # CHEWY PATCH: private ChewyTech branding, see WandererApp.Branding.
@@ -404,17 +414,53 @@ config :wanderer_app,
     System.get_env("WANDERER_LOCATION_CONCURRENCY", "#{System.schedulers_online() * 12}")
     |> String.to_integer()
 
+# CHEWY PATCH: scout asset-safety trigger. The notification feed reads
+# `GET /characters/{id}/notifications/`, which needs
+# `esi-characters.read_notifications.v1`, and EVE SSO only ever grants
+# what was requested -- so the scope has to be asked for at LOGIN, and
+# a token issued before this feature existed will never have it.
+#
+# Appended to every tier rather than given a tier of its own: a new tier
+# means a new EVE SSO application (WandererApp.Ueberauth picks
+# client_id/client_secret per tier), and this trigger is for ORDINARY
+# characters -- the pilot who seeded the hull -- not for a director.
+#
+# With WANDERER_SCOUT_ASSET_SAFETY off, `scout_asset_safety_scope` is
+# "" and all four strings below are byte-identical to upstream's.
+# Already-authenticated characters are unaffected either way: nothing
+# forces a re-auth, the feed polls only characters whose stored `scopes`
+# column actually carries it (WandererApp.Scout.AssetSafety
+# .watching_characters/0), and /scout links the consent flow.
+#
+# TWO scopes, one consent, because half of this feature is useless:
+#   esi-characters.read_notifications.v1
+#     — WandererApp.Sync.Feeds.AssetSafetyFeed: the trigger itself.
+#   esi-assets.read_assets.v1
+#     — WandererApp.Sync.Feeds.AssetLocationsFeed: whether that trigger
+#       is ARMED. An item's `location_id` IS the structure it sits in,
+#       so this is the only way to see which unanchoring hull nobody has
+#       seeded yet. Without it the board cannot distinguish "will
+#       report" from "will never report", which is the failure the
+#       feature exists to remove.
+scout_asset_safety_scope =
+  if scout_asset_safety_enabled,
+    do: " esi-characters.read_notifications.v1 esi-assets.read_assets.v1",
+    else: ""
+
 config :ueberauth, Ueberauth,
   providers: [
     eve:
       {WandererApp.Ueberauth.Strategy.Eve,
        [
          default_scope:
-           "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1",
+           "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1" <>
+             scout_asset_safety_scope,
          wallet_scope:
-           "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1 esi-wallet.read_character_wallet.v1",
+           "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1 esi-wallet.read_character_wallet.v1" <>
+             scout_asset_safety_scope,
          admin_scope:
-           "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1 esi-wallet.read_character_wallet.v1 esi-wallet.read_corporation_wallets.v1 esi-mail.send_mail.v1",
+           "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1 esi-wallet.read_character_wallet.v1 esi-wallet.read_corporation_wallets.v1 esi-mail.send_mail.v1" <>
+             scout_asset_safety_scope,
          # CHEWY PATCH: director-scope SSO tier. See
          # docs/chewy/corp-suite-plan.md §4/§9 Phase 0 — a fourth, additive
          # entry in this same multi-tier mechanism, requested only through
@@ -435,7 +481,8 @@ config :ueberauth, Ueberauth,
          #       grants what's actually requested. Caught in review, not
          #       by a test, which is why one now pins both scopes below.
          director_scope:
-           "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1 esi-characters.read_corporation_roles.v1 esi-corporations.track_members.v1",
+           "esi-location.read_location.v1 esi-location.read_ship_type.v1 esi-location.read_online.v1 esi-ui.write_waypoint.v1 esi-search.search_structures.v1 esi-characters.read_corporation_roles.v1 esi-corporations.track_members.v1" <>
+             scout_asset_safety_scope,
          callback_url: "#{web_app_url}/auth/eve/callback"
        ]}
   ]

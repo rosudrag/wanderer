@@ -21,9 +21,11 @@ defmodule WandererAppWeb.ScoutNav do
   use WandererAppWeb, :html
 
   attr :show_scout?, :boolean, default: false
-  # `{count, capped?}` of structures reported unanchored. The badge is the
-  # only part of that alert visible from the map canvas, which is the only
-  # page most people have open; see `WandererApp.Scout.Alerts`.
+  # `{count, capped?}` of hulls floating in space right now — structures
+  # a sweep reported unanchored, plus asset-safety triggers, which are
+  # the same event seen earlier from EVE's own side. The badge is the
+  # only part of that alert visible from the map canvas, which is the
+  # only page most people have open; see `WandererApp.Scout.Alerts`.
   attr :scout_alerts, :any, default: {0, false}
   attr :active_tab, :atom
   attr :show_sidebar, :boolean
@@ -38,7 +40,7 @@ defmodule WandererAppWeb.ScoutNav do
         class="tooltip tooltip-right"
         data-tip={
           if @alert_count > 0,
-            do: "Scout Log — #{@alert_count}#{if @alert_capped?, do: "+", else: ""} unanchored",
+            do: "Scout Log — #{@alert_count}#{if @alert_capped?, do: "+", else: ""} to loot",
             else: "Scout Log"
         }
       >

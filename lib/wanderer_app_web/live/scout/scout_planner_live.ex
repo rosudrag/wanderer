@@ -86,9 +86,10 @@ defmodule WandererAppWeb.ScoutPlannerLive do
 
   alias WandererApp.Api.{MapSolarSystem, ScoutSystemCoverage}
   alias WandererApp.Identity.ScoutAccess
-  alias WandererApp.Scout.{Assignments, PilotLocation, PlanWaypoints, Planner, Regions, Space}
+  alias WandererApp.Scout.{Assignments, PilotLocation, Planner, Regions, Space}
   alias WandererApp.Scout.{Split, Sweep}
   alias WandererApp.Scout.Targets
+  alias WandererAppWeb.ScoutWaypoint
 
   @kinds ~w(visit anoms sigs grid)
   @default_kind :sigs
@@ -1468,24 +1469,18 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     end
   end
 
-  defp character_name(characters, eve_id) do
-    case Enum.find(characters, &(&1.eve_id == eve_id)) do
-      nil -> "that character"
-      character -> character.name
-    end
-  end
-
   # One place every `Set route` button reports through: the push, then
   # the SAME sentence in the toast and in `route_outcome/1` beside the
   # button, keyed to `scope` so a part's result cannot read as the whole
-  # sweep's.
+  # sweep's. The wording itself lives in `WandererAppWeb.ScoutWaypoint`,
+  # shared with the intel page's per-row `Fly to` button -- two copies
+  # of those clauses would drift, and the clauses ARE the feature.
   defp push_route(socket, scope, stops, character_eve_id, label) do
-    name = character_name(socket.assigns.characters, character_eve_id)
+    name = ScoutWaypoint.character_name(socket.assigns.characters, character_eve_id)
 
     status =
       stops
-      |> PlanWaypoints.push(character_eve_id)
-      |> push_status(name, label)
+      |> ScoutWaypoint.push(character_eve_id, name, label)
       |> Map.put(:scope, scope)
 
     {:noreply,
@@ -1493,79 +1488,6 @@ defmodule WandererAppWeb.ScoutPlannerLive do
      |> assign(route_status: status)
      |> put_flash(if(status.level == :error, do: :error, else: :info), status.text)}
   end
-
-  defp push_status({:error, :no_gate_stops}, _name, label),
-    do: %{level: :error, text: "#{label} has no gate-reachable stops to fly."}
-
-  defp push_status({:error, :unknown_character}, _name, _label),
-    do: %{
-      level: :error,
-      text: "Pick a character this instance tracks before setting a route."
-    }
-
-  # The token case is the one a reader can fix, so it says how: this
-  # instance refreshes an expired token on the preflight call, and the
-  # only way that still fails is a revoked or never-granted grant.
-  defp push_status({:error, {:token, reason}}, name, _label),
-    do: %{
-      level: :error,
-      text:
-        "EVE would not accept #{name}'s token (#{esi_reason(reason)}). " <>
-          "Nothing was sent. Re-authorise that character on the Characters page, then try again."
-    }
-
-  defp push_status({:ok, %{pushed: [], total: total, error: error}}, name, _label)
-       when not is_nil(error),
-       do: %{
-         level: :error,
-         text:
-           "ESI refused the first of #{total} stops (system #{error.solar_system_id}): " <>
-             "#{esi_reason(error.reason)}. #{name}'s in-game route is unchanged."
-       }
-
-  # A partial push is a real route, just not this one: the stops that
-  # landed are a valid prefix, which is why the push halts instead of
-  # skipping the refused stop.
-  defp push_status({:ok, %{pushed: pushed, total: total, error: error}}, name, _label)
-       when not is_nil(error),
-       do: %{
-         level: :warn,
-         text:
-           "Stopped at stop #{error.index + 1} of #{total} (system #{error.solar_system_id}): " <>
-             "#{esi_reason(error.reason)}. #{name} has the first " <>
-             "#{length(pushed)} #{plural(length(pushed), "waypoint", "waypoints")} only."
-       }
-
-  # ESI accepts a waypoint for a character whose client is not running
-  # and discards it. That is exactly the "I set it and nothing happened"
-  # report this page could not explain, so it is a warning, not a tick.
-  defp push_status({:ok, %{pushed: pushed, online?: false}}, name, _label),
-    do: %{
-      level: :warn,
-      text:
-        "EVE accepted #{length(pushed)} #{plural(length(pushed), "waypoint", "waypoints")}, " <>
-          "but reports #{name} as not logged in — waypoints only reach a running client, " <>
-          "so this route went nowhere. Log that character in and set it again."
-    }
-
-  defp push_status({:ok, %{pushed: pushed}}, name, _label),
-    do: %{
-      level: :ok,
-      text:
-        "Route set on #{name}: #{length(pushed)} " <>
-          "#{plural(length(pushed), "waypoint", "waypoints")} at " <>
-          "#{Calendar.strftime(DateTime.utc_now(), "%H:%M:%S")}Z."
-    }
-
-  defp esi_reason(:forbidden), do: "ESI answered 403 Forbidden"
-  defp esi_reason(:timeout), do: "ESI timed out"
-  defp esi_reason(:pool_timeout), do: "no HTTP connection was available"
-  defp esi_reason(:error_limited), do: "ESI rate-limited this instance"
-  defp esi_reason(:no_token), do: "this instance holds no access token for it"
-  defp esi_reason(reason) when is_binary(reason), do: reason
-  defp esi_reason(reason) when is_atom(reason), do: to_string(reason)
-  defp esi_reason(%{__exception__: true} = error), do: Exception.message(error)
-  defp esi_reason(reason), do: inspect(reason)
 
   defp parse_security_key(type) when type in ~w(hs ls ns wh pochven),
     do: String.to_existing_atom(type)
@@ -1939,22 +1861,22 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   end
 
   defp failed_pilot_name({:rank, _reason}, assigns),
-    do: character_name(assigns.characters, assigns.character_eve_id)
+    do: ScoutWaypoint.character_name(assigns.characters, assigns.character_eve_id)
 
   defp failed_pilot_name({:sweep, _reason}, assigns),
-    do: character_name(assigns.characters, assigns.character_eve_id)
+    do: ScoutWaypoint.character_name(assigns.characters, assigns.character_eve_id)
 
   defp failed_pilot_name({:targets, _reason}, assigns),
-    do: character_name(assigns.characters, assigns.character_eve_id)
+    do: ScoutWaypoint.character_name(assigns.characters, assigns.character_eve_id)
 
   defp failed_pilot_name({{:part, index}, _reason}, assigns),
-    do: character_name(assigns.characters, Map.get(assigns.sweep_pilots, index))
+    do: ScoutWaypoint.character_name(assigns.characters, Map.get(assigns.sweep_pilots, index))
 
   defp pilot_start_reason(:unknown_character), do: "this instance does not track that character"
   defp pilot_start_reason(:no_location), do: "ESI reported no system for it"
-  defp pilot_start_reason({:token, reason}), do: esi_reason(reason)
-  defp pilot_start_reason({:esi, reason}), do: esi_reason(reason)
-  defp pilot_start_reason(reason), do: esi_reason(reason)
+  defp pilot_start_reason({:token, reason}), do: ScoutWaypoint.esi_reason(reason)
+  defp pilot_start_reason({:esi, reason}), do: ScoutWaypoint.esi_reason(reason)
+  defp pilot_start_reason(reason), do: ScoutWaypoint.esi_reason(reason)
 
   defp stale_source?({_slot, %{source: :tracked}}), do: true
   defp stale_source?(_main), do: false

@@ -260,6 +260,38 @@ defmodule WandererApp.Esi.ApiClient do
   def get_character_roles(character_eve_id, opts \\ []),
     do: get_character_auth_data(character_eve_id, "roles", opts)
 
+  # CHEWY PATCH: scout asset-safety trigger (WandererApp.Scout.AssetSafety).
+  # `opts` must carry `access_token:`/`character_id:` like every other
+  # character-auth call; `etag:` is forced on (`put_new`) because the
+  # only caller is a sync feed and this endpoint is ESI-cached for 600s,
+  # so a conditional request is free where an unconditional one is not.
+  # Note the 3-tuple / `:not_modified` return that `:etag` implies --
+  # this wrapper does NOT have the 2-tuple shape of its siblings above.
+  #
+  # Page 1 only, like every other paged call in this module, and here
+  # that is not a limitation worth a loop: ESI serves the ~50 most
+  # recent notifications in one page and the feed polls every 10 minutes.
+  def get_character_notifications(character_eve_id, opts \\ []),
+    do:
+      get_character_auth_data(
+        character_eve_id,
+        "notifications/",
+        opts |> Keyword.put_new(:etag, nil)
+      )
+
+  # CHEWY PATCH: "is this hull armed yet" (WandererApp.Scout.Seeding).
+  # An item sitting in an Upwell structure reports that structure's id as
+  # its `location_id`, which is the only way to answer "have we dropped
+  # something in there" without asking a human to remember.
+  #
+  # PAGED, and the caller drives it: ESI serves 1000 assets per page and
+  # a trading alt has more than that. Pass `params: [page: n]`; the feed
+  # walks pages until one comes back short. `etag:` is honoured on page 1
+  # only (the caller does not thread it past that), so an untouched
+  # hangar costs one conditional request instead of a full walk.
+  def get_character_assets(character_eve_id, opts \\ []),
+    do: get_character_auth_data(character_eve_id, "assets/", opts)
+
   def search(character_eve_id, opts \\ []) do
     params = Keyword.get(opts, :params, %{}) |> Map.new()
 

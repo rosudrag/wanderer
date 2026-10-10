@@ -66,5 +66,9 @@ defmodule WandererApp.Api do
     # CHEWY PATCH: scout region sweeps, workload split. See
     # WandererApp.Scout.Assignments.
     resource WandererApp.Api.ScoutAssignment
+    # CHEWY PATCH: scout asset-safety trigger. See
+    # WandererApp.Scout.AssetSafety.
+    resource WandererApp.Api.ScoutAssetSafety
+    resource WandererApp.Api.ScoutAssetLocation
   end
 end

@@ -136,6 +136,13 @@ defmodule WandererApp.Env do
   # WandererAppWeb.ScoutPlannerLive.
   def scout_planner_enabled?(), do: get_key(:scout_planner_enabled, false)
 
+  # CHEWY PATCH: scout asset-safety trigger master switch. Gates the
+  # notification feed AND the extra ESI scope requested at login --
+  # with it off, config/runtime.exs asks EVE for byte-identical scope
+  # strings to upstream's. See WandererApp.Scout.AssetSafety and
+  # WandererApp.Sync.Feeds.AssetSafetyFeed.
+  def scout_asset_safety_enabled?(), do: get_key(:scout_asset_safety_enabled, false)
+
   def admins(), do: get_key(:admins, [])
   def admin_username(), do: get_key(:admin_username)
   def admin_password(), do: get_key(:admin_password)

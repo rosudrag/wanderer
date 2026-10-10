@@ -381,6 +381,178 @@ defmodule WandererAppWeb.ScoutComponents do
     """
   end
 
+  attr :rows, :list, required: true
+  attr :systems, :map, required: true
+  attr :now, :any, required: true
+  attr :horizon_days, :integer, required: true
+
+  @doc """
+  CHEWY PATCH: the asset-safety trigger bar, on both tabs, above the
+  unanchored one.
+
+  It outranks that alert on purpose. `Unanchored` is a sweep reporting
+  what it found when it happened to fly past; an asset-safety
+  notification is EVE itself saying a decommission completed at a known
+  instant, usually hours earlier than any sweep would have noticed. The
+  countdown is therefore "how long has it been sitting there", which is
+  the number that decides whether it is still worth the trip.
+
+  Renders nothing when there is nothing to report, same rule as every
+  other alert on this page.
+  """
+  def asset_safety_alert(assigns) do
+    ~H"""
+    <div
+      :if={@rows != []}
+      id="scout-asset-safety-alert"
+      class="mb-4 rounded-lg border border-error bg-error/20 px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2"
+      role="alert"
+    >
+      <span class="relative flex h-3 w-3 shrink-0">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75">
+        </span>
+        <span class="relative inline-flex rounded-full h-3 w-3 bg-error"></span>
+      </span>
+
+      <span class="font-semibold text-error uppercase tracking-wide text-sm">
+        {plural(length(@rows), "structure", "structures")} finished unanchoring
+      </span>
+      <span class="text-xs text-gray-300">asset safety fired — the hull is loose now</span>
+
+      <div class="flex flex-wrap items-center gap-1.5 ml-auto">
+        <button
+          :for={row <- Enum.take(@rows, 8)}
+          phx-click="filter_system"
+          phx-value-id={row.solar_system_id}
+          class="badge badge-sm border border-error/50 bg-error/10 text-gray-100 hover:bg-error/25 gap-1"
+          title={"#{row.structure_name || row.structure_id} — #{system_region(row, @systems)} — reported by #{row.character_name || "a tracked character"}, #{@horizon_days}-day horizon"}
+        >
+          {system(row, @systems)}
+          <span class="text-error/80 font-mono">{ago(row.notified_at, @now)}</span>
+        </button>
+        <span :if={length(@rows) > 8} class="text-xs text-gray-400">
+          +{length(@rows) - 8}
+        </span>
+      </div>
+    </div>
+    """
+  end
+
+  attr :watchers, :map, required: true
+
+  @doc """
+  CHEWY PATCH: who is actually being polled for asset-safety triggers.
+
+  An empty board because nobody consented and an empty board because
+  nothing unanchored look identical, and only one of them is a bug the
+  reader can fix. `stalled` is the sync scheduler's own verdict after
+  five consecutive failures — which is what a revoked scope looks like.
+  """
+  def watcher_note(assigns) do
+    ~H"""
+    <span class="text-xs">
+      <span :if={@watchers.count == 0} class="text-warning">
+        no character is watching — nothing can ever appear here
+      </span>
+      <span :if={@watchers.count > 0} class="text-gray-400">
+        {plural(@watchers.count, "character", "characters")} watching
+      </span>
+      <span :if={@watchers.stalled > 0} class="text-error">
+        · {@watchers.stalled} stalled (consent revoked or token dead)
+      </span>
+    </span>
+    """
+  end
+
+  attr :row, :map, required: true
+  attr :armed_by, :map, required: true
+
+  @doc """
+  CHEWY PATCH: is this unanchoring hull's asset-safety trigger armed?
+
+  Armed means one of our characters has an item inside it, so EVE will
+  report the moment it finishes (`WandererApp.Scout.AssetSafety`). Not
+  armed means it will come out in silence and the first anyone hears of
+  it is a sweep flying past, possibly days later — so the unarmed state
+  is the LOUD one here, and it names an errand ("seed it") rather than a
+  status.
+
+  Who armed it is shown, because a name is how a reader tells a real
+  arming from an alt that has since moved its stuff.
+  """
+  def armed_cell(assigns) do
+    assigns = assign(assigns, :names, Map.get(assigns.armed_by, assigns.row.structure_id))
+
+    ~H"""
+    <span
+      :if={@names}
+      class="badge badge-sm border border-success/40 bg-success/15 text-success"
+      title={"Armed: #{Enum.join(@names, ", ")} has an item in this structure, so EVE will report the instant it comes out"}
+    >
+      armed
+    </span>
+    <span
+      :if={is_nil(@names)}
+      class="badge badge-sm border border-warning/50 bg-warning/15 text-warning"
+      title="Nothing of ours is inside: this hull will finish unanchoring in silence. Drop one item in it to arm the trigger."
+    >
+      seed it
+    </span>
+    """
+  end
+
+  attr :characters, :list, required: true
+  attr :character_eve_id, :string, default: nil
+  attr :status, :map, default: nil
+
+  @doc """
+  CHEWY PATCH: whose autopilot this page's `⤳` buttons write to.
+
+  A waypoint goes out with ONE character's token, so the page has to
+  name which — and it names the outcome too: the push lands in a game
+  client, which is invisible from here, so a button with no sentence
+  beside it is indistinguishable from a button that did nothing. That
+  was a real report on the planner (2026-10-05) and this is the same
+  fix, in the same words (`WandererAppWeb.ScoutWaypoint`).
+  """
+  def pilot_picker(assigns) do
+    ~H"""
+    <div class="flex items-center gap-2">
+      <form :if={@characters != []} phx-change="select_character">
+        <select
+          name="character_eve_id"
+          id="scout-pilot"
+          title="Whose autopilot the ⤳ buttons below write to, through ESI"
+          class="select select-sm select-bordered bg-neutral-950/60 py-0 max-w-[12rem]"
+        >
+          <option
+            :for={character <- @characters}
+            value={character.eve_id}
+            selected={character.eve_id == @character_eve_id}
+          >
+            {character.name}
+          </option>
+        </select>
+      </form>
+      <span :if={@characters == []} class="text-xs text-warning">
+        no character on this account — nothing to fly
+      </span>
+      <p
+        :if={@status}
+        class={[
+          "text-[11px] leading-snug max-w-[26rem]",
+          @status.level == :ok && "text-emerald-300",
+          @status.level == :warn && "text-amber-300",
+          @status.level == :error && "text-rose-300"
+        ]}
+        role="status"
+      >
+        {@status.text}
+      </p>
+    </div>
+    """
+  end
+
   attr :label, :string, required: true
   attr :value, :string, required: true
   attr :hint, :string, default: nil
@@ -819,6 +991,16 @@ defmodule WandererAppWeb.ScoutComponents do
   its own: every table on this page already has a System column and
   none of them has width to spare, and the region is context for the
   name above it, not something a reader scans down.
+
+  CHEWY PATCH: it also carries the `⤳` that sets this system as the
+  selected character's autopilot destination. Inside the system cell
+  rather than a column of its own, for the reason the region is on a
+  second line: there are fifteen tables on this page and not one of
+  them has width for another column — and a waypoint IS an action on a
+  system, so it belongs next to the system. The button is rendered
+  unconditionally; with no character picked the server answers "pick a
+  character" rather than the page hiding a control and leaving a reader
+  to guess the feature is missing.
   """
   def sys(assigns) do
     assigns =
@@ -837,6 +1019,16 @@ defmodule WandererAppWeb.ScoutComponents do
           title="Filter the whole page to this system"
         >
           {system(@row, @systems)}
+        </button>
+        <button
+          type="button"
+          phx-click="set_waypoint"
+          phx-value-id={@row.solar_system_id}
+          class="text-gray-600 hover:text-sky-300 leading-none"
+          title="Set as the selected character's autopilot destination"
+          aria-label="Set waypoint to this system"
+        >
+          ⤳
         </button>
         <span
           :if={@class_title}

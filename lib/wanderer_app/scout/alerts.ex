@@ -96,8 +96,21 @@ defmodule WandererApp.Scout.Alerts do
   end
 
   @doc """
-  How many structures are reported unanchored right now, capped at
-  `9` with a `true` flag meaning "more than that".
+  How many findings are worth interrupting a reader for right now,
+  capped at `9` with a `true` flag meaning "more than that".
+
+  Two sources, because both mean the same thing to a reader — a hull is
+  floating in space and nobody has taken it yet:
+
+    * structures reported `Unanchored` by a sweep, and
+    * `WandererApp.Scout.AssetSafety` triggers, which are the SAME event
+      observed earlier and from the other side: EVE itself saying a
+      decommission just completed, hours before any sweep flies through
+      that system. Counted only when `WANDERER_SCOUT_ASSET_SAFETY` is
+      on; the two can overlap (a sweep later confirms a hull a trigger
+      already reported) and the badge deliberately does not try to
+      de-duplicate across them — it is a "look at this page" signal, not
+      an inventory.
 
   Cached: see the moduledoc. Unfiltered on purpose — the badge is drawn
   from pages that have no scout filters at all.
@@ -120,9 +133,17 @@ defmodule WandererApp.Scout.Alerts do
   def invalidate, do: WandererApp.Cache.delete(@cache_key)
 
   defp count do
-    rows = unanchored(limit: @count_cap + 1)
-    capped? = length(rows) > @count_cap
+    found = length(unanchored(limit: @count_cap + 1)) + asset_safety_count()
+    capped? = found > @count_cap
 
-    {min(length(rows), @count_cap), capped?}
+    {min(found, @count_cap), capped?}
+  end
+
+  defp asset_safety_count do
+    if WandererApp.Env.scout_asset_safety_enabled?() do
+      WandererApp.Scout.AssetSafety.count(@count_cap + 1)
+    else
+      0
+    end
   end
 end

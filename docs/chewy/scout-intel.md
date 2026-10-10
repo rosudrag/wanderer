@@ -308,6 +308,41 @@ to `last_changed_at` — both upper bounds on the real start.
 
 [decom]: https://support.eveonline.com/hc/en-us/articles/208289335-Upwell-Structure-Deployment-and-Unanchoring
 
+## Flying to a row: the `⤳` button and the pilot picker
+
+Every board on this page is a list of places to go, and the step between
+reading one and flying it used to be: read the system name, alt-tab, type it
+into the game's own search, set destination. `ScoutComponents.sys/1` now
+carries a `⤳` that sets that system as the selected character's autopilot
+destination, and the page header carries the one control that says **which
+character** (`pilot_picker/1`).
+
+Four decisions:
+
+- **The button lives inside the system cell**, not in a column of its own.
+  There are fifteen tables on this page and none has width for another column
+  — and a waypoint is an action on a system, so it belongs beside the system.
+  One edit to `sys/1` gave every board the button, including spawns, with no
+  risk of a header and a body row disagreeing about column count.
+- **The pilot is picked once, in the header.** Repeating the control per board
+  is how two boards end up flying two different pilots. The selection is
+  validated against the user's OWN characters on every change: that id decides
+  whose in-game route gets rewritten and the `<select>` is user-writable.
+- **It reuses `WandererApp.Scout.PlanWaypoints`** as a one-stop plan, so it
+  inherits the three things the planner's `Set route` learned the hard way —
+  the preflight GET that refreshes an expired token, reading ESI's real answer
+  (204 is the only success `/ui/autopilot/waypoint` documents), and noticing
+  that EVE accepts a waypoint for a logged-out client and discards it.
+  `clear_other_waypoints` is true: "fly me there" replaces the route rather
+  than appending to yesterday's.
+- **The wording is shared, in `WandererAppWeb.ScoutWaypoint`.** The planner's
+  `push_status/3` and `esi_reason/1` moved there and both pages call it. A
+  second copy of those clauses would drift, and they ARE the feature: the push
+  lands in a game client, which is invisible from the browser, so a button
+  with no sentence beside it is indistinguishable from a button that did
+  nothing. That was the 2026-10-05 report, and this button would have
+  re-opened it.
+
 ## The unanchored alert
 
 `WandererApp.Scout.Alerts` owns it. One finding, four surfaces, because a
@@ -622,6 +657,59 @@ utility, so dimming the backdrop needs `!bg-black/70`; and `ScoutNav` used
 it — the sidebar carried the same glyph twice, and the entry never drew the
 orange active bar every upstream entry draws.
 
+### Triage: the Now board, soloing, and what an empty board costs
+
+Added in 1.103.4-chewy.92. The structures tab was eight tables stacked
+vertically — Unanchored, Live timers, Anchoring, Unanchoring, Abandoned, No
+fuel, Archived, the ingest log — and six of them share the same column set,
+differing only in the leading time column. The boards themselves are right
+(splitting No fuel out of Abandoned fixed a real reading problem); the
+**stack** was not, and it cost in three ways at once.
+
+**An empty board used to cost a fifth of a screen.** A header, a seven-column
+`<thead>` and a padded "Nothing anchoring right now." row, six times over on
+a quiet evening, which pushed the one board that DID have rows below the
+fold. `panel/1` now takes `empty` and `empty_text`: with no rows it collapses
+to a single muted header line carrying the sentence, and renders no table at
+all. The distinction between "this board is empty" and "this board is not on
+the page" stays explicit — that is why the sentence survives rather than the
+board disappearing.
+
+**The summary strip is now the board index.** It already carried exactly the
+seven counts a reader would click; it just was not clickable, so reaching
+Abandoned from the card reading `Abandoned 4` meant scrolling past four other
+tables. A `stat/1` with `board` set renders as a button: clicking solos that
+board, clicking the active one restores them all, and the toolbar grows an
+`Only <board> ✕` chip so a soloed page is never a mode with no way out. It is
+a render-time filter and nothing else — no read runs, and it is deliberately
+NOT persisted, because soloing a board is what a reader does for the next
+thirty seconds, not a preference.
+
+**`Now` is the one board that is not a read.** Everything else reports state,
+one status family per board, each on its own clock; none of them answered the
+question a scout opens the page with, which is "what do I undock for in the
+next hour" — that answer was spread across three tables, two of which are
+usually empty and therefore several screens down. `ScoutIntelLive.now_rows/1`
+folds the three time-critical families out of rows the socket ALREADY holds:
+every unanchored hull (no deadline of its own — it is loot for as long as
+nobody else finds it, so it sorts first), every running timer inside 6h, and
+every unanchoring run whose predicted bound is inside 48h (a wider horizon
+because by the time that bound is inside six hours the hull may already be
+gone). Ten rows, deadline order, each badged with its family. No query, so it
+can never disagree with the boards below — and every row it shows is still on
+its own board, deliberately: it is a lead, not a replacement. It is assigned
+in `load/1` and recomputed on the 30s tick rather than called from the
+template, which cannot bind an intermediate value.
+
+**The toolbar sticks.** `/scout`'s scroll container is the page's own
+`<main class="overflow-auto">`; by the time a reader reached Abandoned the
+window selector, the search box and the space chips were all off-screen, so
+narrowing meant scrolling back up and losing the row being read. Sticky needs
+an opaque background — the resting `bg-neutral-900/30` let table rows show
+through — and no `overflow-hidden` between `scout_toolbar/1` and `<main>`,
+which is why it is a direct child of it on both the intel page and the
+planner.
+
 ### The filters are sticky, and they are PER CATEGORY
 
 Window, search, system chip and space selection survive a reload, a new tab
@@ -772,6 +860,153 @@ TTL. The 5-minute TTL is only a backstop for a write that bypassed the
 module. The page's own `mount/3` calls the **uncached** `can_view?/1`: a
 stale cache may cost a wrong icon, never a wrong page.
 
+## The asset-safety trigger: EVE telling us a hull came loose
+
+Everything else on this page is a sweep reporting what it SAW. This one is
+EVE reporting what HAPPENED, at the instant it happened.
+
+The mechanic is a deliberate act, not a passive feed. Put **one item** into a
+structure that is unanchoring. When the decommission completes, EVE moves that
+item to asset safety and notifies the item's owner —
+`StructureItemsMovedToSafety`, naming `structureID` and `solarSystemID`. The
+hull is floating, unanchored and scoopable at exactly that moment, and nothing
+else this app has can say so: `WandererApp.Scout.Unanchor` only derives a
+**7-day upper bound** from the first sweep that saw the run, and the absence
+pipeline only notices the hull is gone on the next sweep through that system,
+which may be a day later. Seeding a structure converts "sometime in the next
+week" into "now".
+
+Gated on `WANDERER_SCOUT_ASSET_SAFETY`, independent of every other scout flag.
+
+### The scope is the whole opt-in, and it can only be granted at login
+
+`GET /characters/{id}/notifications/` needs `esi-characters.read_notifications.v1`,
+and **EVE SSO only grants what was requested**: a refresh never widens an
+existing token. So every character has to log in once after the flag goes on.
+`/scout`'s **Watch notifications** button does exactly that — it mints the
+short-lived invite token `/auth/eve` demands on an invite-only deployment (a
+plain link there is dead; same trap `CorpManagementLive` documents) and sends
+the browser to SSO.
+
+With the flag off, `config/runtime.exs` appends nothing and all four scope
+strings are byte-identical to upstream's.
+
+`WandererApp.Scout.AssetSafety.watching_characters/0` is a **filter, not a
+try-and-see**: it polls only characters whose stored `scopes` column actually
+carries the scope. Polling everyone would 403 for every pre-existing character
+on the deployment, every ten minutes, against ESI's error budget. One trap
+found doing this: `access_token` is **AshCloak-encrypted at rest**, so a SQL
+predicate on it matches nothing and takes the whole read with it — the filter
+is on `scopes` alone, and a dead token surfaces as the feed's own `:stalled`.
+
+### It rides the Phase 2 sync framework
+
+`WandererApp.Sync.Feeds.AssetSafetyFeed` is one scope **per character** (the
+corp roster feed is one per corp, because a director token answers for a whole
+corp; this notification is delivered to an individual pilot and nothing can
+read it for them). Each character therefore gets its own `sync_runs_v1` row,
+its own ETag, its own backoff and its own `:stalled` verdict — which is the
+granularity a revoked consent needs. Cadence is **600s**, the endpoint's own
+ESI cache.
+
+### Two wire traps, both load-bearing
+
+The notification body is flat YAML and is parsed **line-wise** — this app has
+no YAML dependency and a notification is not worth one. Only scalar
+`key: value` lines are read, list items (`- showinfo`) are dropped, and the
+split is on the FIRST colon so `structureLink`'s HTML survives intact.
+
+1. **Keys are matched case-insensitively.** Published field lists disagree
+   about case (`StructureID` in the Go bindings' struct names, `structureID`
+   on the wire), and a trigger that silently stops firing because CCP changed
+   a capital is the worst failure this feature has.
+2. **The in-body timestamps are Windows FILETIME** — 100-nanosecond intervals
+   since **1601-01-01**, not unix seconds and *not* the .NET year-1 ticks the
+   field is usually mislabelled with. Read the year-1 way, a real value lands
+   in the year 423 and the whole row is discarded. (The notification's own
+   `timestamp` field is ordinary ISO8601; only the asset-safety deadlines are
+   ticks.) `to_datetime/1` accepts either form by magnitude and refuses
+   anything outside 2003..2100.
+
+### Half the feature is knowing which hulls are NOT armed
+
+The trigger only fires for a structure somebody put an item into. So an
+unseeded hull finishes unanchoring in **silence**, and on every other board it
+looks exactly like one that will report the instant it pops. That is a
+watchlist lying by omission, and it is the one failure a reader cannot find by
+looking harder.
+
+So the Unanchoring board carries a **Trigger** column (`armed` / `seed it`,
+`ScoutComponents.armed_cell/1`) and there is a **Needs seeding** board —
+the same rows, the same 7-day predicted bound, minus the ones already armed —
+with its own summary card and its own Discord paste (`📥 Unanchoring, nothing
+seeded`), because it is an errand list, not a finding.
+
+"Armed" is **read from ESI, never ticked by hand**:
+`GET /characters/{id}/assets/` reports an item's `location_id`, and an item
+inside an Upwell structure carries that structure's id, so armed is the join
+`location_id == structure_id` against `WandererApp.Api.ScoutAssetLocation`.
+A checkbox would be wrong the day somebody hauls the item back out, and nobody
+would ever notice. For the same reason the table is **latest-wins with
+deletes**: `WandererApp.Sync.Feeds.AssetLocationsFeed` destroys every row a
+poll did not see.
+
+Four things about that feed:
+
+- It stores an **id, not an inventory** — no type, no quantity, no flag. It is
+  a membership set, and keeping anyone's hangar contents would be a privacy
+  cost with no reader. Ids below 10^12 (NPC stations, solar systems) are
+  dropped; above it the set also holds ships and containers, which is harmless
+  because lookups are always keyed on a `structure_id` the sweep reported and
+  EVE item ids are globally unique.
+- **Paging is the implementation.** ESI serves 1000 assets per page, so it
+  walks until a page comes back short, capped at 20 pages and logged when it
+  hits that. The ETag is threaded on page 1 only: an untouched hangar costs one
+  conditional request instead of a full walk.
+- Cadence 3600s, the endpoint's own cache.
+- **It shares `WANDERER_SCOUT_ASSET_SAFETY` with the notification feed, and
+  one consent.** The scope string carries both
+  `esi-characters.read_notifications.v1` and `esi-assets.read_assets.v1`,
+  because shipping the trigger without the arming check is the omission above.
+
+What it gets wrong, and in which direction: a hull seeded by a character this
+app does not track reads as **not armed**. The cost is dropping a second item.
+The opposite error — claiming armed when nothing will ever report — is the
+failure this exists to remove, so the bias is deliberate. `armed_cell/1` names
+who armed it, which is how a reader tells a real arming from a stale one.
+
+### How it renders
+
+A banner on **both** tabs, above the unanchored one, plus its own board and
+its own summary card on the structures tab, and its own Discord board
+(`💣 Asset safety fired`, first in the digest). Horizon is 7 days — `Alerts`'
+horizon, not the window selector — and the sidebar badge counts these next to
+unanchored hulls, because to a reader they mean the same thing.
+
+Four deliberate shapes:
+
+- **It is not folded into `Now`.** These rows are an event, not a structure's
+  current state: no `last_confirmed_at`, no `presence`, no `status` to put in
+  that table's columns.
+- **It can report a structure no sweep has ever visited**, which is why a row
+  may show a bare `structure_id` where every other board shows a name.
+  `structure_name`/`group_name`/`owner_name`/`nearest_celestial` are copied off
+  the matching `ScoutStructure` row at ingest when there is one, and
+  `group_name` otherwise falls back to the structure TYPE name; they are a
+  snapshot, never refreshed.
+- **Two characters' notifications about one hull are one finding.** Reads fold
+  `DISTINCT ON (structure_id)`, the same trick the spawns tab uses; writes are
+  idempotent on `notification_id`, because ESI re-serves the same ~50
+  notifications on every poll forever.
+- **There is no archive button.** It is a single historical fact inside a
+  7-day horizon on a board that is a handful of rows a week by construction,
+  so it ages off on its own; archive machinery exists for rows that keep
+  re-asserting themselves.
+
+The board says **who is watching** underneath itself (`watcher_note/1`): an
+empty board because nobody consented and an empty board because nothing
+unanchored look identical, and only one of them is a bug the reader can fix.
+
 ## Files
 
 |What|Where|
@@ -789,7 +1024,14 @@ stale cache may cost a wrong icon, never a wrong page.
 |Pages (shell + access)|`lib/wanderer_app_web/live/scout/scout_{intel,access}_live.ex`|
 |Planner, as a nested child of the shell|`lib/wanderer_app_web/live/scout/scout_planner_live.ex`|
 |Page shell (header, tab strip, toolbar, pane), panels, cells, formatters|`lib/wanderer_app_web/components/scout_components.ex`|
+|Asset-safety trigger (parse, reads, watchers)|`lib/wanderer_app/scout/asset_safety.ex`|
+|Asset-safety notification feed|`lib/wanderer_app/sync/feeds/asset_safety_feed.ex`|
+|Asset-safety resource|`lib/wanderer_app/api/scout_asset_safety.ex`|
+|Armed check (ESI assets join)|`lib/wanderer_app/scout/seeding.ex`|
+|Asset locations feed|`lib/wanderer_app/sync/feeds/asset_locations_feed.ex`|
+|Asset location resource|`lib/wanderer_app/api/scout_asset_location.ex`|
 |Discord message format|`lib/wanderer_app_web/components/scout_discord.ex`|
+|Waypoint push wording (shared with the planner)|`lib/wanderer_app_web/scout_waypoint.ex`|
 |Sidebar entry|`lib/wanderer_app_web/components/scout_nav.ex`|
 |Tests|`test/integration/scout_intel_test.exs`, `test/integration/scout_{intel,planner}_live_test.exs`|
 

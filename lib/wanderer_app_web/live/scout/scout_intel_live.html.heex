@@ -34,11 +34,42 @@
         Copy for Discord
       </button>
       <button phx-click="refresh" class="btn btn-sm btn-ghost">Refresh</button>
+      <%!-- CHEWY PATCH: the asset-safety opt-in. One EVE SSO round trip
+            per character; the scope cannot be added to a token that
+            already exists. See the handler for the invite-gate trap. --%>
+      <button
+        :if={asset_safety_enabled?()}
+        phx-click="request_notification_access"
+        class="btn btn-sm btn-ghost"
+        title="Log in one character so EVE's asset-safety notifications reach this page. Read-only, and only that one scope is added."
+      >
+        Watch notifications
+      </button>
+      <%!-- CHEWY PATCH: whose autopilot every ⤳ below writes to. In the
+            header rather than per board, because it is one choice for
+            the whole page and repeating it is how two boards end up
+            flying two different pilots. --%>
+      <.pilot_picker
+        characters={@characters}
+        character_eve_id={@character_eve_id}
+        status={@waypoint_status}
+      />
       <.link :if={@can_manage_access?} navigate={~p"/scout/access"} class="btn btn-sm">
         Manage access
       </.link>
     </:actions>
   </.scout_header>
+
+  <%!-- CHEWY PATCH: above the unanchored bar on purpose — this one is
+        EVE saying a decommission COMPLETED at a known instant, not a
+        sweep reporting what it happened to fly past. --%>
+  <.asset_safety_alert
+    :if={@tab != :planner and asset_safety_enabled?()}
+    rows={@asset_safety_events}
+    systems={@systems}
+    now={@now}
+    horizon_days={asset_safety_horizon_days()}
+  />
 
   <.unanchored_alert
     :if={@tab != :planner}
@@ -107,35 +138,82 @@
     >
       All space ✕
     </button>
+
+    <%!-- CHEWY PATCH: a soloed board is a mode, and a mode with no way
+          out reads as a broken page. The card stays ring-highlighted
+          and clicking it again restores the rest; this is the second
+          way, next to every other filter's. --%>
+    <button
+      :if={@board}
+      phx-click="clear_board"
+      id="scout-board-reset"
+      class="btn btn-sm btn-outline gap-1"
+      title="Show every board again"
+    >
+      Only {@board} ✕
+    </button>
   </.scout_toolbar>
 
-  <div :if={@tab == :structures} class="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3 mb-5">
+  <div :if={@tab == :structures} class="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-3 mb-5">
+    <.stat
+      :if={asset_safety_enabled?()}
+      id="scout-stat-asset-safety"
+      label="Asset safety"
+      board="asset_safety"
+      active={@board == "asset_safety"}
+      value={to_string(length(@asset_safety_events))}
+      hint={"last #{asset_safety_horizon_days()}d"}
+      tone={if @asset_safety_events != [], do: :urgent, else: :neutral}
+    />
+    <.stat
+      :if={asset_safety_enabled?()}
+      id="scout-stat-unarmed"
+      label="Needs seeding"
+      board="unarmed"
+      active={@board == "unarmed"}
+      value={to_string(length(@unarmed_structures))}
+      hint="no item inside"
+      tone={if @unarmed_structures != [], do: :warn, else: :good}
+    />
     <.stat
       id="scout-stat-unanchored"
       label="Unanchored"
+      board="unanchored"
+      active={@board == "unanchored"}
       value={to_string(length(@unanchored_structures))}
       hint={"last #{unanchored_horizon_days()}d"}
       tone={if @unanchored_structures != [], do: :urgent, else: :neutral}
     />
     <.stat
+      id="scout-stat-timers"
       label="Timers running"
+      board="timers"
+      active={@board == "timers"}
       value={to_string(length(@active_timers))}
       hint={timer_hint(@active_timers, @now)}
       tone={if urgent_timers(@active_timers, @now) > 0, do: :urgent, else: :neutral}
     />
     <.stat
+      id="scout-stat-anchoring"
       label="Anchoring"
+      board="anchoring"
+      active={@board == "anchoring"}
       value={to_string(length(@anchoring_structures))}
       tone={if @anchoring_structures != [], do: :warn, else: :neutral}
     />
     <.stat
+      id="scout-stat-unanchoring"
       label="Unanchoring"
+      board="unanchoring"
+      active={@board == "unanchoring"}
       value={to_string(length(@unanchoring_structures))}
       tone={if @unanchoring_structures != [], do: :warn, else: :neutral}
     />
     <.stat
       id="scout-stat-abandoned"
       label="Abandoned"
+      board="abandoned"
+      active={@board == "abandoned"}
       value={to_string(length(@abandoned_structures))}
       hint="asset safety off"
       tone={if @abandoned_structures != [], do: :good, else: :neutral}
@@ -143,12 +221,17 @@
     <.stat
       id="scout-stat-no-fuel"
       label="No fuel"
+      board="no_fuel"
+      active={@board == "no_fuel"}
       value={to_string(length(@no_fuel_structures))}
       hint="low power"
       tone={if @no_fuel_structures != [], do: :good, else: :neutral}
     />
     <.stat
+      id="scout-stat-log"
       label="Structures seen"
+      board="log"
+      active={@board == "log"}
       value={count_label(@structures, @more?)}
       hint={window_label(@days, @windows)}
     />
@@ -170,13 +253,148 @@
   </div>
 
   <div :if={@tab == :structures}>
+    <%!-- CHEWY PATCH: the asset-safety trigger board, above Now.
+
+          Every other board on this page reports what a sweep SAW. This
+          one reports what EVE SAID: a `StructureItemsMovedToSafety`
+          notification fires the instant a decommission completes, which
+          is the instant the hull becomes loose. It is therefore the
+          earliest and most precise lead on the page, and it is the only
+          one that can report a structure no sweep has ever visited --
+          which is why rows here may carry an id where every other board
+          carries a name.
+
+          Deliberately NOT folded into `now_rows/1`: these rows are a
+          different shape (an event, not a structure's current state)
+          and have no `last_confirmed_at`, `status` or presence to
+          render in that table's columns. --%>
     <.panel
+      :if={asset_safety_enabled?() and show_board?(@board, "asset_safety")}
+      id="scout-asset-safety"
+      title="Asset safety fired"
+      count={length(@asset_safety_events)}
+      tone={:urgent}
+      class={@asset_safety_events != [] && "border-error/60 bg-error/5"}
+      hint={"EVE told one of our characters its items left a structure — that structure finished unanchoring and is loose right now. Last #{asset_safety_horizon_days()}d, not the window selector."}
+      copy="asset_safety"
+      empty={@asset_safety_events == []}
+      empty_text="nothing has finished unanchoring on us"
+    >
+      <.grid id="scout-asset-safety-table">
+        <thead>
+          <tr>
+            <th class="w-32">Fired</th>
+            <th>Structure</th>
+            <th>System</th>
+            <th>Owner</th>
+            <th>Where</th>
+            <th class="w-40">Reported by</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={row <- @asset_safety_events} id={"scout-asset-safety-#{row.id}"}>
+            <td><.seen at={row.notified_at} now={@now} tone={true} /></td>
+            <td>
+              <span class="font-medium text-gray-100">
+                {row.structure_name || to_string(row.structure_id)}
+              </span>
+              <span :if={row.group_name} class="ml-1 badge badge-sm border-neutral-700">
+                {row.group_name}
+              </span>
+            </td>
+            <td><.sys row={row} systems={@systems} /></td>
+            <td class="text-gray-300">{row.owner_name || "—"}</td>
+            <td class="text-xs text-gray-400">{where(row)}</td>
+            <td class="text-xs text-gray-400">{row.character_name || "—"}</td>
+          </tr>
+        </tbody>
+      </.grid>
+    </.panel>
+
+    <div
+      :if={asset_safety_enabled?() and show_board?(@board, "asset_safety")}
+      class="-mt-3 mb-5 flex items-center gap-2"
+    >
+      <.watcher_note watchers={@asset_safety_watchers} />
+      <button
+        :if={@asset_safety_watchers.count == 0}
+        phx-click="request_notification_access"
+        class="btn btn-xs btn-outline btn-warning"
+      >
+        Watch notifications
+      </button>
+    </div>
+    <%!-- CHEWY PATCH: the lead. Not a read -- `now_rows/1` folds the
+          three time-critical families out of rows this socket already
+          holds, so it costs nothing and can never disagree with the
+          boards below, where every one of these rows also appears. --%>
+    <.panel
+      :if={show_board?(@board, "now")}
+      id="scout-now"
+      title="Now"
+      count={length(@now_board)}
+      tone={:urgent}
+      class={@now_board != [] && "border-error/60 bg-error/5"}
+      hint={"unanchored, plus every deadline inside the #{now_horizon_label()} — all of it is on a board below too"}
+      empty={@now_board == []}
+      empty_text={"nothing to undock for in the #{now_horizon_label()}"}
+    >
+      <.grid id="scout-now-table">
+        <thead>
+          <tr>
+            <th class="w-28">When</th>
+            <th class="w-28">What</th>
+            <th>Structure</th>
+            <th>System</th>
+            <th>Owner</th>
+            <th>Status</th>
+            <th class="w-32">Seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={entry <- @now_board} id={"scout-now-#{entry.kind}-#{entry.row.id}"}>
+            <td>
+              <span :if={entry.kind == :unanchored} class="text-error font-semibold text-xs">
+                sitting there
+              </span>
+              <.countdown_cell :if={entry.kind == :timer} expires_at={entry.at} now={@now} />
+              <.predicted_out_cell :if={entry.kind == :unanchoring} row={entry.row} now={@now} />
+            </td>
+            <td>
+              <span class={[
+                "badge badge-sm border whitespace-nowrap",
+                now_kind_class(entry.kind)
+              ]}>
+                {now_kind_label(entry.kind)}
+              </span>
+            </td>
+            <td>
+              <.subject
+                name={entry.row.structure_name || to_string(entry.row.structure_id)}
+                badge={entry.row.group_name}
+                click="show_structure"
+                phx-value-id={entry.row.structure_id}
+              />
+            </td>
+            <td><.sys row={entry.row} systems={@systems} /></td>
+            <td class="text-gray-300">{entry.row.owner_name || "—"}</td>
+            <td><.status status={entry.row.status} vulnerable={entry.row.vulnerable} /></td>
+            <td><.seen at={entry.row.last_confirmed_at} now={@now} /></td>
+          </tr>
+        </tbody>
+      </.grid>
+    </.panel>
+
+    <.panel
+      :if={show_board?(@board, "unanchored")}
       title="Unanchored"
       count={length(@unanchored_structures)}
       tone={:urgent}
       class="border-error/60 bg-error/5"
       hint={"last #{unanchored_horizon_days()} days, not the window"}
       copy="unanchored"
+      empty={@unanchored_structures == []}
+      empty_text="nothing is sitting unanchored"
     >
       <.grid id="scout-unanchored">
         <thead>
@@ -207,19 +425,19 @@
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
             <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@unanchored_structures == []} cols={7}>
-            Nothing is sitting unanchored.
-          </.empty>
         </tbody>
       </.grid>
     </.panel>
 
     <.panel
+      :if={show_board?(@board, "timers")}
       title="Live timers"
       count={length(@active_timers)}
       tone={if urgent_timers(@active_timers, @now) > 0, do: :urgent, else: :neutral}
       hint="ignores the window"
       copy="timers"
+      empty={@active_timers == []}
+      empty_text="no structure timer is running"
     >
       <.grid id="scout-active-timers">
         <thead>
@@ -251,17 +469,19 @@
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
             <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@active_timers == []} cols={7}>No structure timer is running.</.empty>
         </tbody>
       </.grid>
     </.panel>
 
     <.panel
+      :if={show_board?(@board, "anchoring")}
       title="Anchoring"
       count={length(@anchoring_structures)}
       tone={if @anchoring_structures != [], do: :warn, else: :neutral}
       hint="the anchoring clock the client reports; the window opens when it hits zero"
       copy="anchoring"
+      empty={@anchoring_structures == []}
+      empty_text="nothing anchoring right now"
     >
       <.grid id="scout-anchoring">
         <thead>
@@ -294,19 +514,81 @@
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
             <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@anchoring_structures == []} cols={8}>
-            Nothing anchoring right now.
-          </.empty>
         </tbody>
       </.grid>
     </.panel>
 
+
+    <%!-- CHEWY PATCH: the errand the Unanchoring board cannot express.
+
+          The asset-safety trigger only fires for a structure we put
+          something into, so an unseeded hull finishes unanchoring in
+          SILENCE and looks identical, on every other board, to one that
+          will report the instant it pops. This is that difference,
+          rendered as the thing to go and do. "Armed" is read from ESI
+          assets (`location_id == structure_id`), never from a checkbox:
+          a checkbox is wrong the day somebody hauls the item back out
+          and nobody notices. --%>
     <.panel
+      :if={asset_safety_enabled?() and show_board?(@board, "unarmed")}
+      id="scout-unarmed"
+      title="Needs seeding"
+      count={length(@unarmed_structures)}
+      tone={if @unarmed_structures != [], do: :warn, else: :neutral}
+      hint="unanchoring, with nothing of ours inside — drop one item in each and EVE will tell us the moment it comes out"
+      copy="unarmed"
+      empty={@unarmed_structures == []}
+      empty_text="every unanchoring structure we can see is armed"
+    >
+      <.grid id="scout-unarmed-table">
+        <thead>
+          <tr>
+            <th class="w-36">Predicted max out</th>
+            <th>Structure</th>
+            <th>System</th>
+            <th>Owner</th>
+            <th>Where</th>
+            <th class="w-32">Seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={row <- @unarmed_structures} id={"scout-unarmed-#{row.id}"}>
+            <td><.predicted_out_cell row={row} now={@now} /></td>
+            <td>
+              <.subject
+                name={row.structure_name || to_string(row.structure_id)}
+                badge={row.group_name}
+                click="show_structure"
+                phx-value-id={row.structure_id}
+              />
+            </td>
+            <td><.sys row={row} systems={@systems} /></td>
+            <td class="text-gray-300">{row.owner_name || "—"}</td>
+            <td class="text-xs text-gray-400">{where(row)}</td>
+            <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+          </tr>
+        </tbody>
+      </.grid>
+    </.panel>
+
+    <%!-- Same note as the trigger board: with nobody consented, "armed"
+          is unknowable and every hull reads as needing an item. --%>
+    <div
+      :if={asset_safety_enabled?() and show_board?(@board, "unarmed")}
+      class="-mt-3 mb-5 flex items-center gap-2"
+    >
+      <.watcher_note watchers={@asset_safety_watchers} />
+    </div>
+
+    <.panel
+      :if={show_board?(@board, "unanchoring")}
       title="Unanchoring"
       count={length(@unanchoring_structures)}
       tone={if @unanchoring_structures != [], do: :warn, else: :neutral}
       hint="a decommission reports no timer; the deadline is the fixed 7-day window from the first sweep that saw it"
       copy="unanchoring"
+      empty={@unanchoring_structures == []}
+      empty_text="nothing unanchoring right now"
     >
       <.grid id="scout-unanchoring">
         <thead>
@@ -316,6 +598,7 @@
             <th>System</th>
             <th>Owner</th>
             <th>Status</th>
+            <th :if={asset_safety_enabled?()} class="w-24">Trigger</th>
             <th>Where</th>
             <th class="w-32">Seen</th>
             <th class="w-10"></th>
@@ -335,23 +618,26 @@
             <td><.sys row={row} systems={@systems} /></td>
             <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            <td :if={asset_safety_enabled?()}>
+              <.armed_cell row={row} armed_by={@armed_by} />
+            </td>
             <td class="text-xs text-gray-400">{where(row)}</td>
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
             <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@unanchoring_structures == []} cols={8}>
-            Nothing unanchoring right now.
-          </.empty>
         </tbody>
       </.grid>
     </.panel>
 
     <.panel
+      :if={show_board?(@board, "abandoned")}
       title="Abandoned"
       count={length(@abandoned_structures)}
       tone={if @abandoned_structures != [], do: :good, else: :neutral}
       hint="asset safety off — everything inside drops"
       copy="abandoned"
+      empty={@abandoned_structures == []}
+      empty_text="nothing abandoned in this window"
     >
       <.grid id="scout-abandoned">
         <thead>
@@ -382,9 +668,6 @@
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
             <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@abandoned_structures == []} cols={7}>
-            Nothing abandoned in this window.
-          </.empty>
         </tbody>
       </.grid>
     </.panel>
@@ -396,11 +679,14 @@
           back. One table meant reading the status column row by row to
           tell which was which. --%>
     <.panel
+      :if={show_board?(@board, "no_fuel")}
       title="No fuel"
       count={length(@no_fuel_structures)}
       tone={if @no_fuel_structures != [], do: :good, else: :neutral}
       hint="low power — no tether, no services"
       copy="no_fuel"
+      empty={@no_fuel_structures == []}
+      empty_text="nothing unfuelled in this window"
     >
       <.grid id="scout-no-fuel">
         <thead>
@@ -431,9 +717,6 @@
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
             <td><.archive_cell row={row} /></td>
           </tr>
-          <.empty :if={@no_fuel_structures == []} cols={7}>
-            Nothing unfuelled in this window.
-          </.empty>
         </tbody>
       </.grid>
     </.panel>
@@ -443,7 +726,7 @@
           bounded by the window selector -- an archive that aged out of
           the window would be unrecoverable from this page. --%>
     <.panel
-      :if={@archived_structures != []}
+      :if={show_board?(@board, "archived") and @archived_structures != []}
       title="Archived"
       count={length(@archived_structures)}
       hint="hidden from the boards until the feed reports a change; ignores the window"
@@ -487,6 +770,7 @@
     </.panel>
 
     <.log_panel
+      :if={show_board?(@board, "log")}
       id="scout-structure-log"
       title="Ingest log · structures"
       count={count_label(@structures, @more?)}
@@ -649,7 +933,12 @@
     </.log_panel>
   </div>
 
-  <div :if={@more?} class="flex items-center gap-3 mb-6" id="scout-more">
+  <%!-- It pages the ingest log and nothing else, so it follows it. --%>
+  <div
+    :if={@more? and show_board?(@board, "log")}
+    class="flex items-center gap-3 mb-6"
+    id="scout-more"
+  >
     <button phx-click="load_more" class="btn btn-sm">Load more</button>
     <span class="text-xs text-gray-500">first {@limit} rows</span>
   </div>

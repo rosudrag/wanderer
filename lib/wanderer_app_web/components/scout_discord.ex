@@ -52,7 +52,14 @@ defmodule WandererAppWeb.ScoutDiscord do
   # valuable finding first, then the things with a clock, then the
   # standing opportunities. Same order as the page.
   @digest_boards [
+    # CHEWY PATCH: first, because it is the only finding on the page with
+    # a known instant attached -- EVE said this hull came out of the
+    # ground at this timestamp, rather than a sweep saying it saw one.
+    :asset_safety,
     :unanchored,
+    # CHEWY PATCH: the errand, not the finding -- "go put one item in
+    # each of these or we will never hear when they pop".
+    :unarmed,
     :timers,
     :anchoring,
     :unanchoring,
@@ -251,6 +258,20 @@ defmodule WandererAppWeb.ScoutDiscord do
     "• " <> bound <> " · " <> subject(row) <> " · " <> place(row, opts) <> owner(row)
   end
 
+  # Same bound as `:unanchoring` — this IS that board, minus the hulls
+  # somebody has already dropped an item into.
+  defp line(:unarmed, row, opts), do: line(:unanchoring, row, opts)
+
+  # CHEWY PATCH: the one board whose timestamp is an EVENT, not an
+  # observation — EVE's own "asset safety fired" instant. Relative only:
+  # what a reader does with it is "20 minutes ago, go now" / "two days
+  # ago, forget it", and the absolute form costs budget to say the same.
+  defp line(:asset_safety, row, opts) do
+    "• " <>
+      stamp(row.notified_at, "R") <>
+      " · " <> subject(row) <> " · " <> place(row, opts) <> owner(row) <> reporter(row)
+  end
+
   # No "seen N ago" on either of these: the boards only ever carry
   # structures the feed is still confirming (`presence == :seen`), so the
   # stamp said "a few minutes ago" on every row and cost a line's worth
@@ -317,6 +338,13 @@ defmodule WandererAppWeb.ScoutDiscord do
 
   defp location(_row), do: ""
 
+  # Who got the notification: the pilot who seeded the structure, and so
+  # the one person in the channel who knows what was in it.
+  defp reporter(%{character_name: name}) when is_binary(name) and name != "",
+    do: " · via " <> escape(name)
+
+  defp reporter(_row), do: ""
+
   defp value(%{isk_value: nil}), do: ""
   defp value(%{isk_value: value}), do: " · " <> isk(value)
   defp value(_row), do: ""
@@ -329,6 +357,8 @@ defmodule WandererAppWeb.ScoutDiscord do
 
   defp header(board, count), do: "**#{label(board)} · #{count}**"
 
+  defp label(:asset_safety), do: "💣 Asset safety fired"
+  defp label(:unarmed), do: "📥 Unanchoring, nothing seeded"
   defp label(:unanchored), do: "🚨 Unanchored"
   defp label(:timers), do: "⏳ Timers running"
   defp label(:anchoring), do: "🔧 Anchoring"
