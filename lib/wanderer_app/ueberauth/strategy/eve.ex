@@ -31,10 +31,10 @@ defmodule WandererApp.Ueberauth.Strategy.Eve do
       true ->
         scopes =
           cond do
-            is_admin? -> option(conn, :admin_scope) || params["scope"]
-            is_director? -> option(conn, :director_scope) || params["scope"]
-            with_wallet -> option(conn, :wallet_scope) || params["scope"]
-            true -> option(conn, :default_scope) || params["scope"]
+            is_admin? -> scope_option(conn, :admin_scope)
+            is_director? -> scope_option(conn, :director_scope)
+            with_wallet -> scope_option(conn, :wallet_scope)
+            true -> scope_option(conn, :default_scope)
           end
 
         params =
@@ -223,6 +223,32 @@ defmodule WandererApp.Ueberauth.Strategy.Eve do
       {_, nil} -> base_options
       {id, secret} -> [client_id: id, client_secret: secret] ++ base_options
     end
+  end
+
+  # CHEWY PATCH: which scope string this login actually asks EVE for.
+  #
+  # `option/2` below reads `conn.private[:ueberauth_request_options]`,
+  # which `Ueberauth.init/1` built -- and `plug Ueberauth` in
+  # `auth_controller.ex` runs that at COMPILE time in prod
+  # (`:plug_init_mode, :runtime` is set in config/dev.exs and
+  # config/test.exs only). So in a release the provider options are
+  # frozen from `config/config.exs` at image build, and everything
+  # `config/runtime.exs` says about scopes is dead.
+  #
+  # That is not a theoretical gap: three characters were re-authorised
+  # on the live deployment after WANDERER_SCOUT_ASSET_SAFETY went on and
+  # came back with the same five scopes they already had, because EVE
+  # was never asked for the new ones. `director_scope` has the same
+  # shape and had never reached a release either -- it exists only in
+  # runtime.exs.
+  #
+  # So read the RUNNING config first and fall back to the compiled
+  # options. `WandererApp.Character.Scopes` reads the same place, which
+  # is what makes "this character is missing a scope" on /characters and
+  # "this is what we ask for" at login the same sentence -- they
+  # silently disagreed before, and that disagreement is the bug.
+  defp scope_option(conn, key) do
+    WandererApp.Character.Scopes.configured(key) || option(conn, key)
   end
 
   defp option(conn, key) do

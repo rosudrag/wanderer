@@ -58,16 +58,32 @@ defmodule WandererApp.Character.Scopes do
   this module inert rather than noisy on a half-configured instance.
   """
   @spec required() :: [String.t()]
-  def required do
+  def required, do: configured(:default_scope) |> split()
+
+  @doc """
+  One tier's scope string from the RUNNING ueberauth config, or `nil`.
+
+  `WandererApp.Ueberauth.Strategy.Eve` asks this before falling back to
+  its compiled options, because `plug Ueberauth` runs `Ueberauth.init/1`
+  at COMPILE time in a release — so a release's provider options are
+  frozen from `config/config.exs` at image build and everything
+  `config/runtime.exs` says about scopes never reaches the login. Three
+  live characters were re-authorised into exactly the same five scopes
+  they already had before this was found.
+
+  Both the login request and this page's "what is missing" answer read
+  through here, so they cannot disagree.
+  """
+  @spec configured(atom()) :: String.t() | nil
+  def configured(key) do
     :ueberauth
     |> Application.get_env(Ueberauth, [])
     |> Keyword.get(:providers, [])
     |> Keyword.get(:eve)
     |> case do
-      {_strategy, opts} -> Keyword.get(opts, :default_scope, "")
-      _not_configured -> ""
+      {_strategy, opts} -> Keyword.get(opts, key)
+      _not_configured -> nil
     end
-    |> split()
   end
 
   @doc "The scopes a character actually holds."
