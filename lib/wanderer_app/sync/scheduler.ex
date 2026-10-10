@@ -119,8 +119,18 @@ defmodule WandererApp.Sync.Scheduler do
 
   defp dispatch!(feed_module, scope, sync_run) do
     case feed_module.fetch(scope, sync_run.etag) do
+      # CHEWY PATCH: a 304 advances `next_run_at` like a 200 does.
+      # It used to bump `last_checked_at` only, which leaves
+      # `next_run_at` in the PAST -- and `due?/1` then re-dispatches
+      # that scope on every 30s tick for as long as ESI keeps
+      # answering 304, which for an endpoint with a 600s cache is most
+      # of the time. Cheap requests, but twenty times the intended rate
+      # and nothing in the heartbeat row said so.
       :not_modified ->
-        update_run!(sync_run, %{last_checked_at: now()})
+        update_run!(sync_run, %{
+          last_checked_at: now(),
+          next_run_at: DateTime.add(now(), feed_module.cadence_seconds(scope), :second)
+        })
 
       {:ok, data, etag} ->
         :ok = feed_module.upsert(scope, data)

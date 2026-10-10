@@ -23,12 +23,30 @@ defmodule WandererApp.Sync.Feeds.AssetSafetyFeed do
   existed holds a valid token that 403s on this one endpoint. Polling
   them would spend ESI's error budget, every cadence, forever.
 
-  ## Cadence
+  ## Cadence: 60s, and the floor is CCP's, not ours
 
-  600 seconds, matching the endpoint's own ESI cache. Polling faster
-  returns the identical body; the ETag makes that cheap, but it is still
-  a request. 10 minutes is also well inside the window that matters: a
-  hull that finished unanchoring is a lead measured in hours.
+  The endpoint is ESI-cached for **600s**, so the freshest answer that
+  can exist is already up to ten minutes old. Our poll interval adds to
+  that, and only to that: at a 600s cadence the worst case was 600s of
+  CCP cache plus 600s of waiting for our own tick — **twenty minutes**
+  between a hull coming out of the ground and this app knowing.
+
+  At 60s the worst case is ~11 minutes and the average halves, because
+  we catch the cache rollover within a minute of it happening. Going
+  below 60s buys almost nothing: the remaining latency is CCP's cache,
+  which no polling rate can shorten.
+
+  The extra requests are nearly free and deliberately so. Every poll
+  threads the ETag, so nine out of ten are `304 Not Modified` — which
+  returns no body and, per `docs/chewy/seat-parity.md` §6.1, does NOT
+  count against ESI's error limit. One request per consented character
+  per minute is well inside courtesy limits, and
+  `WandererApp.Esi.RateLimitGate` still stops the scheduler dead if ESI
+  ever answers 420/429.
+
+  This is the one feed worth spending requests on: it is the only
+  signal in the app that reports a loose hull at the instant it comes
+  loose, and a hull is loot only until somebody else finds it.
 
   ## Retention
 
@@ -45,7 +63,9 @@ defmodule WandererApp.Sync.Feeds.AssetSafetyFeed do
   alias WandererApp.Esi
   alias WandererApp.Scout.AssetSafety
 
-  @cadence_seconds 600
+  # 60s, not the endpoint's 600s cache: see the moduledoc. The extra
+  # polls are 304s, which carry no body and no error-limit cost.
+  @cadence_seconds 60
   @retention_days 90
 
   @doc """

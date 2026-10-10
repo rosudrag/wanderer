@@ -122,6 +122,11 @@ defmodule WandererApp.Sync.SchedulerTest do
     assert is_nil(run.last_success_at)
     assert run.status == :ok
     assert run.consecutive_failures == 0
+    # CHEWY PATCH: and it reschedules. Leaving `next_run_at` in the
+    # past made `due?/1` true on every 30s tick, so a feed whose
+    # endpoint is ESI-cached (600s) was re-dispatched twenty times per
+    # intended poll, invisibly.
+    assert DateTime.compare(run.next_run_at, DateTime.utc_now()) == :gt
   end
 
   test "an error increments consecutive_failures and pushes next_run_at into the future" do
