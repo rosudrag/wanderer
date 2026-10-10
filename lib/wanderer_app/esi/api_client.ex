@@ -397,8 +397,30 @@ defmodule WandererApp.Esi.ApiClient do
 
   defp with_refresh_token(opts), do: opts |> Keyword.merge(refresh_token?: true)
 
-  defp with_cache_opts(opts),
-    do: opts |> Keyword.merge(@cache_opts) |> Keyword.merge(cache_dir: System.tmp_dir!())
+  # CHEWY PATCH: `cache: true` is Req's OWN conditional-request machinery
+  # -- it writes each response to a file under `cache_dir` and, on a 304,
+  # reads the body back from that file. That is a second ETag mechanism,
+  # and it collides with the one `WandererApp.Sync.Feed` runs: the feed
+  # sends an `If-None-Match` from `sync_runs_v1`, ESI answers 304, and
+  # Req then tries to read a cache file it never wrote (or that a
+  # container restart wiped, since `cache_dir` is /tmp). It raises,
+  # `do_get_request/4` rescues it, and the feed records
+  # `{:error, "Request failed"}` -- measured on the deployment
+  # 2026-10-10: all four consented characters failing every poll, with
+  # `could not read file "/tmp/esi.evetech.net-get-…": no such file or
+  # directory` as the only trace.
+  #
+  # So an etag-managed request opts OUT of Req's cache entirely. It is
+  # already conditional, it already stores its validator, and it must
+  # always reach ESI to learn 304 vs 200. Every other caller is
+  # untouched.
+  defp with_cache_opts(req_opts, opts) do
+    if Keyword.has_key?(opts, :etag) do
+      req_opts
+    else
+      req_opts |> Keyword.merge(@cache_opts) |> Keyword.merge(cache_dir: System.tmp_dir!())
+    end
+  end
 
   # CHEWY PATCH: hook #10 (docs/chewy/corp-suite-plan.md §3.4/§5). Callers
   # that pass an `:etag` opt (only WandererApp.Sync.Feed machinery does;
@@ -456,7 +478,7 @@ defmodule WandererApp.Esi.ApiClient do
         |> Keyword.merge(url: path)
         |> with_user_agent_opts()
         |> with_etag_request_header(opts)
-        |> with_cache_opts()
+        |> with_cache_opts(opts)
         |> Keyword.merge(@retry_opts)
         |> Keyword.merge(@timeout_opts)
       )
