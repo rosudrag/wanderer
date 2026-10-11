@@ -136,33 +136,47 @@ defmodule WandererApp.Scout.AssetSafety do
   def parse(%{"type" => type} = notification) when type in @types do
     fields = parse_text(Map.get(notification, "text"))
 
-    with {:ok, notification_id} <- integer(Map.get(notification, "notification_id")),
-         {:ok, notified_at} <- iso8601(Map.get(notification, "timestamp")),
-         {:ok, structure_id} <- integer(fields["structureid"]),
-         {:ok, solar_system_id} <- integer(fields["solarsystemid"]) do
-      {:ok,
-       %{
-         notification_id: notification_id,
-         type: type,
-         notified_at: notified_at,
-         structure_id: structure_id,
-         solar_system_id: solar_system_id,
-         structure_type_id: optional_integer(fields["structuretypeid"]),
-         new_station_id: optional_integer(fields["newstationid"]),
-         is_corp_owned: boolean(fields["iscorpowned"]),
-         asset_safety_min_at: optional_datetime(fields["assetsafetyminimumtimestamp"]),
-         asset_safety_full_at: optional_datetime(fields["assetsafetyfulltimestamp"])
-       }}
-    else
-      # A notification of a type we ACT on that did not parse is the
-      # one silent failure this feature cannot afford -- it is
-      # indistinguishable, on every board, from the hull never coming
-      # out of the ground. The wrong type stays silent (48 of 50
-      # notifications are mining-ledger spam); this does not.
-      :error ->
+    required = [
+      {:notification_id, integer(Map.get(notification, "notification_id")),
+       Map.get(notification, "notification_id")},
+      {:notified_at, iso8601(Map.get(notification, "timestamp")),
+       Map.get(notification, "timestamp")},
+      {:structure_id, integer(fields["structureid"]), fields["structureid"]},
+      {:solar_system_id, integer(fields["solarsystemid"]), fields["solarsystemid"]}
+    ]
+
+    case Enum.filter(required, fn {_name, result, _raw} -> result == :error end) do
+      [] ->
+        values = Map.new(required, fn {name, {:ok, value}, _raw} -> {name, value} end)
+
+        {:ok,
+         %{
+           notification_id: values.notification_id,
+           type: type,
+           notified_at: values.notified_at,
+           structure_id: values.structure_id,
+           solar_system_id: values.solar_system_id,
+           structure_type_id: optional_integer(fields["structuretypeid"]),
+           new_station_id: optional_integer(fields["newstationid"]),
+           is_corp_owned: boolean(fields["iscorpowned"]),
+           asset_safety_min_at: optional_datetime(fields["assetsafetyminimumtimestamp"]),
+           asset_safety_full_at: optional_datetime(fields["assetsafetyfulltimestamp"])
+         }}
+
+      failed ->
+        # A notification of a type we ACT on that did not parse is the
+        # one silent failure this feature cannot afford — it is
+        # indistinguishable, on every board, from the hull never coming
+        # out of the ground. The wrong type stays silent (48 of 50
+        # notifications are mining-ledger spam); this does not, and it
+        # names the FIELD and the raw value, because "did not parse"
+        # over a ten-key body is a second investigation.
         Logger.warning(
           "[Scout.AssetSafety] #{type} #{inspect(Map.get(notification, "notification_id"))} " <>
-            "did not parse; body keys=#{inspect(Map.keys(fields))}"
+            "did not parse: " <>
+            Enum.map_join(failed, ", ", fn {name, _result, raw} ->
+              "#{name}=#{inspect(raw)}"
+            end)
         )
 
         :skip
