@@ -422,6 +422,16 @@ instead (`test/integration/scout_plan_api_test.exs` flips `:scout_planner_enable
   notification the feature exists for. An ETag does NOT protect against a group limit (a 304 is still
   a request; it only spares the ERROR limit), so a cadence must be set from the live
   `x-ratelimit-limit`, not from "304s are free".
+- **An EVE notification body is YAML with ANCHORS, and a fixture without one hides the bug entirely.**
+  Every `StructureItemsMovedToSafety` writes `structureID: &id001 1042709327956` and refers back to
+  it as `*id001` in `structureShowInfoData`. Parsed line-wise (this app has no YAML dependency, on
+  purpose), the value is the string `"&id001 …"`, which is not an integer — so **36 of 36** live
+  notifications across five characters were dropped by the same `:skip` that discards 48
+  mining-ledger rows, and the asset-safety trigger had never fired once since it shipped. The suite
+  was green because the test fixture was hand-written without the anchor. Two rules follow: copy a
+  wire fixture from a REAL response, and when a parser's "uninteresting shape" path also swallows
+  genuine failures, make the failure of a type you ACT on loud (`AssetSafety.parse/1` now names the
+  field and its raw value).
 - **Boolean env vars are `String.to_existing_atom`'d** (`config/runtime.exs`, the upstream idiom every
   flag follows). A trailing space — `WANDERER_IDENTITY_SUITE=true ` — crashes the container at boot
   with `not an already existing atom`. Loud, not silent, but baffling until you know.
