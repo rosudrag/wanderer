@@ -23,28 +23,35 @@ defmodule WandererApp.Sync.Feeds.AssetSafetyFeed do
   existed holds a valid token that 403s on this one endpoint. Polling
   them would spend ESI's error budget, every cadence, forever.
 
-  ## Cadence: 60s, and the floor is CCP's, not ours
+  ## Cadence: 600s, and the ceiling is CCP's, not ours
 
   The endpoint is ESI-cached for **600s**, so the freshest answer that
-  can exist is already up to ten minutes old. Our poll interval adds to
-  that, and only to that: at a 600s cadence the worst case was 600s of
-  CCP cache plus 600s of waiting for our own tick — **twenty minutes**
-  between a hull coming out of the ground and this app knowing.
+  can exist is already up to ten minutes old, and the worst case is
+  that cache plus one cadence.
 
-  At 60s the worst case is ~11 minutes and the average halves, because
-  we catch the cache rollover within a minute of it happening. Going
-  below 60s buys almost nothing: the remaining latency is CCP's cache,
-  which no polling rate can shorten.
+  This used to poll at 60s to halve that, on the reasoning that an
+  ETag'd request is nearly free. It is not any more: ESI now meters
+  per-endpoint **rate-limit groups**, and this endpoint's is
+  `char-notification` at **15 requests / 15 minutes** (measured
+  2026-10-11 from a live `429`: `x-ratelimit-group: char-notification`,
+  `x-ratelimit-limit: 15/15m`). A 60s cadence spends exactly that
+  budget with zero headroom — and a `304` is still a request here, so
+  threading the ETag buys nothing against this limit, only against the
+  error limit.
 
-  The extra requests are nearly free and deliberately so. Every poll
-  threads the ETag, so nine out of ten are `304 Not Modified` — which
-  returns no body and, per `docs/chewy/seat-parity.md` §6.1, does NOT
-  count against ESI's error limit. One request per consented character
-  per minute is well inside courtesy limits, and
+  600s leaves 10x headroom (1.5 requests per window per character) and
+  costs at most ten minutes of extra latency on a signal whose floor is
+  already ten minutes of CCP cache. Do not lower it without re-reading
+  the live `x-ratelimit-limit` header: being rate-limited costs the
+  whole feed, not one poll.
+
   `WandererApp.Esi.RateLimitGate` still stops the scheduler dead if ESI
-  ever answers 420/429.
+  answers 420/429, and `WandererApp.Sync.Scheduler` now treats
+  `{:error, :error_limited, headers}` as a backoff rather than raising
+  through it — the raise left `next_run_at` in the past, which turned
+  one 429 into a 30s retry loop that kept the feed limited for hours.
 
-  This is the one feed worth spending requests on: it is the only
+  This is still the feed worth spending requests on: it is the only
   signal in the app that reports a loose hull at the instant it comes
   loose, and a hull is loot only until somebody else finds it.
 
@@ -63,9 +70,10 @@ defmodule WandererApp.Sync.Feeds.AssetSafetyFeed do
   alias WandererApp.Esi
   alias WandererApp.Scout.AssetSafety
 
-  # 60s, not the endpoint's 600s cache: see the moduledoc. The extra
-  # polls are 304s, which carry no body and no error-limit cost.
-  @cadence_seconds 60
+  # 600s: the endpoint's own ESI cache, and inside its
+  # `char-notification` rate-limit group (15/15m). See the moduledoc —
+  # a 304 still counts against that group.
+  @cadence_seconds 600
   @retention_days 90
 
   @doc """

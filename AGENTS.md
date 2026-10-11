@@ -1,7 +1,8 @@
 # Wanderer — chewytech fork
 
 Fork of [`wanderer-industries/wanderer`](https://github.com/wanderer-industries/wanderer), the EVE
-Online mapper. Runs at **wanderer.chewytech.com** on the Hetzner EX44.
+Online mapper. Runs at **evea.chewytech.com** on the Hetzner EX44 (renamed from
+`wanderer.chewytech.com` on 2026-10-11; the old host now serves a themed 404).
 
 This file is OURS — upstream has no `AGENTS.md`, so it never conflicts on a merge.
 
@@ -410,6 +411,17 @@ instead (`test/integration/scout_plan_api_test.exs` flips `:scout_planner_enable
   `TrackingConfigUtils.get_active_pool!/0` picks which client the login goes out with), THEN turn
   the flag on. Rolling back is a flag flip plus `.\deploy.ps1`, no rebuild, because the image
   already carries the code.
+- **ESI meters per-endpoint rate-limit GROUPS now, and the sync scheduler used to crash on one.**
+  A 429 carries `x-ratelimit-group` / `x-ratelimit-limit` (measured 2026-10-11:
+  `char-notification` = `15/15m` on `/characters/{id}/notifications/`), and `api_client.ex` answers it
+  with the THREE-tuple `{:error, :error_limited, headers}`. `WandererApp.Sync.Scheduler.dispatch!/3`
+  had no clause for that shape, so every rate-limited fetch raised into the rescue, which logged and
+  returned **without writing the heartbeat row** — `next_run_at` stayed in the past, so the scope
+  re-dispatched on every 30s tick and stayed limited forever while `sync_runs_v1.status` still read
+  `:ok`. `AssetSafetyFeed` sat in that loop for five hours and missed the Eurgrana asset-safety
+  notification the feature exists for. An ETag does NOT protect against a group limit (a 304 is still
+  a request; it only spares the ERROR limit), so a cadence must be set from the live
+  `x-ratelimit-limit`, not from "304s are free".
 - **Boolean env vars are `String.to_existing_atom`'d** (`config/runtime.exs`, the upstream idiom every
   flag follows). A trailing space — `WANDERER_IDENTITY_SUITE=true ` — crashes the container at boot
   with `not an already existing atom`. Loud, not silent, but baffling until you know.
@@ -507,7 +519,7 @@ image carries neither `curl` nor `wget`. Probe the public origin from the box in
 from Postgres — whose database is named `postgres`, not `wanderer_db`:
 
 ```bash
-ssh ex44 "curl -s -o /dev/null -w '%{http_code}\n' https://wanderer.chewytech.com/scout"   # 302 = alive
+ssh ex44 "curl -s -o /dev/null -w '%{http_code}\n' https://evea.chewytech.com/scout"   # 302 = alive
 ssh ex44 "sudo docker exec wanderer-db psql -U postgres -d postgres -c 'select count(*) from scout_structures_v1;'"
 ```
 

@@ -147,20 +147,33 @@ defmodule WandererApp.Sync.Scheduler do
           last_error_at: nil
         })
 
-      {:error, reason} ->
-        failures = sync_run.consecutive_failures + 1
-        cadence = feed_module.cadence_seconds(scope)
-        backoff = backoff_seconds(cadence, failures)
-        status = if failures >= @stall_threshold, do: :stalled, else: :ok
+      # CHEWY PATCH: ESI's per-endpoint rate-limit groups answer 429
+      # with `x-ratelimit-group` + `retry-after`, and
+      # `api_client.ex`'s 420/429 branches surface that as a THREE-
+      # tuple, `{:error, :error_limited, headers}`. Nothing here
+      # matched it, so every rate-limited fetch raised CaseClauseError
+      # into the rescue below -- which logged and returned WITHOUT
+      # touching the heartbeat row. `next_run_at` therefore stayed in
+      # the past, `due?/1` stayed true, and the scope was re-dispatched
+      # on every 30s tick, which is what kept it rate-limited.
+      # Measured 2026-10-11: AssetSafetyFeed last succeeded at 07:16
+      # and had been looping on `char-notification` (15/15m) ever
+      # since, so the Eurgrana asset-safety notification was never
+      # read. Backoff is ESI's own `retry-after`, floored at the feed's
+      # cadence so honouring a 4s retry-after cannot reintroduce the
+      # hammering.
+      {:error, :error_limited, headers} ->
+        fail!(feed_module, scope, sync_run, rate_limit_reason(headers), retry_after(headers))
 
-        update_run!(sync_run, %{
-          last_checked_at: now(),
-          consecutive_failures: failures,
-          last_error: inspect(reason),
-          last_error_at: now(),
-          next_run_at: DateTime.add(now(), backoff, :second),
-          status: status
-        })
+      {:error, reason} ->
+        fail!(feed_module, scope, sync_run, inspect(reason), nil)
+
+      # Any shape a feed or the ESI client grows later. It is an error,
+      # not a crash: the row advances, the shape is in `last_error`,
+      # and five of them stall the scope visibly. The alternative is
+      # the hot loop above, which is silent.
+      other ->
+        fail!(feed_module, scope, sync_run, "unexpected fetch result: #{inspect(other)}", nil)
     end
   rescue
     error ->
@@ -169,8 +182,76 @@ defmodule WandererApp.Sync.Scheduler do
           Exception.format(:error, error, __STACKTRACE__)
       )
 
-      :error
+      # Still advance the row. A raise that leaves `next_run_at` in the
+      # past is a 30s retry loop against ESI for as long as the bug
+      # lives.
+      try do
+        fail!(feed_module, scope, sync_run, "raised: #{Exception.message(error)}", nil)
+      rescue
+        _unwritable -> :error
+      end
   end
+
+  # One failure path for every non-success: count it, record why, and
+  # push `next_run_at` forward. `retry_after_seconds` is ESI's own
+  # answer when it gave one; otherwise the exponential backoff.
+  defp fail!(feed_module, scope, sync_run, reason, retry_after_seconds) do
+    failures = sync_run.consecutive_failures + 1
+    cadence = feed_module.cadence_seconds(scope)
+
+    backoff =
+      case retry_after_seconds do
+        seconds when is_integer(seconds) and seconds > 0 -> max(seconds, cadence)
+        _none -> backoff_seconds(cadence, failures)
+      end
+
+    status = if failures >= @stall_threshold, do: :stalled, else: :ok
+
+    update_run!(sync_run, %{
+      last_checked_at: now(),
+      consecutive_failures: failures,
+      last_error: reason,
+      last_error_at: now(),
+      next_run_at: DateTime.add(now(), backoff, :second),
+      status: status
+    })
+  end
+
+  # "rate limited (group=char-notification limit=15/15m retry_after=34s)"
+  # -- the group and the limit are the only things that say WHICH
+  # budget was spent, and they are what a cadence is set from.
+  defp rate_limit_reason(headers) do
+    parts =
+      [
+        {"group", header(headers, "x-ratelimit-group")},
+        {"limit", header(headers, "x-ratelimit-limit")},
+        {"retry_after", header(headers, "retry-after")},
+        {"error_limit_reset", header(headers, "x-esi-error-limit-reset")}
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Enum.map_join(" ", fn {key, value} -> "#{key}=#{value}" end)
+
+    String.trim("rate limited " <> parts)
+  end
+
+  defp retry_after(headers) do
+    value = header(headers, "retry-after") || header(headers, "x-esi-error-limit-reset")
+
+    case value && Integer.parse(value) do
+      {seconds, _rest} -> seconds
+      _unparsable -> nil
+    end
+  end
+
+  defp header(headers, key) when is_map(headers) do
+    case Map.get(headers, key) do
+      [value | _rest] when is_binary(value) -> value
+      value when is_binary(value) -> value
+      _absent -> nil
+    end
+  end
+
+  defp header(_headers, _key), do: nil
 
   defp due?(%{next_run_at: nil}), do: true
   defp due?(%{next_run_at: next_run_at}), do: DateTime.compare(next_run_at, now()) != :gt

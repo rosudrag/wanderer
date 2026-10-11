@@ -55,9 +55,29 @@ defmodule WandererApp.Sync.SchedulerTest do
       FakeFeedState.bump_fetch()
 
       case FakeFeedState.get().mode do
-        :ok -> {:ok, %{}, "etag-1"}
-        :not_modified -> :not_modified
-        :error -> {:error, :boom}
+        :ok ->
+          {:ok, %{}, "etag-1"}
+
+        :not_modified ->
+          :not_modified
+
+        :error ->
+          {:error, :boom}
+
+        # What `api_client.ex` returns on a 420/429 -- a THREE-tuple,
+        # headers included. Shape copied from a live ESI 429 on
+        # `/characters/{id}/notifications/`, 2026-10-11.
+        :rate_limited ->
+          {:error, :error_limited,
+           %{
+             "retry-after" => ["34"],
+             "x-ratelimit-group" => ["char-notification"],
+             "x-ratelimit-limit" => ["15/15m"],
+             "x-ratelimit-remaining" => ["0"]
+           }}
+
+        :unexpected ->
+          {:ok, %{}}
       end
     end
 
@@ -166,5 +186,36 @@ defmodule WandererApp.Sync.SchedulerTest do
     assert run.consecutive_failures == 0
     assert run.status == :ok
     refute is_nil(run.last_success_at)
+  end
+
+  # CHEWY PATCH regression, 2026-10-11: a rate-limited fetch used to
+  # raise CaseClauseError out of `dispatch!/3`, which logged and left
+  # the heartbeat row untouched -- so `next_run_at` stayed in the past
+  # and the scope was re-dispatched every 30s, keeping it rate-limited.
+  # AssetSafetyFeed sat in that loop for five hours and never read the
+  # notification it exists for.
+  test "a 429 backs off instead of raising, and never leaves next_run_at in the past" do
+    FakeFeedState.set_mode(:rate_limited)
+    before_dispatch = DateTime.utc_now()
+
+    run = Scheduler.sync_now!(FakeFeed, :scope_rl, "scope_rl")
+
+    assert run.consecutive_failures == 1
+    assert run.last_error =~ "rate limited"
+    assert run.last_error =~ "char-notification"
+    assert run.last_error =~ "15/15m"
+    # retry-after 34s, floored at the feed's 5s cadence.
+    assert DateTime.diff(run.next_run_at, before_dispatch) >= 34
+  end
+
+  test "an unrecognised fetch result is an error, not a crash loop" do
+    FakeFeedState.set_mode(:unexpected)
+
+    run = Scheduler.sync_now!(FakeFeed, :scope_weird, "scope_weird")
+
+    assert run.consecutive_failures == 1
+    assert run.last_error =~ "unexpected fetch result"
+    assert FakeFeedState.get().upsert_count == 0
+    assert DateTime.compare(run.next_run_at, DateTime.utc_now()) == :gt
   end
 end

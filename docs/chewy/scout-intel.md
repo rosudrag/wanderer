@@ -907,7 +907,38 @@ corp; this notification is delivered to an individual pilot and nothing can
 read it for them). Each character therefore gets its own `sync_runs_v1` row,
 its own ETag, its own backoff and its own `:stalled` verdict — which is the
 granularity a revoked consent needs. Cadence is **600s**, the endpoint's own
-ESI cache.
+ESI cache — and also what its rate-limit budget allows.
+
+### A rate-limited poll used to crash the scheduler
+
+Measured 2026-10-11, after a structure in **Eurgrana** fired
+`StructureItemsMovedToSafety` in game and this app never showed it. Two
+defects, compounding:
+
+1. The feed polled at **60s**, not the 600s this document already claimed.
+   ESI meters per-endpoint **rate-limit groups**, and this endpoint's is
+   `char-notification` at **15 requests / 15 minutes**
+   (`x-ratelimit-group` / `x-ratelimit-limit` on the 429). A 60s cadence
+   spends exactly that, with zero headroom. A `304` is still a request
+   against this limit — threading the ETag protects the ERROR limit, not
+   this one.
+2. `api_client.ex` answers a 420/429 with the three-tuple
+   `{:error, :error_limited, headers}`, and `WandererApp.Sync.Scheduler`'s
+   `dispatch!/3` had no clause for it. Every rate-limited fetch raised
+   `CaseClauseError` into the rescue, which logged and returned **without
+   writing the heartbeat row** — so `next_run_at` stayed in the past,
+   `due?/1` stayed true, and the scope was re-dispatched on every 30s tick.
+   One 429 therefore became a permanent 2-requests-per-minute loop that
+   kept the feed limited: `last_success_at` froze at 07:16 and five hours
+   of notifications were never read, while `status` still said `:ok`.
+
+The fix is both halves: cadence 600s, and the scheduler now treats
+`:error_limited` as a backoff of `retry-after` floored at the feed's own
+cadence, records the group and the limit in `last_error`, and stalls the
+scope after five consecutive ones. Any unrecognised fetch result is an
+error rather than a raise, and a raise now advances `next_run_at` too — a
+heartbeat row that is never written is a hot loop with nothing to read.
+Regression: `test/integration/sync_scheduler_test.exs`.
 
 ### Two wire traps, both load-bearing
 
