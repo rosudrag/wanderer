@@ -154,11 +154,42 @@ defmodule WandererApp.Scout.AssetSafety do
          asset_safety_full_at: optional_datetime(fields["assetsafetyfulltimestamp"])
        }}
     else
-      :error -> :skip
+      # A notification of a type we ACT on that did not parse is the
+      # one silent failure this feature cannot afford -- it is
+      # indistinguishable, on every board, from the hull never coming
+      # out of the ground. The wrong type stays silent (48 of 50
+      # notifications are mining-ledger spam); this does not.
+      :error ->
+        Logger.warning(
+          "[Scout.AssetSafety] #{type} #{inspect(Map.get(notification, "notification_id"))} " <>
+            "did not parse; body keys=#{inspect(Map.keys(fields))}"
+        )
+
+        :skip
     end
   end
 
   def parse(_notification), do: :skip
+
+  @doc """
+  How many notifications arrived and which `Structure*` types were among
+  them.
+
+  Logged on every changed fetch (a 304 carries no body, so this only
+  runs when EVE actually sent something new). It is the only thing that
+  can tell "the feed is reading and EVE sent no structure notification"
+  apart from "the feed is broken" — which is exactly the question the
+  Eurgrana miss raised and nothing could answer.
+  """
+  @spec type_histogram([map()]) :: %{String.t() => pos_integer()}
+  def type_histogram(notifications) when is_list(notifications) do
+    notifications
+    |> Enum.map(&Map.get(&1, "type"))
+    |> Enum.filter(&(is_binary(&1) and String.starts_with?(String.downcase(&1), "structure")))
+    |> Enum.frequencies()
+  end
+
+  def type_histogram(_notifications), do: %{}
 
   @doc """
   The scalar `key: value` pairs of a notification body, keys downcased.

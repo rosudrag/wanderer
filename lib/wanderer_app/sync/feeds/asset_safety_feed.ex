@@ -128,6 +128,17 @@ defmodule WandererApp.Sync.Feeds.AssetSafetyFeed do
         _gone -> scope
       end
 
+    # One line per CHANGED fetch (a 304 has no body, so this is at most
+    # one line per character per cadence, and only when EVE sent
+    # something new). It is the only way to tell "the feed read 50
+    # notifications and none of them was a structure" from "the feed is
+    # broken" — the question the Eurgrana miss raised and that nothing
+    # in this app could answer.
+    Logger.info(
+      "[Scout.AssetSafety] #{character.name}: #{length(notifications)} notification(s), " <>
+        "structure types=#{inspect(AssetSafety.type_histogram(notifications))}"
+    )
+
     case AssetSafety.store(notifications, character) do
       0 ->
         :ok
