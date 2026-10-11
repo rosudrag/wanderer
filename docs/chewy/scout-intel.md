@@ -1051,10 +1051,18 @@ Four deliberate shapes:
   `DISTINCT ON (structure_id)`, the same trick the spawns tab uses; writes are
   idempotent on `notification_id`, because ESI re-serves the same ~50
   notifications on every poll forever.
-- **There is no archive button.** It is a single historical fact inside a
-  7-day horizon on a board that is a handful of rows a week by construction,
-  so it ages off on its own; archive machinery exists for rows that keep
-  re-asserting themselves.
+- **A reader can dismiss one** (`✕`, `dismiss_asset_safety`), and the
+  dismissal is keyed on the **structure**, not on the notification clicked:
+  the board folds `DISTINCT ON (structure_id)`, so dismissing the folded row
+  alone would just promote its sibling and the hull would never leave.
+  `WandererApp.Scout.AssetSafety.dismiss/2` writes `dismissed_at` on every row
+  for that structure; `recent/1` (and therefore the banner, the summary card
+  and the sidebar badge) filters them out, and they move to a **Dismissed
+  asset safety** board — rendered only when non-empty, deliberately NOT
+  window-bounded, with `↺` to undo. Unlike `ScoutStructure`'s archive it never
+  expires on its own: nothing can contradict a notification, so there is no
+  later fact that should bring the row back. It is never a delete — the row
+  stays in the table, in the retention purge's reach and in the history.
 
 The board says **who is watching** underneath itself (`watcher_note/1`): an
 empty board because nobody consented and an empty board because nothing

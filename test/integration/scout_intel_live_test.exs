@@ -1411,6 +1411,37 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert paste =~ "Loose Astrahus"
       assert paste =~ "via Seed Pilot"
     end
+
+    test "dismissing a trigger clears the banner and offers the undo", %{conn: conn} do
+      trigger(%{structure_name: "Loose Astrahus"})
+
+      {:ok, view, html} = live(conn, ~p"/scout")
+      assert html =~ "scout-asset-safety-alert"
+
+      dismissed = render_click(view, "dismiss_asset_safety", %{"id" => "1000000000801"})
+
+      refute dismissed =~ "scout-asset-safety-alert"
+      refute has_element?(view, "#scout-asset-safety-table", "Loose Astrahus")
+      assert has_element?(view, "#scout-asset-safety-dismissed-table", "Loose Astrahus")
+
+      restored = render_click(view, "restore_asset_safety", %{"id" => "1000000000801"})
+
+      assert restored =~ "scout-asset-safety-alert"
+      assert has_element?(view, "#scout-asset-safety-table", "Loose Astrahus")
+      refute restored =~ "scout-asset-safety-dismissed-table"
+    end
+
+    test "a dismissal covers every alt that reported the same hull", %{conn: conn} do
+      trigger(%{structure_name: "Loose Astrahus"})
+      trigger(%{structure_name: "Loose Astrahus", character_name: "Second Alt"})
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      dismissed = render_click(view, "dismiss_asset_safety", %{"id" => "1000000000801"})
+
+      refute dismissed =~ "scout-asset-safety-alert"
+      refute has_element?(view, "#scout-asset-safety-table", "Loose Astrahus")
+    end
   end
 
   describe "the needs-seeding board" do

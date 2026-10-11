@@ -226,6 +226,49 @@ defmodule WandererApp.ScoutAssetSafetyTest do
     end
   end
 
+  describe "dismiss/2" do
+    test "takes the structure off the board and puts it on the undo list" do
+      assert 1 == AssetSafety.store([notification(70)], character())
+      assert [_on_board] = AssetSafety.recent()
+
+      assert 1 == AssetSafety.dismiss(@structure_id)
+
+      assert [] == AssetSafety.recent()
+      assert [%{structure_id: @structure_id}] = AssetSafety.dismissed()
+
+      assert 1 == AssetSafety.restore(@structure_id)
+      assert [_back] = AssetSafety.recent()
+      assert [] == AssetSafety.dismissed()
+    end
+
+    # The whole reason dismissal is keyed on the structure: the board
+    # folds `DISTINCT ON (structure_id)`, so dismissing only the folded
+    # row would promote its sibling and the hull would never leave.
+    test "covers every alt's notification about the same hull" do
+      assert 1 == AssetSafety.store([notification(80)], character())
+
+      assert 1 ==
+               AssetSafety.store(
+                 [notification(81)],
+                 character(%{eve_id: "95465499", name: "Alt Pilot"})
+               )
+
+      assert 2 == AssetSafety.dismiss(@structure_id)
+      assert [] == AssetSafety.recent()
+    end
+
+    test "a dismissal is never bounded by the window the board uses" do
+      old = DateTime.utc_now() |> DateTime.add(-30, :day) |> DateTime.to_iso8601()
+
+      assert 1 == AssetSafety.store([notification(90, timestamp: old)], character())
+      assert 1 == AssetSafety.dismiss(@structure_id)
+
+      # Off the board for BOTH reasons, but still reachable to undo.
+      assert [] == AssetSafety.recent()
+      assert [_undoable] = AssetSafety.dismissed()
+    end
+  end
+
   describe "watching_characters/0" do
     test "only ever returns characters whose stored token carries the scope" do
       {:ok, consented} =

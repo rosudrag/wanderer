@@ -165,6 +165,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
          # the unanchored alert, for the same reason -- it is an alert,
          # not a table, and a reader on the spawns tab must still see it.
          asset_safety_events: [],
+         asset_safety_dismissed: [],
          asset_safety_watchers: %{count: 0, stalled: 0},
          # CHEWY PATCH: `%{structure_id => [character_name]}` -- whether
          # each unanchoring hull's trigger is armed, and by whom.
@@ -532,6 +533,30 @@ defmodule WandererAppWeb.ScoutIntelLive do
     end
   end
 
+  # CHEWY PATCH: "dealt with" for an asset-safety trigger. Unlike a
+  # structure archive this never expires -- nothing can contradict a
+  # notification -- and it is applied to every row about that STRUCTURE,
+  # because the board folds `DISTINCT ON (structure_id)` and dismissing
+  # one of two alts' notifications would just promote the other.
+  def handle_event("dismiss_asset_safety", %{"id" => id}, socket) do
+    with {structure_id, ""} <- Integer.parse(to_string(id)),
+         written when written > 0 <-
+           AssetSafety.dismiss(structure_id, socket.assigns.current_user.id) do
+      {:noreply, socket |> announce() |> load()}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("restore_asset_safety", %{"id" => id}, socket) do
+    with {structure_id, ""} <- Integer.parse(to_string(id)),
+         written when written > 0 <- AssetSafety.restore(structure_id) do
+      {:noreply, socket |> announce() |> load()}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
   # An archive moves the sidebar badge, which is cached, and any OTHER
   # open page, which is not this socket. `broadcast_from` rather than
   # `broadcast`: this socket reloads in the handler above, and doing it
@@ -827,7 +852,16 @@ defmodule WandererAppWeb.ScoutIntelLive do
         )
 
       socket
-      |> assign(asset_safety_events: rows, asset_safety_watchers: AssetSafety.watchers())
+      |> assign(
+        asset_safety_events: rows,
+        asset_safety_dismissed:
+          AssetSafety.dismissed(
+            system_id: filters.system_id,
+            q: filters.q,
+            space: filters.space
+          ),
+        asset_safety_watchers: AssetSafety.watchers()
+      )
       |> assign_systems([rows])
     else
       socket

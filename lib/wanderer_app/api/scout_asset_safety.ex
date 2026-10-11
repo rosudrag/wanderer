@@ -43,14 +43,25 @@ defmodule WandererApp.Api.ScoutAssetSafety do
   snapshot of what was known at ingest and are never refreshed; the
   authoritative current state is, as always, `ScoutStructure`.
 
-  ## No archive, no presence
+  ## Dismissal, and why it is per STRUCTURE
 
-  Both are machinery for a row that keeps re-asserting itself. This one
-  is a single historical fact bounded by
-  `WandererApp.Scout.AssetSafety.horizon_days/0` on the way in to every
-  read, and the whole board is a handful of rows a week by construction
-  (you only ever get one if you personally seeded the structure). It
-  ages off the page on its own, so there is nothing to dismiss.
+  No presence and no archive-expiry: presence is machinery for a row
+  that keeps re-asserting itself, and this row is a single historical
+  fact that can never be contradicted. But it does NOT age off fast
+  enough to need no control — `horizon_days/0` is seven days, and a
+  reader who has already scooped (or written off) a hull is looking at
+  the alert banner for a week.
+
+  So `dismissed_at` exists and is the reader's own judgement: "dealt
+  with". It is never a delete — the row stays in the table, in the
+  retention purge's reach and in every history read — and it is undone
+  from the Dismissed board.
+
+  It is applied to every row carrying the same `structure_id`, not to
+  one notification: two of your characters seeding the same hull is the
+  expected case, the board folds `DISTINCT ON (structure_id)`, and
+  dismissing "the row you see" would leave its sibling to surface in
+  its place. That is `WandererApp.Scout.AssetSafety.dismiss/2`.
   """
 
   use Ash.Resource,
@@ -77,6 +88,11 @@ defmodule WandererApp.Api.ScoutAssetSafety do
     define(:by_notification_id, action: :by_notification_id, args: [:notification_id])
     define(:recent, action: :recent, args: [:since])
     define(:stale, action: :stale, args: [:character_eve_id, :before])
+    define(:by_structure_id, action: :by_structure_id, args: [:structure_id])
+    define(:dismissed, action: :dismissed)
+
+    define(:dismiss, action: :dismiss, args: [:user_id])
+    define(:restore, action: :restore)
   end
 
   actions do
@@ -125,7 +141,8 @@ defmodule WandererApp.Api.ScoutAssetSafety do
       argument :q, :string
 
       filter expr(
-               notified_at >= ^arg(:since) and
+               is_nil(dismissed_at) and
+                 notified_at >= ^arg(:since) and
                  (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
                  (is_nil(^arg(:q)) or
                     fragment(
@@ -148,6 +165,58 @@ defmodule WandererApp.Api.ScoutAssetSafety do
       argument :before, :utc_datetime, allow_nil?: false
 
       filter expr(character_eve_id == ^arg(:character_eve_id) and notified_at < ^arg(:before))
+    end
+
+    # Every row about one structure — what `dismiss/2` writes over, and
+    # what a dismissal has to cover: two alts seeding the same hull is
+    # two notifications and the board only ever shows one of them.
+    read :by_structure_id do
+      argument :structure_id, :integer, allow_nil?: false
+      filter expr(structure_id == ^arg(:structure_id))
+    end
+
+    # The undo list. No `since` argument, for the same reason
+    # `ScoutStructure`'s `:archived` has none: a judgement hidden behind
+    # the window selector cannot be reversed once it ages out.
+    read :dismissed do
+      argument :system_id, :integer
+      argument :q, :string
+
+      filter expr(
+               not is_nil(dismissed_at) and
+                 (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
+                 (is_nil(^arg(:q)) or
+                    fragment(
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      structure_name,
+                      owner_name,
+                      group_name,
+                      character_name,
+                      ^arg(:q)
+                    ))
+             )
+
+      prepare build(sort: [dismissed_at: :desc])
+    end
+
+    # Plain attribute writes; not atomic for the same reason
+    # `ScoutStructure.archive` is not — a two-field button is not worth
+    # an atomic path.
+    update :dismiss do
+      require_atomic? false
+      accept []
+      argument :user_id, :uuid
+
+      change set_attribute(:dismissed_at, &DateTime.utc_now/0)
+      change set_attribute(:dismissed_by_user_id, arg(:user_id))
+    end
+
+    update :restore do
+      require_atomic? false
+      accept []
+
+      change set_attribute(:dismissed_at, nil)
+      change set_attribute(:dismissed_by_user_id, nil)
     end
   end
 
@@ -207,6 +276,12 @@ defmodule WandererApp.Api.ScoutAssetSafety do
     # free and it bounds how long the OWNER has a reason to come back.
     attribute :asset_safety_min_at, :utc_datetime
     attribute :asset_safety_full_at, :utc_datetime
+
+    # The reader's own "dealt with". Unlike `ScoutStructure`'s archive
+    # this never expires: nothing can contradict a notification, so
+    # there is no later fact that should bring the row back on its own.
+    attribute :dismissed_at, :utc_datetime
+    attribute :dismissed_by_user_id, :uuid
 
     create_timestamp(:inserted_at)
     update_timestamp(:updated_at)

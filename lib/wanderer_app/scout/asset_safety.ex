@@ -438,6 +438,70 @@ defmodule WandererApp.Scout.AssetSafety do
   end
 
   @doc """
+  The undo list: triggers a reader has dismissed, newest judgement
+  first.
+
+  Takes the page's `:system_id`, `:q` and `:space` filters like every
+  other board, but deliberately NOT the window: a dismissal that aged
+  out of the selector would be impossible to reverse from the page.
+  """
+  @spec dismissed(keyword()) :: [ScoutAssetSafety.t()]
+  def dismissed(opts \\ []) do
+    ScoutAssetSafety
+    |> Ash.Query.for_read(:dismissed, %{
+      system_id: Keyword.get(opts, :system_id),
+      q: Keyword.get(opts, :q)
+    })
+    |> WandererApp.Scout.Space.filter(Keyword.get(opts, :space, WandererApp.Scout.Space.all()))
+    |> Ash.Query.distinct([:structure_id])
+    |> Ash.Query.distinct_sort(notified_at: :desc)
+    |> Ash.Query.limit(Keyword.get(opts, :limit, 250))
+    |> Ash.read(authorize?: false)
+    |> case do
+      {:ok, rows} -> rows
+      {:error, _reason} -> []
+    end
+  end
+
+  @doc """
+  "Dealt with": hides every trigger about one structure from the board,
+  the banner and the badge.
+
+  Keyed on the STRUCTURE, not on the notification the reader clicked:
+  two of your characters seeding the same hull produces two rows, the
+  board folds them to one, and dismissing only the folded row would let
+  its sibling take its place on the next render. Returns how many rows
+  it wrote.
+  """
+  @spec dismiss(integer(), binary() | nil) :: non_neg_integer()
+  def dismiss(structure_id, user_id \\ nil), do: write(structure_id, &dismiss_row(&1, user_id))
+
+  @doc "Undoes `dismiss/2` for every row about that structure."
+  @spec restore(integer()) :: non_neg_integer()
+  def restore(structure_id), do: write(structure_id, &restore_row/1)
+
+  defp write(structure_id, fun) do
+    case ScoutAssetSafety.by_structure_id(structure_id, authorize?: false) do
+      {:ok, rows} -> rows |> Enum.map(fun) |> Enum.count(&(&1 == :ok))
+      {:error, _reason} -> 0
+    end
+  end
+
+  defp dismiss_row(row, user_id) do
+    case ScoutAssetSafety.dismiss(row, user_id, authorize?: false) do
+      {:ok, _row} -> :ok
+      _error -> :error
+    end
+  end
+
+  defp restore_row(row) do
+    case ScoutAssetSafety.restore(row, authorize?: false) do
+      {:ok, _row} -> :ok
+      _error -> :error
+    end
+  end
+
+  @doc """
   How many distinct structures are inside the horizon. Feeds the sidebar
   badge through `WandererApp.Scout.Alerts.count_cached/0`, so it is
   bounded rather than counted: the badge reads "9+" past that.

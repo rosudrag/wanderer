@@ -289,6 +289,7 @@
             <th>Owner</th>
             <th>Where</th>
             <th class="w-40">Reported by</th>
+            <th class="w-10"></th>
           </tr>
         </thead>
         <tbody>
@@ -306,6 +307,74 @@
             <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td class="text-xs text-gray-400">{where(row)}</td>
             <td class="text-xs text-gray-400">{row.character_name || "—"}</td>
+            <td>
+              <button
+                phx-click="dismiss_asset_safety"
+                phx-value-id={row.structure_id}
+                class="btn btn-ghost btn-xs text-gray-600 hover:text-error"
+                title="Dismiss — dealt with; takes this hull off the alert, the board and the badge"
+              >
+                ✕
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </.grid>
+    </.panel>
+
+    <%!-- CHEWY PATCH: the undo list for the board above. Rendered only
+          when non-empty and deliberately NOT window-bounded, like the
+          structures' Archived board: a judgement you cannot find is a
+          judgement you cannot reverse. --%>
+    <.panel
+      :if={
+        asset_safety_enabled?() and show_board?(@board, "asset_safety") and
+          @asset_safety_dismissed != []
+      }
+      id="scout-asset-safety-dismissed"
+      title="Dismissed asset safety"
+      count={length(@asset_safety_dismissed)}
+      hint="hidden from the alert and the board; ignores the window selector"
+    >
+      <.grid id="scout-asset-safety-dismissed-table">
+        <thead>
+          <tr>
+            <th class="w-32">Fired</th>
+            <th>Structure</th>
+            <th>System</th>
+            <th>Owner</th>
+            <th class="w-40">Reported by</th>
+            <th class="w-10"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            :for={row <- @asset_safety_dismissed}
+            id={"scout-asset-safety-dismissed-#{row.id}"}
+            class="opacity-60"
+          >
+            <td><.seen at={row.notified_at} now={@now} /></td>
+            <td>
+              <span class="font-medium text-gray-100">
+                {row.structure_name || to_string(row.structure_id)}
+              </span>
+              <span :if={row.group_name} class="ml-1 badge badge-sm border-neutral-700">
+                {row.group_name}
+              </span>
+            </td>
+            <td><.sys row={row} systems={@systems} /></td>
+            <td class="text-gray-300">{row.owner_name || "—"}</td>
+            <td class="text-xs text-gray-400">{row.character_name || "—"}</td>
+            <td>
+              <button
+                phx-click="restore_asset_safety"
+                phx-value-id={row.structure_id}
+                class="btn btn-ghost btn-xs text-gray-500 hover:text-warning"
+                title="Restore — put this trigger back on the board"
+              >
+                ↺
+              </button>
+            </td>
           </tr>
         </tbody>
       </.grid>
