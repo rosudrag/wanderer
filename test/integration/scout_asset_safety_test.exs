@@ -31,8 +31,11 @@ defmodule WandererApp.ScoutAssetSafetyTest do
   @structure_id 1_035_466_617_946
   @other_structure_id 1_035_466_617_999
 
-  # A real notification body: lowerCamelCase keys, .NET ticks, a
-  # colon-bearing HTML value, and a YAML list this parser must ignore.
+  # A real notification body, copied from live ESI: lowerCamelCase keys,
+  # FILETIME ticks, a colon-bearing HTML value, a YAML list this parser
+  # must ignore — and the YAML ANCHOR on `structureID` that this fixture
+  # did NOT have until 2026-10-11, which is why every test passed while
+  # the feature parsed nothing in production.
   defp text(structure_id \\ @structure_id, system_id \\ @system) do
     """
     assetSafetyDurationFull: 1728000
@@ -42,12 +45,12 @@ defmodule WandererApp.ScoutAssetSafetyTest do
     isCorpOwned: true
     newStationID: 60014707
     solarSystemID: #{system_id}
-    structureID: #{structure_id}
+    structureID: &id001 #{structure_id}
     structureLink: <a href="showinfo:35832//#{structure_id}">Some Astrahus</a>
     structureShowInfoData:
     - showinfo
     - 35832
-    - #{structure_id}
+    - *id001
     structureTypeID: 35832
     """
   end
@@ -112,6 +115,31 @@ defmodule WandererApp.ScoutAssetSafetyTest do
 
       assert fields["structurelink"] =~ "showinfo:35832"
       refute Map.has_key?(fields, "showinfo")
+    end
+
+    # 2026-10-11: the one defect that made this feature never fire.
+    # EVE anchors the structure id (`&id001`) and refers back to it
+    # (`*id001`); read literally the value is "&id001 1042709327956",
+    # which is not an integer, so all 36 live notifications were
+    # skipped — silently, because a skip is also how 48 mining-ledger
+    # rows are dropped.
+    test "resolves the YAML anchor EVE puts on structureID" do
+      fields = AssetSafety.parse_text(text())
+
+      assert fields["structureid"] == to_string(@structure_id)
+      refute fields["structureid"] =~ "&"
+
+      assert {:ok, %{structure_id: @structure_id}} = AssetSafety.parse(notification(6))
+    end
+
+    test "a bare alias value resolves to the anchor it names" do
+      body = """
+      structureID: &id001 4242
+      solarSystemID: 30000142
+      otherID: *id001
+      """
+
+      assert %{"structureid" => "4242", "otherid" => "4242"} = AssetSafety.parse_text(body)
     end
 
     test "to_datetime/1 takes ticks or unix seconds and refuses nonsense" do

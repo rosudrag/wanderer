@@ -940,7 +940,7 @@ error rather than a raise, and a raise now advances `next_run_at` too — a
 heartbeat row that is never written is a hot loop with nothing to read.
 Regression: `test/integration/sync_scheduler_test.exs`.
 
-### Two wire traps, both load-bearing
+### Three wire traps, all load-bearing
 
 The notification body is flat YAML and is parsed **line-wise** — this app has
 no YAML dependency and a notification is not worth one. Only scalar
@@ -958,6 +958,28 @@ split is on the FIRST colon so `structureLink`'s HTML survives intact.
    `timestamp` field is ordinary ISO8601; only the asset-safety deadlines are
    ticks.) `to_datetime/1` accepts either form by magnitude and refuses
    anything outside 2003..2100.
+3. **The body uses YAML anchors, and that one defect made the feature
+   fire zero times.** EVE writes the structure id once with an anchor and
+   refers back to it from the list below:
+
+   ```yaml
+   structureID: &id001 1042709327956
+   structureShowInfoData:
+   - showinfo
+   - 35832
+   - *id001
+   ```
+
+   Read line-wise without resolving that, `structureID` is the string
+   `"&id001 1042709327956"`, which is not an integer — so every single
+   `StructureItemsMovedToSafety` was skipped, by the same `:skip` that
+   drops 48 mining-ledger rows, and nothing said so. Measured 2026-10-11
+   on live ESI: **36 of 36** notifications across five characters,
+   including the Eurgrana hull that started the investigation.
+   `parse_text/1` now strips an anchor from the value it decorates,
+   remembers it, and resolves a bare `*alias`. The test fixture carried
+   no anchor until that day, which is exactly why the suite was green
+   while production parsed nothing — it now mirrors the live body.
 
 ### Half the feature is knowing which hulls are NOT armed
 

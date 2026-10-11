@@ -211,34 +211,81 @@ defmodule WandererApp.Scout.AssetSafety do
   List items, blank lines and anything without a colon are dropped. The
   value keeps its own colons (`structureLink`'s HTML), which is why the
   split is on the FIRST colon only.
+
+  **YAML anchors are resolved, and that is not a nicety.** EVE emits the
+  structure id once with an anchor and refers back to it:
+
+      structureID: &id001 1042709327956
+      structureShowInfoData:
+      - showinfo
+      - 35832
+      - *id001
+
+  Read literally, `structureID` is the string `"&id001 1042709327956"`,
+  which is not an integer — so EVERY `StructureItemsMovedToSafety`
+  notification failed to parse and the trigger never fired once.
+  Measured 2026-10-11 against live ESI: 36 of 36 notifications across
+  five characters, including the Eurgrana hull that started this.
+  An anchor is dropped from the value it decorates and remembered, and a
+  bare `*alias` value resolves to it.
   """
   @spec parse_text(String.t() | nil) :: %{String.t() => String.t()}
   def parse_text(text) when is_binary(text) do
-    text
-    |> String.split(["\r\n", "\n"], trim: true)
-    |> Enum.reduce(%{}, fn line, acc ->
-      trimmed = String.trim(line)
+    {fields, _anchors} =
+      text
+      |> String.split(["\r\n", "\n"], trim: true)
+      |> Enum.reduce({%{}, %{}}, fn line, {fields, anchors} = acc ->
+        trimmed = String.trim(line)
 
-      case String.starts_with?(trimmed, "-") do
-        true ->
-          acc
+        case String.starts_with?(trimmed, "-") do
+          true ->
+            acc
 
-        false ->
-          case String.split(trimmed, ":", parts: 2) do
-            [key, value] ->
-              key = key |> String.trim() |> String.downcase()
-              value = String.trim(value)
+          false ->
+            case String.split(trimmed, ":", parts: 2) do
+              [key, value] ->
+                key = key |> String.trim() |> String.downcase()
+                {anchor, value} = value |> String.trim() |> split_anchor()
+                value = resolve_alias(value, anchors)
 
-              if key == "" or value == "", do: acc, else: Map.put_new(acc, key, value)
+                anchors =
+                  if anchor && value != "", do: Map.put(anchors, anchor, value), else: anchors
 
-            _no_colon ->
-              acc
-          end
-      end
-    end)
+                if key == "" or value == "",
+                  do: {fields, anchors},
+                  else: {Map.put_new(fields, key, value), anchors}
+
+              _no_colon ->
+                acc
+            end
+        end
+      end)
+
+    fields
   end
 
   def parse_text(_text), do: %{}
+
+  # "&id001 1042709327956" -> {"id001", "1042709327956"}
+  # "&id001"               -> {"id001", ""}  (the value is on later lines)
+  # anything else          -> {nil, value}
+  defp split_anchor("&" <> rest) do
+    case String.split(rest, " ", parts: 2) do
+      [anchor, value] -> {anchor, String.trim(value)}
+      [anchor] -> {anchor, ""}
+    end
+  end
+
+  defp split_anchor(value), do: {nil, value}
+
+  # A value that is only `*id001` is a reference to an anchor seen
+  # earlier in the same body. Unknown alias stays verbatim rather than
+  # becoming an empty field: a wrong value is worse than an odd one.
+  defp resolve_alias("*" <> alias_name = value, anchors) do
+    Map.get(anchors, alias_name, value)
+  end
+
+  defp resolve_alias(value, _anchors), do: value
 
   @doc """
   An EVE FILETIME-ticks or unix-seconds integer as a `DateTime`.
