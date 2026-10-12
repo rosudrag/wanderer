@@ -80,6 +80,17 @@
         Refresh
       </button>
     </div>
+
+    <%!-- CHEWY PATCH (planner presets): saved control sets. Last row of
+          the toolbar, under the mode tabs, because a preset applies to
+          every mode at once -- it is not one mode's filter. --%>
+    <.preset_bar
+      presets={@presets}
+      name={@preset_name}
+      active_id={@preset_id}
+      status={@preset_status}
+      max_name_length={WandererApp.Scout.Presets.max_name_length()}
+    />
   </.scout_toolbar>
 
   <%!-- ================================ RANK ============================ --%>

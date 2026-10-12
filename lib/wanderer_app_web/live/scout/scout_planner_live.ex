@@ -86,7 +86,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
 
   alias WandererApp.Api.{MapSolarSystem, ScoutSystemCoverage}
   alias WandererApp.Identity.ScoutAccess
-  alias WandererApp.Scout.{Assignments, PilotLocation, Planner, Regions, Space}
+  alias WandererApp.Scout.{Assignments, PilotLocation, Planner, Presets, Regions, Space}
   alias WandererApp.Scout.{Split, Sweep}
   alias WandererApp.Scout.Targets
   alias WandererAppWeb.ScoutWaypoint
@@ -195,6 +195,23 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            security_types: Enum.reject(Space.types(), fn {key, _label} -> key == :other end),
            characters: characters,
            character_eve_id: characters |> List.first() |> character_eve_id(),
+           # CHEWY PATCH (planner presets): named, saved control sets
+           # (`WandererApp.Scout.Presets`). The sticky localStorage blob
+           # below remembers ONE state -- where this browser left off --
+           # and overwrites it on every click; a preset is a state a
+           # reader named and expects to find again, including which
+           # pilots run it. Read once here rather than on every render:
+           # this child LiveView is mounted lazily, on the first visit to
+           # the Planner tab, and then kept.
+           presets: WandererApp.Scout.Presets.list(current_user.id),
+           preset_name: "",
+           preset_id: nil,
+           # What the last save/load/delete did, rendered AT the control
+           # (`ScoutComponents.preset_bar/1`): everything else this page
+           # can change renders below a table that may be hundreds of
+           # rows, and a control whose only result is off-screen reads as
+           # broken.
+           preset_status: nil,
            # What the last `Set route` did, kept on the page until the
            # next one (`ScoutComponents.route_outcome/1`). The push's
            # result is invisible from here -- it is in a game client --
@@ -1100,6 +1117,104 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   end
 
   # -------------------------------------------------------------------
+  # CHEWY PATCH (planner presets): named, saved control sets.
+  #
+  # A preset is the SAME state map the sticky localStorage blob below
+  # holds (`planner_state/1`), written to `scout_planner_presets_v1`
+  # under a name and re-validated through the SAME applier
+  # (`apply_state/2`) on the way back. One serialiser and one applier, on
+  # purpose: a second copy would be the one that forgets a control the
+  # next planner phase adds, and the failure mode -- a preset that
+  # silently restores all-but-one setting -- is indistinguishable from
+  # the reader having changed it.
+  # -------------------------------------------------------------------
+
+  def handle_event("update_preset_name", %{"name" => name}, socket) do
+    {:noreply, assign(socket, preset_name: String.slice(name, 0, Presets.max_name_length()))}
+  end
+
+  def handle_event("save_preset", params, socket) do
+    name = params |> Map.get("name", socket.assigns.preset_name) |> to_string()
+    user_id = socket.assigns.current_user.id
+
+    case Presets.save(user_id, name, planner_state(socket)) do
+      {:ok, preset} ->
+        {:noreply,
+         assign(socket,
+           presets: Presets.list(user_id),
+           preset_id: preset.id,
+           preset_name: preset.name,
+           preset_status: %{level: :ok, text: "Saved “#{preset.name}”."}
+         )}
+
+      {:error, :blank_name} ->
+        {:noreply,
+         assign(socket, preset_status: %{level: :error, text: "Name the preset first."})}
+
+      {:error, {:too_many, max}} ->
+        {:noreply,
+         assign(socket,
+           preset_status: %{
+             level: :error,
+             text: "You already have #{max} presets — delete one first."
+           }
+         )}
+
+      {:error, :failed} ->
+        {:noreply,
+         assign(socket, preset_status: %{level: :error, text: "Saving the preset failed."})}
+    end
+  end
+
+  # Loading one is exactly a restore: every stored value re-validated like
+  # a click (a region that no longer exists, a character this user no
+  # longer owns, a split slot beyond the stored `k`), then every mode
+  # recomputed -- a preset that changed `mode` AND the other modes' scopes
+  # would otherwise leave the panels the reader is not looking at holding
+  # the previous preset's answer.
+  def handle_event("load_preset", %{"id" => id}, socket) do
+    case Presets.get(socket.assigns.current_user.id, id) do
+      {:ok, preset} ->
+        {:noreply,
+         socket
+         |> apply_state(preset.state)
+         |> assign(
+           preset_id: preset.id,
+           preset_name: preset.name,
+           preset_status: %{level: :ok, text: "Loaded “#{preset.name}”."}
+         )
+         |> persist_filters()
+         |> reload_all()}
+
+      {:error, :not_found} ->
+        {:noreply,
+         socket
+         |> assign(
+           presets: Presets.list(socket.assigns.current_user.id),
+           preset_status: %{level: :error, text: "That preset no longer exists."}
+         )}
+    end
+  end
+
+  def handle_event("delete_preset", %{"id" => id}, socket) do
+    user_id = socket.assigns.current_user.id
+    deleted = Enum.find(socket.assigns.presets, &(&1.id == id))
+
+    status =
+      case Presets.delete(user_id, id) do
+        :ok -> %{level: :ok, text: "Deleted “#{preset_label(deleted)}”."}
+        {:error, :failed} -> %{level: :error, text: "Deleting the preset failed."}
+      end
+
+    {:noreply,
+     assign(socket,
+       presets: Presets.list(user_id),
+       preset_id: if(socket.assigns.preset_id == id, do: nil, else: socket.assigns.preset_id),
+       preset_status: status
+     )}
+  end
+
+  # -------------------------------------------------------------------
   # Sticky filters -- same `LocalStorageSetting` idiom as `ScoutIntelLive`
   # (`lib/wanderer_app_web/live/scout/scout_intel_live.ex`), own key so
   # the two pages' saved state never collides, everything re-validated
@@ -1112,29 +1227,39 @@ defmodule WandererAppWeb.ScoutPlannerLive do
 
   def handle_event("ls_restore_#{@filter_store}", %{"value" => value}, socket) do
     case restore_filters(socket, value) do
-      {:ok, socket} ->
-        socket =
-          socket |> load() |> load_sweep() |> maybe_load_region_heat() |> maybe_load_targets()
-
-        # A restored "follow my pilot" has to actually follow it: the
-        # stored start is where that character was LAST time this page
-        # was open, which is the staleness the toggle exists to remove.
-        if socket.assigns.pilot_start? do
-          {:noreply, resolve_pilot_start(socket)}
-        else
-          {:noreply, socket}
-        end
-
-      :unchanged ->
-        {:noreply, socket}
+      {:ok, socket} -> {:noreply, reload_all(socket)}
+      :unchanged -> {:noreply, socket}
     end
   end
 
-  defp persist_filters(socket) do
-    state = %{
+  # Every mode, because a restore (or a preset) can change all three at
+  # once. A restored "follow my pilot" has to actually follow it: the
+  # stored start is where that character was LAST time, which is the
+  # staleness the toggle exists to remove -- and `resolve_pilot_start/1`
+  # reloads the current mode itself once ESI answers.
+  defp reload_all(socket) do
+    socket = socket |> load() |> load_sweep() |> maybe_load_region_heat() |> maybe_load_targets()
+
+    if socket.assigns.pilot_start?, do: resolve_pilot_start(socket), else: socket
+  end
+
+  defp preset_label(nil), do: "preset"
+  defp preset_label(%{name: name}), do: name
+
+  # The planner's whole control state, in ONE place: the localStorage
+  # blob and a saved preset are the same map, so a control added to one
+  # cannot be missing from the other.
+  defp planner_state(socket) do
+    %{
       "origin_id" => socket.assigns.origin_id,
       "origin_name" => socket.assigns.origin_name,
       "pilot_start" => socket.assigns.pilot_start?,
+      # Whose autopilot every `Set route` on this page writes to, and --
+      # with `pilot_start` on -- whose position the start follows. It is a
+      # setting like any other here, and a preset that restored a Delve
+      # 3-way split onto whichever character happened to be first in the
+      # account's insertion order is a route pushed to the wrong pilot.
+      "character_eve_id" => socket.assigns.character_eve_id,
       "kind" => to_string(socket.assigns.kind),
       "limit" => socket.assigns.limit,
       "max_jumps" => socket.assigns.max_jumps,
@@ -1153,6 +1278,12 @@ defmodule WandererAppWeb.ScoutPlannerLive do
         Map.new(socket.assigns.sweep_starts, fn {index, start} ->
           {to_string(index), %{"id" => start.id, "name" => start.name}}
         end),
+      # One pilot per split part -- "keep my chars in same place", which
+      # is the whole reason a k-way split is worth saving under a name.
+      "sweep_pilots" =>
+        Map.new(socket.assigns.sweep_pilots, fn {index, eve_id} ->
+          {to_string(index), eve_id}
+        end),
       "targets_families" => Enum.map(socket.assigns.targets_families, &to_string/1),
       "targets_window_days" => socket.assigns.targets_window_days,
       "targets_hide_expired" => socket.assigns.targets_hide_expired,
@@ -1163,51 +1294,98 @@ defmodule WandererAppWeb.ScoutPlannerLive do
       "targets_ignore" =>
         Map.new(socket.assigns.targets_ignore, fn {id, name} -> {to_string(id), name} end)
     }
+  end
 
-    push_event(socket, "ls_update_#{@filter_store}", %{value: Jason.encode!(state)})
+  defp persist_filters(socket) do
+    push_event(socket, "ls_update_#{@filter_store}", %{
+      value: Jason.encode!(planner_state(socket))
+    })
   end
 
   defp restore_filters(socket, value) when is_binary(value) do
     case Jason.decode(value) do
-      {:ok, %{} = saved} ->
-        {:ok,
-         assign(socket,
-           origin_id: restore_origin_id(saved),
-           origin_name: restore_origin_name(saved),
-           pilot_start?: restore_bool(saved, "pilot_start", false),
-           kind: restore_kind(saved, socket.assigns.kind),
-           limit: restore_limit(saved, socket.assigns.limit),
-           max_jumps: restore_max_jumps(saved, socket.assigns.max_jumps),
-           regions: restore_regions(saved, "regions", nil),
-           security: restore_security(saved),
-           mode: restore_mode(saved, socket.assigns.mode),
-           sweep_regions: restore_regions(saved, "sweep_regions", @max_sweep_regions),
-           sweep_kind: restore_sweep_kind(saved, socket.assigns.sweep_kind),
-           sweep_security: restore_sweep_security(saved),
-           sweep_compress: restore_sweep_compress(saved, socket.assigns.sweep_compress),
-           sweep_stable: restore_sweep_stable(saved, socket.assigns.sweep_stable),
-           sweep_start: restore_sweep_start(saved),
-           sweep_start_name: restore_sweep_start_name(saved),
-           sweep_k: restore_sweep_k(saved, socket.assigns.sweep_k),
-           sweep_starts:
-             restore_sweep_starts(saved, restore_sweep_k(saved, socket.assigns.sweep_k)),
-           targets_families: restore_targets_families(saved, socket.assigns.targets_families),
-           targets_window_days: restore_targets_window(saved, socket.assigns.targets_window_days),
-           targets_hide_expired:
-             restore_bool(saved, "targets_hide_expired", socket.assigns.targets_hide_expired),
-           targets_security: restore_targets_security(saved),
-           targets_radius: restore_targets_radius(saved, socket.assigns.targets_radius),
-           targets_start: restore_targets_start(saved),
-           targets_start_name: restore_targets_start_name(saved),
-           targets_ignore: restore_targets_ignore(saved)
-         )}
-
-      _ ->
-        :unchanged
+      {:ok, %{} = saved} -> {:ok, apply_state(socket, saved)}
+      _ -> :unchanged
     end
   end
 
   defp restore_filters(_socket, _value), do: :unchanged
+
+  # The one applier, shared by the localStorage restore and by loading a
+  # preset. Both sources are untrusted in the same way -- localStorage is
+  # user-writable, and a preset saved months ago names regions, systems
+  # and characters that may be gone -- so every field is validated here
+  # exactly as the click that sets it would be.
+  defp apply_state(socket, %{} = saved) do
+    k = restore_sweep_k(saved, socket.assigns.sweep_k)
+
+    assign(socket,
+      origin_id: restore_origin_id(saved),
+      origin_name: restore_origin_name(saved),
+      pilot_start?: restore_bool(saved, "pilot_start", false),
+      character_eve_id: restore_character(saved, socket),
+      kind: restore_kind(saved, socket.assigns.kind),
+      limit: restore_limit(saved, socket.assigns.limit),
+      max_jumps: restore_max_jumps(saved, socket.assigns.max_jumps),
+      regions: restore_regions(saved, "regions", nil),
+      security: restore_security(saved),
+      mode: restore_mode(saved, socket.assigns.mode),
+      sweep_regions: restore_regions(saved, "sweep_regions", @max_sweep_regions),
+      sweep_kind: restore_sweep_kind(saved, socket.assigns.sweep_kind),
+      sweep_security: restore_sweep_security(saved),
+      sweep_compress: restore_sweep_compress(saved, socket.assigns.sweep_compress),
+      sweep_stable: restore_sweep_stable(saved, socket.assigns.sweep_stable),
+      sweep_start: restore_sweep_start(saved),
+      sweep_start_name: restore_sweep_start_name(saved),
+      sweep_k: k,
+      sweep_starts: restore_sweep_starts(saved, k),
+      sweep_pilots: restore_sweep_pilots(saved, k, socket.assigns.characters),
+      targets_families: restore_targets_families(saved, socket.assigns.targets_families),
+      targets_window_days: restore_targets_window(saved, socket.assigns.targets_window_days),
+      targets_hide_expired:
+        restore_bool(saved, "targets_hide_expired", socket.assigns.targets_hide_expired),
+      targets_security: restore_targets_security(saved),
+      targets_radius: restore_targets_radius(saved, socket.assigns.targets_radius),
+      targets_start: restore_targets_start(saved),
+      targets_start_name: restore_targets_start_name(saved),
+      targets_ignore: restore_targets_ignore(saved)
+    )
+  end
+
+  defp apply_state(socket, _saved), do: socket
+
+  # A stored pilot is kept only if this user still has that character --
+  # the same check `"select_character"` makes on a click, for the same
+  # reason: this id decides whose autopilot gets rewritten. A preset
+  # naming a character that has since been removed falls back to the
+  # page's current pick rather than to nothing, so the Set route button
+  # stays usable.
+  defp restore_character(%{"character_eve_id" => eve_id}, socket) when is_binary(eve_id) do
+    if Enum.any?(socket.assigns.characters, &(&1.eve_id == eve_id)),
+      do: eve_id,
+      else: socket.assigns.character_eve_id
+  end
+
+  defp restore_character(_saved, socket), do: socket.assigns.character_eve_id
+
+  defp restore_sweep_pilots(%{"sweep_pilots" => saved}, k, characters) when is_map(saved) do
+    saved
+    |> Enum.flat_map(fn
+      {slot, eve_id} when is_binary(eve_id) ->
+        with {:ok, index} <- split_slot(slot, k),
+             true <- Enum.any?(characters, &(&1.eve_id == eve_id)) do
+          [{index, eve_id}]
+        else
+          _ -> []
+        end
+
+      _other ->
+        []
+    end)
+    |> Map.new()
+  end
+
+  defp restore_sweep_pilots(_saved, _k, _characters), do: %{}
 
   # Every stored targets value is re-validated exactly like a click --
   # localStorage is user-writable, and `String.to_existing_atom/1` on a
@@ -1931,11 +2109,16 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     socket = assign(socket, now: DateTime.utc_now())
 
     if socket.assigns.sweep_regions == [] or not connected?(socket) do
+      # `sweep_pilots` is NOT cleared with the parts: who flies which part
+      # is operator INPUT, like a pinned start, not a product of the
+      # sweep. Clearing it meant dropping a scope (or loading a preset
+      # whose scope has not swept yet) silently reset every pilot to the
+      # round-robin default, and `default_pilots/3` already keeps an
+      # existing pick when the split comes back.
       assign(socket,
         sweep_result: nil,
         sweep_error: nil,
         sweep_parts: [],
-        sweep_pilots: %{},
         sweep_loading?: false,
         sweep_token: socket.assigns.sweep_token + 1
       )
@@ -2013,8 +2196,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
       split_loading?: false,
       sweep_result: nil,
       sweep_error: reason,
-      sweep_parts: [],
-      sweep_pilots: %{}
+      sweep_parts: []
     )
   end
 
@@ -2037,7 +2219,6 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     if is_nil(result) or k <= 1 do
       assign(socket,
         sweep_parts: [],
-        sweep_pilots: %{},
         split_loading?: false,
         split_token: socket.assigns.split_token + 1
       )
@@ -2067,11 +2248,11 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   end
 
   defp apply_split(socket, {:ok, {:error, _reason}}),
-    do: assign(socket, split_loading?: false, sweep_parts: [], sweep_pilots: %{})
+    do: assign(socket, split_loading?: false, sweep_parts: [])
 
   defp apply_split(socket, {:exit, reason}) do
     Logger.error("[scout planner] split task exited: #{inspect(reason)}")
-    assign(socket, split_loading?: false, sweep_parts: [], sweep_pilots: %{})
+    assign(socket, split_loading?: false, sweep_parts: [])
   end
 
   # Keeps an operator's existing picks (changing `k` by one should not

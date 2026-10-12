@@ -70,5 +70,7 @@ defmodule WandererApp.Api do
     # WandererApp.Scout.AssetSafety.
     resource WandererApp.Api.ScoutAssetSafety
     resource WandererApp.Api.ScoutAssetLocation
+    # CHEWY PATCH: saved scout-planner presets. See WandererApp.Scout.Presets.
+    resource WandererApp.Api.ScoutPlannerPreset
   end
 end

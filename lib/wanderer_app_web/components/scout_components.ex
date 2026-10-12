@@ -878,6 +878,101 @@ defmodule WandererAppWeb.ScoutComponents do
     """
   end
 
+  attr :presets, :list, required: true
+  attr :name, :string, required: true
+  attr :active_id, :string, default: nil
+  attr :status, :map, default: nil
+  attr :max_name_length, :integer, required: true
+
+  @doc """
+  CHEWY PATCH (planner presets): the saved control sets, as a row in the
+  planner's toolbar — a name box with Save, then one chip per preset.
+
+  A chip LOADS, its `✕` deletes; the chip of the preset currently loaded
+  is marked, because "I clicked Load and the table looks the same" is
+  otherwise indistinguishable from nothing having happened (the usual
+  trap on this page: the result renders a screenful down).
+  `status` says what the last save/load/delete did, inline, for the same
+  reason.
+
+  Loading is one click, not pick-then-confirm: a preset is this user's
+  own saved state, re-validated server-side, and the recompute it
+  triggers is the page's normal task-backed read.
+  """
+  def preset_bar(assigns) do
+    ~H"""
+    <div class="w-full flex flex-wrap items-center gap-2 pt-1 border-t border-neutral-800/80">
+      <form phx-change="update_preset_name" phx-submit="save_preset" class="flex items-center gap-1">
+        <input
+          type="text"
+          name="name"
+          id="scout-planner-preset-name"
+          value={@name}
+          maxlength={@max_name_length}
+          autocomplete="off"
+          placeholder="Preset name…"
+          title="Save every control on this page — mode, scope, bands, kind, split, starts and pilots — under this name"
+          class="input input-xs input-bordered bg-neutral-950/60 w-40"
+        />
+        <button type="submit" id="scout-planner-preset-save" class="btn btn-xs btn-ghost">
+          Save preset
+        </button>
+      </form>
+
+      <div :if={@presets != []} class="flex flex-wrap items-center gap-1">
+        <span
+          :for={preset <- @presets}
+          class={[
+            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
+            if(preset.id == @active_id,
+              do: "border-sky-500/60 bg-sky-500/15 text-sky-200",
+              else: "border-neutral-700 bg-neutral-800/60 text-gray-300"
+            )
+          ]}
+        >
+          <button
+            type="button"
+            phx-click="load_preset"
+            phx-value-id={preset.id}
+            id={"scout-planner-preset-#{preset.id}"}
+            title="Load this preset — every control on the page, including the pilots"
+            class="hover:text-white"
+          >
+            {preset.name}
+          </button>
+          <button
+            type="button"
+            phx-click="delete_preset"
+            phx-value-id={preset.id}
+            id={"scout-planner-preset-delete-#{preset.id}"}
+            title="Delete this preset"
+            aria-label={"Delete preset #{preset.name}"}
+            class="text-gray-500 hover:text-rose-300 leading-none"
+          >
+            ✕
+          </button>
+        </span>
+      </div>
+
+      <span :if={@presets == []} class="text-[11px] text-gray-500">
+        no presets yet — name this setup and save it
+      </span>
+
+      <span
+        :if={@status}
+        id="scout-planner-preset-status"
+        class={[
+          "text-[11px]",
+          @status.level == :ok && "text-emerald-300",
+          @status.level == :error && "text-rose-300"
+        ]}
+      >
+        {@status.text}
+      </span>
+    </div>
+    """
+  end
+
   attr :id, :string, required: true
   attr :label, :string, required: true
   attr :scope, :string, required: true
