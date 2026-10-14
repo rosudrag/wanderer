@@ -42,6 +42,7 @@ defmodule WandererAppWeb.ScoutExportController do
                         structure_id type_id structure_name group_name owner_id owner_name
                         alliance_id upkeep_state structure_state status
                         vulnerable anchoring unanchoring unanchoring_since
+                        unanchor_ended_at unanchor_outcome
                         timer_seconds timer_expires_at
                         shield_pct armor_pct hull_pct pos_x pos_y pos_z
                         nearest_celestial nearest_celestial_m missing_count missing_since

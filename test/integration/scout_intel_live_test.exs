@@ -554,6 +554,91 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert unanchoring =~ "Orbital: unanchors in minutes"
     end
 
+    test "a run past its 7 days leaves the Unanchoring board for the resolved one",
+         %{conn: conn} do
+      # Nothing contradicted this row -- it is still `:seen`, still
+      # "Unanchoring" -- but a decommission is a fixed 7 days, so it
+      # cannot still be coming out. Before this it sat on the board, and
+      # in the "Now" lead, as a hull to fly to.
+      structure(%{
+        structure_id: 1_000_000_000_080,
+        structure_name: "Nine Days Gone Astrahus",
+        group_name: "Citadel",
+        status: "Unanchoring",
+        unanchoring_since:
+          DateTime.utc_now() |> DateTime.add(-9, :day) |> DateTime.truncate(:second)
+      })
+
+      # A live run, so the Unanchoring board is rendered at all -- and so
+      # the refute below is about the split, not about an empty board.
+      structure(%{
+        structure_id: 1_000_000_000_083,
+        structure_name: "Still Coming Out Astrahus",
+        group_name: "Citadel",
+        status: "Unanchoring",
+        unanchoring_since:
+          DateTime.utc_now() |> DateTime.add(-1, :day) |> DateTime.truncate(:second)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      unanchoring = view |> element("#scout-unanchoring") |> render()
+      assert unanchoring =~ "Still Coming Out Astrahus"
+      refute unanchoring =~ "Nine Days Gone Astrahus"
+
+      sorted = view |> element("#scout-sorted") |> render()
+      assert sorted =~ "Nine Days Gone Astrahus"
+      assert sorted =~ "7-day window passed"
+    end
+
+    test "a run the feed watched end says HOW it ended, even though the row is gone",
+         %{conn: conn} do
+      # `:vanished` IS the absence pipeline's `:gone`, so this board is
+      # the one place on the page that must not filter `presence`.
+      structure(%{
+        structure_id: 1_000_000_000_081,
+        structure_name: "Collected Astrahus",
+        group_name: "Citadel",
+        status: "Unanchoring",
+        presence: :gone,
+        unanchoring_since:
+          DateTime.utc_now() |> DateTime.add(-3, :day) |> DateTime.truncate(:second),
+        unanchor_outcome: :vanished,
+        unanchor_ended_at:
+          DateTime.utc_now() |> DateTime.add(-2, :hour) |> DateTime.truncate(:second)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      sorted = view |> element("#scout-sorted") |> render()
+      assert sorted =~ "Collected Astrahus"
+      assert sorted =~ "gone when we next looked"
+
+      # And it is not an opportunity any more: nothing renders a row on
+      # the live Unanchoring board.
+      refute render(view) =~ "scout-unanchoring-"
+    end
+
+    test "a hull that came out loose is NOT on the resolved board -- it is the alert",
+         %{conn: conn} do
+      structure(%{
+        structure_id: 1_000_000_000_082,
+        structure_name: "Loose Astrahus",
+        group_name: "Citadel",
+        status: "Unanchored",
+        unanchoring_since:
+          DateTime.utc_now() |> DateTime.add(-3, :day) |> DateTime.truncate(:second),
+        unanchor_outcome: :unanchored,
+        unanchor_ended_at:
+          DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:second)
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      refute view |> element("#scout-sorted") |> render() =~ "Loose Astrahus"
+      assert view |> element("#scout-unanchored") |> render() =~ "Loose Astrahus"
+    end
+
     test "the Where column names the celestial and prints no distance", %{conn: conn} do
       structure(%{
         structure_id: 1_000_000_000_069,

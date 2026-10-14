@@ -210,6 +210,15 @@
       tone={if @unanchoring_structures != [], do: :warn, else: :neutral}
     />
     <.stat
+      id="scout-stat-sorted"
+      label="Sorted elsewhere"
+      board="sorted"
+      active={@board == "sorted"}
+      value={to_string(length(@sorted_structures))}
+      hint="runs that ended without us"
+      tone={:neutral}
+    />
+    <.stat
       id="scout-stat-abandoned"
       label="Abandoned"
       board="abandoned"
@@ -587,7 +596,6 @@
       </.grid>
     </.panel>
 
-
     <%!-- CHEWY PATCH: the errand the Unanchoring board cannot express.
 
           The asset-safety trigger only fires for a structure we put
@@ -690,6 +698,64 @@
             <td :if={asset_safety_enabled?()}>
               <.armed_cell row={row} armed_by={@armed_by} />
             </td>
+            <td class="text-xs text-gray-400">{where(row)}</td>
+            <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            <td><.archive_cell row={row} /></td>
+          </tr>
+        </tbody>
+      </.grid>
+    </.panel>
+
+    <%!-- CHEWY PATCH: the endings. An unanchoring run is the one finding
+          on this page with a fixed lifetime, and until now it left the
+          Unanchoring board by simply disappearing -- the row went
+          `:gone`, or a steady id cleared it, or its 7 days quietly ran
+          out, and the page said nothing. "Nobody got it and it is over"
+          and "we are still waiting" looked identical.
+
+          Everything here is somebody else's work: the owner stopped the
+          decommission, a third party reinforced it, or the hull was
+          collected between two of our visits. `:unanchored` endings are
+          NOT on this board -- that hull is loose, and it is on the red
+          alert above. --%>
+    <.panel
+      :if={show_board?(@board, "sorted")}
+      id="scout-sorted"
+      title="Someone else sorted it"
+      count={length(@sorted_structures)}
+      tone={:neutral}
+      hint="unanchoring runs that ended without a hull for us — stopped, gone when we next looked, or past their 7 days"
+      copy="sorted"
+      empty={@sorted_structures == []}
+      empty_text="no unanchoring run has ended in this window"
+    >
+      <.grid id="scout-sorted-table">
+        <thead>
+          <tr>
+            <th class="w-36">Ended</th>
+            <th class="w-44">How</th>
+            <th>Structure</th>
+            <th>System</th>
+            <th>Owner</th>
+            <th>Where</th>
+            <th class="w-32">Last seen</th>
+            <th class="w-10"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={row <- @sorted_structures} id={"scout-sorted-#{row.id}"}>
+            <td><.ended_cell row={row} now={@now} /></td>
+            <td><.outcome_cell row={row} now={@now} /></td>
+            <td>
+              <.subject
+                name={row.structure_name || to_string(row.structure_id)}
+                badge={row.group_name}
+                click="show_structure"
+                phx-value-id={row.structure_id}
+              />
+            </td>
+            <td><.sys row={row} systems={@systems} /></td>
+            <td class="text-gray-300">{row.owner_name || "—"}</td>
             <td class="text-xs text-gray-400">{where(row)}</td>
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
             <td><.archive_cell row={row} /></td>

@@ -343,7 +343,7 @@ defmodule WandererApp.ScoutSnapshotTest do
       assert stored!().unanchoring_since == anchor
     end
 
-    test "leaving the family clears it, and a restart anchors on the restart" do
+    test "leaving the family ENDS the run, and a restart anchors on the restart" do
       {:ok, _} =
         Snapshot.ingest(
           nil,
@@ -352,8 +352,9 @@ defmodule WandererApp.ScoutSnapshotTest do
 
       first = stored!().unanchoring_since
 
-      # Cancelled: EVE restarts the full 7 days, so the old anchor must
-      # not survive the gap.
+      # Somebody stopped it. The anchor stays (it dates the run on the
+      # resolved board) and the ending is recorded; EVE restarts the
+      # full 7 days, so a RESTART must re-anchor rather than reuse it.
       {:ok, _} =
         Snapshot.ingest(
           nil,
@@ -363,13 +364,70 @@ defmodule WandererApp.ScoutSnapshotTest do
           })
         )
 
-      refute stored!().unanchoring_since
+      ended = stored!()
+      assert ended.unanchor_outcome == :stopped
+      assert ended.unanchor_ended_at
+      # An ended run has no live deadline, whatever the anchor still says.
+      assert WandererApp.Scout.Unanchor.predicted_max_at(ended) == nil
 
       {:ok, _} = Snapshot.ingest(nil, blob(%{"structures" => unanchoring()}))
 
-      restarted = stored!().unanchoring_since
-      assert restarted
-      assert DateTime.compare(restarted, first) == :gt
+      restarted = stored!()
+      assert restarted.unanchoring_since
+      assert DateTime.compare(restarted.unanchoring_since, first) == :gt
+      refute restarted.unanchor_outcome
+      refute restarted.unanchor_ended_at
+    end
+
+    test "a steady id ends the run: it is still there, and it is boring now" do
+      {:ok, _} =
+        Snapshot.ingest(
+          nil,
+          blob(%{"observed_at" => to_string(minutes_ago(90)), "structures" => unanchoring()})
+        )
+
+      {:ok, %{cleared: 1}} =
+        Snapshot.ingest(
+          nil,
+          blob(%{"structures" => [], "steady_ids" => [to_string(@structure_id)]})
+        )
+
+      row = stored!()
+      # `status` is untouched by a steady id -- which is exactly why the
+      # ending has to be its own column.
+      assert row.status == "Unanchoring"
+      assert row.presence == :cleared
+      assert row.unanchor_outcome == :stopped
+    end
+
+    test "an absence promoted to :gone ends the run as vanished, one miss does not" do
+      {:ok, _} =
+        Snapshot.ingest(
+          nil,
+          blob(%{"observed_at" => to_string(minutes_ago(120)), "structures" => unanchoring()})
+        )
+
+      {:ok, %{missing: 1, gone: 0}} =
+        Snapshot.ingest(
+          nil,
+          blob(%{
+            "observed_at" => to_string(minutes_ago(90)),
+            "structures" => [structure_row(%{"structure_id" => "1000"})]
+          })
+        )
+
+      refute stored!().unanchor_outcome
+
+      {:ok, %{gone: 1}} =
+        Snapshot.ingest(
+          nil,
+          blob(%{"structures" => [structure_row(%{"structure_id" => "1000"})]})
+        )
+
+      row = stored!()
+      assert row.presence == :gone
+      assert row.unanchor_outcome == :vanished
+      assert row.unanchor_ended_at
     end
   end
 

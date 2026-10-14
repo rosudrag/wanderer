@@ -96,7 +96,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
   # CHEWY PATCH: the structures tab's boards, in render order. The
   # summary strip is keyed on these, so a card can solo its own board.
-  @boards ~w(asset_safety unarmed now unanchored timers anchoring unanchoring abandoned no_fuel archived log)
+  @boards ~w(asset_safety unarmed now unanchored timers anchoring unanchoring sorted abandoned no_fuel archived log)
 
   # CHEWY PATCH: how far ahead "Now" looks. A timer further out than
   # this is something to plan around, not something to undock for, and
@@ -155,6 +155,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
          abandoned_structures: [],
          no_fuel_structures: [],
          unanchoring_structures: [],
+         sorted_structures: [],
          archived_structures: [],
          spawns: [],
          fresh_spawns: [],
@@ -915,9 +916,28 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
     # Being pulled out of the ground: a one-shot opportunity with a
     # hard deadline. `:unanchoring` mirrors `:search`'s filters, scoped
-    # server-side to `status == "Unanchoring"`.
-    {unanchoring_structures, _more} =
+    # server-side to `status == "Unanchoring"` and to runs nothing has
+    # ended yet.
+    {unanchoring_rows, _more} =
       read(ScoutStructure, :unanchoring, Map.put(filters, :since, since), limit)
+
+    # CHEWY PATCH: the ending nobody observed. A decommission is a fixed
+    # 7 days, so a run past `unanchoring_since + 7d` is over whatever
+    # the last sweep saw -- it is not a hull to fly to, and leaving it
+    # on the board (and in `now_rows/1`, which took anything inside 48h
+    # of the bound INCLUDING a bound already passed) is the page
+    # claiming an opportunity that cannot exist. It moves to the
+    # resolved board instead of vanishing, because "we never saw how
+    # this ended" is itself the finding.
+    {expired, unanchoring_structures} =
+      Enum.split_with(unanchoring_rows, &(Unanchor.outcome(&1, now) == :expired))
+
+    # Runs that ended with the structure still in the ground or already
+    # collected by somebody else. Window-bounded on when the run ENDED,
+    # not on `last_confirmed_at`: a `:vanished` row's last confirmation
+    # is by definition older than its ending.
+    {resolved_structures, _more} =
+      read(ScoutStructure, :unanchor_resolved, Map.put(filters, :since, since), limit)
 
     # CHEWY PATCH: which of those hulls actually has one of our items in
     # it, and therefore whether EVE will tell us the moment it comes out
@@ -963,6 +983,10 @@ defmodule WandererAppWeb.ScoutIntelLive do
       abandoned_structures: by_recent(abandoned_structures),
       no_fuel_structures: by_recent(no_fuel_structures),
       unanchoring_structures: unanchoring_structures,
+      # One board, two sources: runs a sweep watched end, and runs whose
+      # window ran out with nothing to contradict them. `outcome/2`
+      # names both, so the table does not care which it is reading.
+      sorted_structures: by_ended(resolved_structures ++ expired, now),
       armed_by: armed_by,
       unarmed_structures: unarmed_structures,
       archived_structures: by_archived(archived_structures),
@@ -977,6 +1001,8 @@ defmodule WandererAppWeb.ScoutIntelLive do
       abandoned_structures,
       no_fuel_structures,
       unanchoring_structures,
+      resolved_structures,
+      expired,
       archived_structures
     ])
   end
@@ -1014,6 +1040,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
       abandoned_structures: [],
       no_fuel_structures: [],
       unanchoring_structures: [],
+      sorted_structures: [],
       armed_by: %{},
       unarmed_structures: [],
       archived_structures: [],
@@ -1144,6 +1171,18 @@ defmodule WandererAppWeb.ScoutIntelLive do
         at -> {0, DateTime.to_unix(at)}
       end
     end)
+  end
+
+  # CHEWY PATCH: the resolved board's order -- most recently ended
+  # first, so the thing that just stopped being an opportunity is at the
+  # top. An expired run has no observed ending, so it sorts on the
+  # window it passed, which is the only instant the page knows about it.
+  defp by_ended(rows, now) do
+    Enum.sort_by(
+      rows,
+      fn row -> row.unanchor_ended_at || Unanchor.predicted_max_at(row) || now end,
+      {:desc, DateTime}
+    )
   end
 
   # Most recently archived first: the board is read as "what did we just
@@ -1310,6 +1349,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
   defp discord_rows(:timers, socket), do: socket.assigns.active_timers
   defp discord_rows(:anchoring, socket), do: socket.assigns.anchoring_structures
   defp discord_rows(:unanchoring, socket), do: socket.assigns.unanchoring_structures
+  defp discord_rows(:sorted, socket), do: socket.assigns.sorted_structures
   defp discord_rows(:abandoned, socket), do: socket.assigns.abandoned_structures
   defp discord_rows(:no_fuel, socket), do: socket.assigns.no_fuel_structures
   defp discord_rows(:spawns, socket), do: socket.assigns.fresh_spawns
@@ -1371,7 +1411,6 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
     "/scout/export.csv?" <> URI.encode_query(params)
   end
-
 
   # The pilots this user could fly. Sorted by name once, here, for the
   # reason the planner sorts its own: a list you have to scan is where

@@ -1357,6 +1357,63 @@ defmodule WandererAppWeb.ScoutComponents do
     """
   end
 
+  attr :row, :map, required: true
+  attr :now, :any, required: true
+
+  @doc """
+  CHEWY PATCH: how an unanchoring run ENDED, as a badge plus the words
+  for it (`WandererApp.Scout.Unanchor.outcome/2`).
+
+  Only `:unanchored` is good news, and that row is never on this board
+  — it is on the Unanchored alert, loose and shouting. Everything else
+  here is somebody else's work: the run stopped, or the hull was gone
+  by the time we next looked, or its 7 days ran out with nothing to
+  contradict it. The badge colour says which of those is an
+  OBSERVATION (muted grey: a sweep saw it) and which is an INFERENCE
+  (dashed: the window simply passed), because a reader planning a trip
+  needs to know the difference.
+  """
+  def outcome_cell(assigns) do
+    assigns = assign(assigns, :outcome, Unanchor.outcome(assigns.row, assigns.now))
+
+    ~H"""
+    <span class={["badge badge-sm border font-normal", outcome_class(@outcome)]}>
+      {Unanchor.outcome_label(@outcome)}
+    </span>
+    """
+  end
+
+  defp outcome_class(:expired), do: "border-dashed border-neutral-600 text-gray-400"
+  defp outcome_class(:vanished), do: "border-neutral-700 bg-neutral-800/60 text-gray-300"
+  defp outcome_class(:stopped), do: "border-neutral-700 bg-neutral-800/60 text-gray-300"
+  defp outcome_class(_other), do: "border-neutral-700 text-gray-400"
+
+  attr :row, :map, required: true
+  attr :now, :any, required: true
+
+  @doc """
+  CHEWY PATCH: when an unanchoring run ended. A stored
+  `unanchor_ended_at` is an observation, so it renders like every other
+  one on this page; an expired run has none — nothing observed it — so
+  it falls back to the 7-day bound it passed, labelled `≥` because the
+  real ending was at or before it.
+  """
+  def ended_cell(assigns) do
+    ~H"""
+    <.seen :if={@row.unanchor_ended_at} at={@row.unanchor_ended_at} now={@now} />
+    <div
+      :if={is_nil(@row.unanchor_ended_at)}
+      class="whitespace-nowrap"
+      title="Nothing saw this end: its 7-day decommission window simply ran out"
+    >
+      <span class="font-mono tabular-nums text-gray-400">
+        ≥ {ago(Unanchor.predicted_max_at(@row), @now)}
+      </span>
+      <div class="text-[11px] text-gray-500 font-mono">{at(Unanchor.predicted_max_at(@row))}</div>
+    </div>
+    """
+  end
+
   attr :at, :any, default: nil
   attr :now, :any, required: true
   attr :tone, :boolean, default: false

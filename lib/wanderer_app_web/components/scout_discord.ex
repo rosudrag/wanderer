@@ -68,7 +68,11 @@ defmodule WandererAppWeb.ScoutDiscord do
     :spawns
   ]
 
-  @boards @digest_boards
+  # CHEWY PATCH: copyable, but deliberately NOT in the digest. The
+  # digest is the errand list for the next hour; a run that already
+  # ended is a post-mortem, and spending the shared 2000-character
+  # budget on it would push a live timer out of the message.
+  @boards @digest_boards ++ [:sorted]
 
   @doc "The boards `message/3` understands, as strings for `phx-value-board`."
   @spec boards() :: [String.t()]
@@ -262,6 +266,27 @@ defmodule WandererAppWeb.ScoutDiscord do
   # somebody has already dropped an item into.
   defp line(:unarmed, row, opts), do: line(:unanchoring, row, opts)
 
+  # CHEWY PATCH: an ending, so the stamp IS the news — when it stopped
+  # being ours to take, and which of the four endings it was. A stored
+  # `unanchor_ended_at` is an observation; an expired run has none, so
+  # the bound it passed is stamped instead, which is what the page
+  # shows too.
+  defp line(:sorted, row, opts) do
+    ended =
+      case row.unanchor_ended_at || Unanchor.predicted_max_at(row) do
+        nil -> "—"
+        at -> stamp(at, "R")
+      end
+
+    outcome = Unanchor.outcome(row, Keyword.get(opts, :now) || DateTime.utc_now())
+
+    "• " <>
+      ended <>
+      " · " <>
+      subject(row) <>
+      " · " <> place(row, opts) <> owner(row) <> " · " <> escape(Unanchor.outcome_label(outcome))
+  end
+
   # CHEWY PATCH: the one board whose timestamp is an EVENT, not an
   # observation — EVE's own "asset safety fired" instant. Relative only:
   # what a reader does with it is "20 minutes ago, go now" / "two days
@@ -363,6 +388,7 @@ defmodule WandererAppWeb.ScoutDiscord do
   defp label(:timers), do: "⏳ Timers running"
   defp label(:anchoring), do: "🔧 Anchoring"
   defp label(:unanchoring), do: "📦 Unanchoring"
+  defp label(:sorted), do: "🪦 Unanchoring runs that ended"
   defp label(:abandoned), do: "💀 Abandoned"
   defp label(:no_fuel), do: "⛽ No fuel"
   defp label(:spawns), do: "⭐ Spawns, last 24h"

@@ -706,12 +706,19 @@ defmodule WandererApp.Scout.Snapshot do
       if stale?(known, blob.observed_at) do
         {ok, skipped + 1}
       else
-        attrs = %{
-          presence: :cleared,
-          last_confirmed_at: blob.observed_at,
-          missing_count: 0,
-          missing_since: nil
-        }
+        attrs =
+          %{
+            presence: :cleared,
+            last_confirmed_at: blob.observed_at,
+            missing_count: 0,
+            missing_since: nil
+          }
+          # A steady id means "still there, and boring". It carries no
+          # status, so `status` stays whatever the last sighting said --
+          # including "Unanchoring" -- which is exactly why the ending
+          # has to be recorded here rather than inferred from `status`
+          # later. See `WandererApp.Scout.Unanchor`.
+          |> Map.merge(Unanchor.stopped(known, blob.observed_at))
 
         case update(known, attrs) do
           {:ok, _record} ->
@@ -814,7 +821,17 @@ defmodule WandererApp.Scout.Snapshot do
           do: :gone,
           else: :missing
 
-      attrs = %{missing_count: new_count, missing_since: new_since, presence: presence}
+      # An absence that reached `:gone` on a structure still recorded as
+      # unanchoring IS the ending: it came out and was collected, or was
+      # killed, between two of our visits. `:missing` is not enough --
+      # one quiet d-scan proves nothing, and `gone?/5` is where that
+      # judgement already lives.
+      resolution =
+        if presence == :gone, do: Unanchor.vanished(known, observed_at), else: %{}
+
+      attrs =
+        %{missing_count: new_count, missing_since: new_since, presence: presence}
+        |> Map.merge(resolution)
 
       case update(known, attrs) do
         {:ok, _record} ->

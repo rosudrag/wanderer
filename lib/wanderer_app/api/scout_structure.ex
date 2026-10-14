@@ -94,6 +94,7 @@ defmodule WandererApp.Api.ScoutStructure do
     define(:anchoring, action: :anchoring, args: [:since])
     define(:unanchored, action: :unanchored, args: [:since])
     define(:unanchoring, action: :unanchoring, args: [:since])
+    define(:unanchor_resolved, action: :unanchor_resolved, args: [:since])
     define(:active_timers, action: :active_timers, args: [:now])
     define(:search, action: :search, args: [:since])
     define(:archived, action: :archived)
@@ -120,6 +121,8 @@ defmodule WandererApp.Api.ScoutStructure do
       :anchoring,
       :unanchoring,
       :unanchoring_since,
+      :unanchor_ended_at,
+      :unanchor_outcome,
       :timer_seconds,
       :timer_expires_at,
       :shield_pct,
@@ -276,6 +279,12 @@ defmodule WandererApp.Api.ScoutStructure do
     # deadline. `presence == :seen` -- once it finishes and the
     # structure actually leaves, the absence pipeline takes it to
     # `:missing` / `:gone`, and this board stops claiming it.
+    #
+    # `is_nil(unanchor_outcome)` is the other half of that, and it is
+    # not redundant: a `steady_ids` clear leaves `status` on
+    # "Unanchoring" (a steady id carries no state to overwrite it with),
+    # so a run somebody stopped would otherwise still read as live the
+    # moment any later sighting put the row back to `:seen`.
     read :unanchoring do
       argument :since, :utc_datetime, allow_nil?: false
       argument :system_id, :integer
@@ -286,6 +295,7 @@ defmodule WandererApp.Api.ScoutStructure do
                  archived == false and
                  last_confirmed_at >= ^arg(:since) and
                  status in ^WandererApp.Scout.Status.unanchoring_family() and
+                 is_nil(unanchor_outcome) and
                  (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
                  (is_nil(^arg(:q)) or
                     fragment(
@@ -299,6 +309,41 @@ defmodule WandererApp.Api.ScoutStructure do
              )
 
       prepare build(sort: [last_confirmed_at: :desc], load: [:archived])
+    end
+
+    # CHEWY PATCH: runs that ENDED, and not with a hull we could take --
+    # "somebody else sorted it". Deliberately NOT filtered on
+    # `presence == :seen`: the commonest ending by far is `:vanished`,
+    # which IS the absence pipeline's `:gone`, so filtering presence
+    # here would empty the board of exactly the rows it exists for.
+    # `archived == false` still applies: a reader's dismissal outranks
+    # every board on this page.
+    #
+    # `:unanchored` is excluded because that ending is not this board's
+    # story -- the hull is loose and the row is on the Unanchored alert
+    # board, shouting, which is where it belongs.
+    read :unanchor_resolved do
+      argument :since, :utc_datetime, allow_nil?: false
+      argument :system_id, :integer
+      argument :q, :string
+
+      filter expr(
+               archived == false and
+                 unanchor_outcome in [:stopped, :vanished] and
+                 unanchor_ended_at >= ^arg(:since) and
+                 (is_nil(^arg(:system_id)) or solar_system_id == ^arg(:system_id)) and
+                 (is_nil(^arg(:q)) or
+                    fragment(
+                      "(coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'') || ' ' || coalesce(?,'')) ILIKE '%' || ? || '%'",
+                      structure_name,
+                      owner_name,
+                      group_name,
+                      nearest_celestial,
+                      ^arg(:q)
+                    ))
+             )
+
+      prepare build(sort: [unanchor_ended_at: :desc], load: [:archived])
     end
 
     # The one genuinely time-critical board. `since` deliberately does
@@ -469,6 +514,22 @@ defmodule WandererApp.Api.ScoutStructure do
     # decommission. A decommission carries no wire timer, so without
     # this column that board has no deadline at all.
     attribute :unanchoring_since, :utc_datetime
+
+    # CHEWY PATCH: how and when the unanchoring run ENDED. Written by
+    # `WandererApp.Scout.Unanchor` through the same three paths that can
+    # observe an ending -- a direct re-sighting, a `steady_ids` clear,
+    # and the absence pipeline's `:gone` promotion. Before these
+    # columns a run that ended left no trace: the row simply dropped off
+    # the Unanchoring board with no reason given, and `unanchoring_since`
+    # was nulled, so nothing could say whether we got the hull or
+    # somebody else did. `:expired` is NOT in this vocabulary: nothing
+    # observed it, so it is derived at read time from
+    # `unanchoring_since` -- see `WandererApp.Scout.Unanchor`.
+    attribute :unanchor_ended_at, :utc_datetime
+
+    attribute :unanchor_outcome, :atom do
+      constraints one_of: [:unanchored, :stopped, :vanished]
+    end
 
     attribute :timer_seconds, :integer
     attribute :timer_expires_at, :utc_datetime

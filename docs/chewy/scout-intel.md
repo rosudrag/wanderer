@@ -284,9 +284,12 @@ early, never too late).
 Three rules keep the bound honest, all in `Unanchor.transition/4` and
 applied by `Scout.Snapshot` on the appeared / changed / unchanged paths:
 
-- A status leaving the family **clears** the anchor. A cancelled
-  decommission restarts the 7 days, so a surviving anchor would
-  under-predict — the one error direction that makes the column dangerous.
+- A status leaving the family **ends the run** rather than clearing the
+  anchor (it used to null it): `unanchor_ended_at` / `unanchor_outcome` are
+  written, the anchor stays to date the run on the resolved board, and
+  `predicted_max_at/1` refuses to answer for an ended run — so no board can
+  read a dead anchor as a live deadline. A **restart** re-anchors on the
+  restart, because a cancelled decommission restarts the full 7 days.
 - A later sweep confirming the **same** run never moves the anchor forward;
   the anchor is the first sighting of that run.
 - A row that is unanchoring with no anchor stored (a backfilled one) takes
@@ -307,6 +310,67 @@ LATEST `status_after = 'Unanchoring'` transition per structure, falling back
 to `last_changed_at` — both upper bounds on the real start.
 
 [decom]: https://support.eveonline.com/hc/en-us/articles/208289335-Upwell-Structure-Deployment-and-Unanchoring
+
+## Someone else sorted it — how an unanchoring run ENDS
+
+`WandererApp.Scout.Unanchor` owns the vocabulary;
+`ScoutStructure`'s `:unanchor_resolved` read and the **Someone else sorted
+it** board render it.
+
+A decommission is the only finding on this page with a fixed lifetime, and
+until 1.103.4-chewy.110 it left the Unanchoring board by *disappearing*. The
+row went `:gone`, or a `steady_ids` entry cleared it, or its 7 days quietly
+ran out — and the page said nothing. "Nobody got it and it is over" and "we
+are still waiting" looked identical, and the one thing a fleet wants to know
+about a hull it has been watching for a week is which of those it is.
+
+Measured on the live database 2026-10-14: **41** rows sitting at
+`status='Unanchoring'` / `presence='gone'` and 2 more re-sighted in another
+status — 43 endings nobody could see, against 30 rows the Unanchoring board
+was still offering. Two of those 30 were already past their 7 days: listed
+as hulls to fly to, and in the `now_rows/1` lead as well, which took
+anything inside 48h of the bound *including a bound already passed*.
+
+Four endings, one derived:
+
+|Outcome|Observed by|Means|
+|---|---|---|
+|`:unanchored`|a sighting in `Status.unanchored_family/0`|the hull came out and is loose — **not** on this board, it is on the red alert|
+|`:stopped`|a sighting in any other status, or a `steady_ids` clear|the decommission is not running any more and the structure is still there|
+|`:vanished`|the absence pipeline promoting it to `:gone`|it finished and was collected (or killed) between two of our visits|
+|`:expired`|**nothing** — derived at read time|`unanchoring_since + 7d` has passed with nothing to contradict it, so it cannot still be in the ground|
+
+`:expired` is never stored, on purpose: nothing observed it, and a write
+would turn an inference into a record. `Unanchor.outcome/2` resolves stored
+and derived endings through one function, so the board does not care which
+it is reading, and `ended_cell/1` renders a stored ending like every other
+observation on the page but an expired one as `≥` the bound it passed.
+
+Three loads of the rule, each a place it would otherwise be wrong:
+
+- A `steady_ids` clear carries **no status**, so `status` stays
+  `"Unanchoring"` on that row forever. That is exactly why the ending is its
+  own column rather than inferred from `status` later — and why the
+  `:unanchoring` board filters `is_nil(unanchor_outcome)` as well as
+  `presence == :seen`.
+- The `:unanchor_resolved` read is the one board on this page that does
+  **not** filter `presence == :seen`: `:vanished` *is* `:gone`, so filtering
+  presence would empty the board of the rows it exists for. `archived ==
+  false` still applies — a reader's dismissal outranks every board here.
+- An absence only ends a run at `:gone`, never at `:missing`. One quiet
+  d-scan proves nothing; `Snapshot.gone?/5` (two absences 30 minutes apart,
+  or an expired wire timer) is where that judgement already lives.
+
+Migration `20261014162500` backfills those 43 endings from the append-only
+event log — the `:gone` / `cleared` / `changed` event that observed each
+one, falling back to `missing_since` where the event write had failed.
+`presence='missing'` rows are deliberately left alone: they are not endings
+yet.
+
+The board is copyable to Discord (`🪦 Unanchoring runs that ended`) but is
+**not** in the digest: the digest is the next hour's errand list, and a
+post-mortem spending that shared 2000-character budget would push a live
+timer out of the message.
 
 ## Flying to a row: the `⤳` button and the pilot picker
 
@@ -1075,6 +1139,7 @@ unanchored look identical, and only one of them is a bug the reader can fix.
 |Ingest + coercion|`lib/wanderer_app/scout/ingest.ex`|
 |Status families (`unanchored_family/0`, `anchoring_family/0`, ...)|`lib/wanderer_app/scout/status.ex`|
 |Unanchored alert (reads + cached badge count)|`lib/wanderer_app/scout/alerts.ex`|
+|Decommission bound + how a run ended (`outcome/2`, `transition/4`)|`lib/wanderer_app/scout/unanchor.ex`|
 |Aggregates (group-by, freshness, totals)|`lib/wanderer_app/scout/stats.ex`|
 |Space-type filter (class subquery)|`lib/wanderer_app/scout/space.ex`|
 |Resources|`lib/wanderer_app/api/scout_{spawn,structure}_sighting.ex`|

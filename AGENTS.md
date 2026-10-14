@@ -131,10 +131,29 @@ Any new board inherits all three.
 no countdown (`timer_seconds` is reinforcement timers only), so the old "Comes out" column over
 `timer_expires_at` was structurally a column of em dashes and `by_deadline/1` sorted that board on
 nothing. EVE's decommission is a fixed **7 days** and a cancel restarts it, so
-`WandererApp.Scout.Unanchor` anchors on `unanchoring_since` — the first sweep that saw the run,
-cleared the instant the status leaves the family — and renders `≤ first sighting + 7d`: an upper
-bound, never a timer. Orbitals are excluded (minutes, not days). Keep the direction: a stale anchor
-that survived a cancel would under-predict, which is the only error that gets a fleet killed.
+`WandererApp.Scout.Unanchor` anchors on `unanchoring_since` — the first sweep that saw the run —
+and renders `≤ first sighting + 7d`: an upper bound, never a timer. Orbitals are excluded (minutes,
+not days). Keep the direction: a stale anchor that survived a cancel would under-predict, which is
+the only error that gets a fleet killed — so a RESTART re-anchors, and an ENDED run answers `nil`
+to `predicted_max_at/1` rather than keeping a dead anchor alive.
+
+**And a run that ENDS says how, because the alternative is a board that lies by omission.** Until
+1.103.4-chewy.110 an unanchoring run left the board by *disappearing*: the row went `:gone`, or a
+`steady_ids` entry cleared it, or its 7 days quietly ran out, and nothing said which — "somebody
+else got it" and "we are still waiting" looked identical (measured 2026-10-14 on live data: 41
+`:gone` rows plus 2 re-sighted in another status, 43 endings invisible against the 30 the board was
+still offering — two of which were already past their 7 days, listed as hulls to fly to and sitting
+in the `now_rows/1` lead, which took anything inside 48h of the bound INCLUDING one already passed).
+`unanchor_ended_at` / `unanchor_outcome` now store it
+(`:unanchored` = the hull is loose, and that row stays on the red alert, not here; `:stopped` = a
+sighting or a steady id says it is not unanchoring any more; `:vanished` = the absence pipeline
+reached `:gone`), `:expired` is DERIVED and never written because nothing observed it, and
+`Unanchor.outcome/2` resolves both kinds for the **Someone else sorted it** board. Three rules a
+new reader of this code needs: a `steady_ids` clear carries no status, so `status` stays
+`"Unanchoring"` forever on that row — which is why the ending is its own column and why the
+`:unanchoring` read filters `is_nil(unanchor_outcome)` too; the `:unanchor_resolved` read is the one
+board here that must NOT filter `presence == :seen`, since `:vanished` IS `:gone`; and an absence
+ends a run only at `:gone`, never at `:missing`, because one quiet d-scan proves nothing.
 
 **No distances anywhere on `/scout`.** `distance_m` was the observing character's own range — it
 located the scout, not the structure, and died with that session — and `nearest_celestial_m` is real
