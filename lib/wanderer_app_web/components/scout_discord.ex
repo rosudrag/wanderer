@@ -17,11 +17,13 @@ defmodule WandererAppWeb.ScoutDiscord do
   Three constraints shape everything here:
 
     * **2000 characters per message** (`@limit`). Non-negotiable: Discord
-      rejects the paste outright, it does not truncate. Every board is
-      fitted to the budget and says how many rows it dropped — a silently
-      short list is worse than no list, because a reader cannot tell the
-      difference between "nothing else is happening" and "the rest did
-      not fit".
+      rejects the paste outright, it does not truncate. So the budget
+      decides how MANY messages a reader pastes, never how much is left
+      out: `message/3` returns a LIST of parts, each inside the limit,
+      and the UI renders one text box per part. Dropping rows was the
+      old behaviour and it was wrong — a finding nobody can see is a
+      finding nobody flies to, and "nothing else is happening" and "the
+      rest did not fit" read identically in a channel.
 
     * **Timestamps do not render inside a code block.** ``` ` ``-fenced
       text is literal, which kills the one feature this exists for, so
@@ -31,10 +33,11 @@ defmodule WandererAppWeb.ScoutDiscord do
       `*`, `_` or `|`, and unescaped it would italicise half a line or
       spoiler-tag the rest of it.
 
-    * **One message, not a thread.** The digest (`:digest`) packs the
-      boards in urgency order into a single paste and stops when the
-      budget runs out, rather than emitting several messages a reader has
-      to paste in sequence and Discord then re-orders.
+    * **Nothing but the rows.** No link back to this deployment: it is a
+      private tool, the channel it is pasted into is not, and a URL in
+      every paste is an invitation to a login page nobody reading it can
+      use. A board that spans a split repeats its header marked
+      `_(cont.)_`, which is the only chrome here beyond the headers.
 
   Sorting is NOT done here. The LiveView already sorted every board for
   the screen (`by_deadline/1`, `by_recent/1`, `by_predicted_out/1`), and
@@ -98,139 +101,83 @@ defmodule WandererAppWeb.ScoutDiscord do
 
   @doc """
   One board, or the whole tab (`:digest`, whose `rows` is a keyword list
-  of `{board, rows}`), as a pastable message.
+  of `{board, rows}`), as pastable messages.
 
-  Options: `:systems` (the page's id -> system resolution), `:now`,
-  `:url` (the deployment's `/scout` link, appended once).
+  Options: `:systems` (the page's id -> system resolution) and `:now`.
 
-  Returns the text plus what it had to leave out, because the UI shows
-  that beside the box.
+  Returns `:parts` — every row, split across as many Discord-sized
+  messages as it takes, in order. Never fewer rows than it was given.
   """
   @spec message(atom(), list(), keyword()) :: %{
           title: String.t(),
-          text: String.t(),
-          shown: non_neg_integer(),
+          parts: [String.t()],
           total: non_neg_integer()
         }
   def message(board, rows, opts \\ [])
 
   def message(:digest, sections, opts) do
-    footer = footer(opts)
     head = "**Scout report** · " <> stamp(Keyword.get(opts, :now) || DateTime.utc_now(), "f")
 
     sections = Enum.reject(sections, fn {_board, rows} -> rows == [] end)
 
-    # Fair share with carry-forward, NOT greedy fill. Greedy meant a
-    # fifty-row Unanchored board ate the whole budget and the digest
-    # carried no timers at all -- the one board with a deadline on it.
-    # Each board may take `remaining / boards left`; whatever it does not
-    # use rolls into the next one, so a short board still donates.
-    {blocks, shown, total, _left, _n} =
-      Enum.reduce(
-        sections,
-        {[], 0, 0, @limit - len(head) - len(footer) - 2, length(sections)},
-        fn {board, rows}, {blocks, shown, total, left, remaining} ->
-          share = if remaining > 1, do: div(left, remaining), else: left
+    groups =
+      Enum.map(sections, fn {board, rows} ->
+        {header(board, length(rows)), Enum.map(rows, &line(board, &1, opts))}
+      end)
 
-          case block(board, rows, opts, share - 1) do
-            {nil, _kept} ->
-              {blocks, shown, total + length(rows), left, remaining - 1}
+    total = Enum.reduce(sections, 0, fn {_board, rows}, sum -> sum + length(rows) end)
 
-            {text, kept} ->
-              {[text | blocks], shown + kept, total + length(rows), left - len(text) - 1,
-               remaining - 1}
-          end
-        end
-      )
-
-    text =
-      [head | Enum.reverse(blocks)]
-      |> Kernel.++([footer])
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.join("\n\n")
-
-    %{title: "Scout report", text: text, shown: shown, total: total}
+    %{title: "Scout report", parts: pack(groups, head), total: total}
   end
 
   def message(board, rows, opts) when board in @boards do
-    footer = footer(opts)
-
-    {text, kept} = block(board, rows, opts, @limit - len(footer) - 2)
-
-    text =
-      [text || header(board, length(rows)) <> "\n" <> empty(board), footer]
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.join("\n\n")
-
-    %{title: label(board), text: text, shown: kept, total: length(rows)}
-  end
-
-  # ---------------------------------------------------------------------
-  # Blocks
-  # ---------------------------------------------------------------------
-
-  # One board inside `budget` characters: its header, as many rows as
-  # fit, and — when rows were dropped — a line saying how many. nil when
-  # not even the header fits, which is how the digest skips a board
-  # instead of emitting a heading with nothing under it.
-  defp block(_board, [], _opts, _budget), do: {nil, 0}
-
-  defp block(board, rows, opts, budget) do
-    head = header(board, length(rows))
-
-    if len(head) + 2 > budget do
-      {nil, 0}
-    else
-      lines = Enum.map(rows, &line(board, &1, opts))
-      {kept, dropped} = fit(lines, budget - len(head) - 1)
-
-      cond do
-        kept == [] -> {nil, 0}
-        dropped == 0 -> {Enum.join([head | kept], "\n"), length(kept)}
-        true -> {Enum.join([head | kept] ++ [more(dropped)], "\n"), length(kept)}
+    lines =
+      case rows do
+        [] -> [empty(board)]
+        rows -> Enum.map(rows, &line(board, &1, opts))
       end
-    end
+
+    %{
+      title: label(board),
+      parts: pack([{header(board, length(rows)), lines}], ""),
+      total: length(rows)
+    }
   end
 
-  # Greedy fill, then shrink until the "+N more" line itself fits: the
-  # note that rows were dropped must never be the thing that pushes the
-  # message over the limit.
-  defp fit(lines, budget) do
-    total = length(lines)
+  # ---------------------------------------------------------------------
+  # Packing
+  # ---------------------------------------------------------------------
 
-    {kept, _used} =
-      Enum.reduce_while(lines, {[], 0}, fn line, {kept, used} ->
-        cost = len(line) + 1
-
-        if used + cost > budget,
-          do: {:halt, {kept, used}},
-          else: {:cont, {[line | kept], used + cost}}
+  # `{header, lines}` groups into as many <= @limit messages as it takes,
+  # in order, dropping nothing. The digest keeps its urgency order, so a
+  # reader who pastes only the first box still gets the boards that
+  # matter most — which is the property the old fair-share budget split
+  # was protecting, now had for free.
+  defp pack(groups, head) do
+    {parts, current} =
+      Enum.reduce(groups, {[], head}, fn {header, lines}, acc ->
+        acc = append(acc, header, "\n\n", header)
+        Enum.reduce(lines, acc, &append(&2, &1, "\n", header <> " _(cont.)_"))
       end)
 
-    kept = Enum.reverse(kept)
-
-    if length(kept) == total do
-      {kept, 0}
-    else
-      shrink(kept, total, budget)
-    end
+    [current | parts] |> Enum.reverse() |> Enum.reject(&(&1 == ""))
   end
 
-  defp shrink([], total, _budget), do: {[], total}
+  # One line onto the current message, or onto a fresh one when it would
+  # cross the limit. `restart` opens the fresh message — the board's own
+  # header again, so a box that begins mid-board still says what it is —
+  # except when the text IS that header.
+  defp append({parts, ""}, text, _sep, _restart), do: {parts, text}
 
-  defp shrink(kept, total, budget) do
-    dropped = total - length(kept)
-    cost = Enum.reduce(kept, len(more(dropped)), &(&2 + len(&1) + 1))
+  defp append({parts, current}, text, sep, restart) do
+    candidate = current <> sep <> text
 
-    if cost <= budget do
-      {kept, dropped}
-    else
-      kept |> Enum.drop(-1) |> shrink(total, budget)
+    cond do
+      len(candidate) <= @limit -> {parts, candidate}
+      restart == text -> {[current | parts], text}
+      true -> {[current | parts], restart <> "\n" <> text}
     end
   end
-
-  defp more(1), do: "_… 1 more not shown_"
-  defp more(count), do: "_… #{count} more not shown_"
 
   # ---------------------------------------------------------------------
   # Rows
@@ -395,15 +342,6 @@ defmodule WandererAppWeb.ScoutDiscord do
 
   defp empty(:spawns), do: "_Nothing in the last 24 hours._"
   defp empty(_board), do: "_Nothing on this board._"
-
-  # Angle brackets suppress Discord's link preview: this is a reference,
-  # not the point of the message.
-  defp footer(opts) do
-    case Keyword.get(opts, :url) do
-      url when is_binary(url) and url != "" -> "<#{url}>"
-      _ -> ""
-    end
-  end
 
   @doc false
   # `<t:UNIX:STYLE>` — Discord renders it in the reader's own timezone

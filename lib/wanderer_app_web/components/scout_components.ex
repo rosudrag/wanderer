@@ -276,7 +276,7 @@ defmodule WandererAppWeb.ScoutComponents do
           phx-click="discord"
           phx-value-board={@copy}
           class="ml-auto btn btn-xs btn-ghost text-gray-400 shrink-0"
-          title="This board as a message you can paste into Discord — timers stay live there"
+          title="This board as Discord text you can select and paste — timers stay live there"
         >
           Discord
         </button>

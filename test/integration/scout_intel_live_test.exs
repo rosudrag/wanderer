@@ -1360,7 +1360,11 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert paste =~ "scout-discord"
       assert paste =~ "Discord Keepstar"
       # The countdown is Discord's, so it keeps running in the channel.
-      assert paste =~ "&lt;t:#{DateTime.to_unix(expires)}:R&gt;"
+      # Matched without the angle brackets: LiveViewTest re-serialises
+      # through Floki, which does not decode a textarea's RCDATA before
+      # escaping it again, so `&lt;` comes back as `&amp;lt;` here while
+      # the server sends `&lt;` to the browser.
+      assert paste =~ "t:#{DateTime.to_unix(expires)}:R"
     end
 
     test "the paste carries the page's filters", %{conn: conn} do
@@ -1391,6 +1395,34 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       refute paste =~ "Jita Timer"
     end
 
+    # The reported defect: a busy board was cut to one 2000-character
+    # message and the rest was gone. It is now as many boxes as it takes,
+    # each one a paste.
+    test "a board too big for one Discord message renders as several boxes", %{conn: conn} do
+      expires = DateTime.utc_now() |> DateTime.add(2, :day) |> DateTime.truncate(:second)
+
+      for i <- 1..40 do
+        structure(%{
+          structure_id: 1_000_000_001_000 + i,
+          structure_name: "Crowded Fortizar #{i}",
+          observed_at: ago(5),
+          timer_expires_at: DateTime.add(expires, i * 60, :second)
+        })
+      end
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      paste = render_click(view, "discord", %{"board" => "timers"})
+
+      assert paste =~ "scout-discord-part-1"
+      assert paste =~ "scout-discord-part-2"
+      # Every row survives the split, and nothing claims otherwise.
+      assert paste =~ "Crowded Fortizar 40"
+      refute paste =~ "not shown"
+      # And no link back to this deployment goes into the channel.
+      refute paste =~ "/scout&gt;"
+    end
+
     test "the digest leads with the rarest finding and closes", %{conn: conn} do
       structure(%{
         structure_id: 1_000_000_000_903,
@@ -1406,13 +1438,13 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
       assert digest =~ "Scout report"
       assert digest =~ "Free Fortizar"
 
-      refute render_click(view, "close_discord", %{}) =~ "scout-discord-text"
+      refute render_click(view, "close_discord", %{}) =~ "scout-discord-part-1"
     end
 
     test "an unknown board is ignored rather than crashing the page", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/scout")
 
-      refute render_click(view, "discord", %{"board" => "nonsense"}) =~ "scout-discord-text"
+      refute render_click(view, "discord", %{"board" => "nonsense"}) =~ "scout-discord-part-1"
     end
   end
 

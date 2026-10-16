@@ -211,18 +211,23 @@ storage was rejected on purpose: a Cachex entry dies with every deploy. Everythi
 re-validated like a click — localStorage is user-writable, and `String.to_existing_atom/1` on a
 stored string is how a page crashes on mount.
 
-**A `/scout` board leaves this app as a Discord message, never as a screenshot or a webhook.**
-Each board header and the toolbar carry a copy button; `WandererAppWeb.ScoutDiscord` formats the
-rows the socket ALREADY holds (so the paste matches the filters on screen) into Discord's own
-`<t:unix:R>` / `<t:…:f>` timestamp markup, which keeps counting down in the channel and renders in
-each reader's timezone — the single reason this is text and not a picture. Three constraints are
-load-bearing: Discord REJECTS a message over 2000 characters rather than cutting it (so every board
-is fitted to the budget and says "_… N more not shown_" when it drops rows, and the digest shares
-the budget fairly with carry-forward instead of letting the first board eat it); timestamps do NOT
-render inside a code fence, so the message is plain markdown; and therefore every wire value is
-escaped, because an EVE structure named `*** |LOOT PINATA| ***` would otherwise spoiler-tag half
-the channel. Nothing is posted server-side — no webhook URL is stored and no outbound call is made.
-See `docs/chewy/scout-intel.md` §"Pasting a board into Discord".
+**A `/scout` board leaves this app as Discord text the reader selects, never as a screenshot, a
+webhook or a clipboard write.** Each board header and the toolbar open a modal of read-only text
+boxes; `WandererAppWeb.ScoutDiscord` formats the rows the socket ALREADY holds (so the paste
+matches the filters on screen) into Discord's own `<t:unix:R>` / `<t:…:f>` timestamp markup, which
+keeps counting down in the channel and renders in each reader's timezone — the single reason this
+is text and not a picture. Four constraints are load-bearing: Discord REJECTS a message over 2000
+characters rather than cutting it, so `message/3` returns `:parts`, a LIST of messages, one text
+box each, and a board that spans a split repeats its header marked `_(cont.)_` — fitting each
+board to one message and dropping the overflow with "_… N more not shown_" was the behaviour until
+1.103.4-chewy.111 and was reported as the defect it is, so a new board must never reintroduce a
+row-dropping budget; nothing is written to the clipboard for the reader (`CopyToClipboard` was
+removed from this modal deliberately); timestamps do NOT render inside a code fence, so the message
+is plain markdown and therefore every wire value is escaped, because an EVE structure named
+`*** |LOOT PINATA| ***` would otherwise spoiler-tag half the channel; and the paste carries NO link
+back to this deployment — it is a private tool and the channel is not. Nothing is posted
+server-side — no webhook URL is stored and no outbound call is made. See
+`docs/chewy/scout-intel.md` §"Pasting a board into Discord".
 
 **A control whose only result renders below the fold reads as broken.** Reported 2026-10-05, in
 those words: "changing split in ui doesnt do anything". It did -- `update_sweep_k` recomputed the

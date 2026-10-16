@@ -369,8 +369,8 @@ yet.
 
 The board is copyable to Discord (`🪦 Unanchoring runs that ended`) but is
 **not** in the digest: the digest is the next hour's errand list, and a
-post-mortem spending that shared 2000-character budget would push a live
-timer out of the message.
+post-mortem belongs in neither its first message nor the extra ones it would
+add.
 
 ## Flying to a row: the `⤳` button and the pilot picker
 
@@ -855,17 +855,18 @@ the two table names; renaming a table means editing it too.
 ### Pasting a board into Discord
 
 Every board header carries a **Discord** button, and the toolbar carries
-**Copy for Discord** for the whole tab. Both open one modal holding a
-preformatted message; a `CopyToClipboard` button puts it on the clipboard and
-the reader pastes it into a channel. Nothing is posted from the server: there
-is no webhook, no stored URL and no outbound call, so the feature cannot leak
-intel to a channel nobody remembered configuring.
+**Discord report** for the whole tab. Both open one modal holding the message
+**as read-only text boxes, one per Discord-sized message**; the reader clicks a
+box (it selects itself), copies it and pastes it into a channel. Nothing is put
+on the clipboard on the reader's behalf, and nothing is posted from the server:
+there is no webhook, no stored URL and no outbound call, so the feature cannot
+leak intel to a channel nobody remembered configuring.
 
 `WandererAppWeb.ScoutDiscord` owns the format. It reads the rows the socket
 **already holds**, which is what makes the paste match the screen — same
 window, same search, same system chip, same space chips, same sort.
 
-Three things decide the format:
+Four things decide the format:
 
 - **Discord's own timestamp markup is the whole point.** `<t:1760000000:R>`
   renders as a live relative countdown and `<t:…:f>` as an absolute instant,
@@ -876,12 +877,18 @@ Three things decide the format:
   acts on, the instant is what a fleet forms on); boards without one emit the
   relative "seen" time only.
 - **2000 characters, and Discord rejects an over-long message rather than
-  cutting it.** Each board is fitted to the budget and, when rows are dropped,
-  says so in the message itself — "_… 37 more not shown_" — because a reader
-  cannot otherwise tell a quiet night from a truncated list. The digest shares
-  the budget **fairly with carry-forward** (`remaining / boards left`, unused
-  room rolls to the next board) rather than greedily: greedy filling let a
-  50-row Unanchored board eat the whole message and leave the timers out.
+  cutting it — so the budget decides how MANY messages, never how much is left
+  out.** `message/3` returns `:parts`, a list, and the modal renders one box
+  per part; a board that spans a split repeats its header marked `_(cont.)_`.
+  Until 1.103.4-chewy.111 the opposite was true: each board was fitted to one
+  message, the overflow was dropped with a "_… 37 more not shown_" line, and
+  the digest shared the budget fairly across boards to stop a 50-row
+  Unanchored board eating the timers. Both mechanisms are gone — the digest
+  keeps its urgency order instead, so a reader who pastes only the first box
+  still gets the boards that matter most, and the rest is still there.
+- **No link back to this deployment.** It is a private tool and the channel is
+  not: a URL in every paste is an invitation to an SSO login nobody reading it
+  can use. The paste carries rows and headers, nothing else.
 - **No code fences, everything escaped.** Timestamps do not render inside a
   code block, which kills the one feature this exists for, so the message is
   plain markdown — and therefore every value off the wire is escaped. An EVE

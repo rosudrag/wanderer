@@ -1354,12 +1354,11 @@ defmodule WandererAppWeb.ScoutIntelLive do
   defp discord_rows(:no_fuel, socket), do: socket.assigns.no_fuel_structures
   defp discord_rows(:spawns, socket), do: socket.assigns.fresh_spawns
 
+  # No `:url`: the paste carries rows and nothing else. A link to this
+  # deployment in a channel is an invitation to an SSO login nobody
+  # reading it can use.
   defp discord_opts(socket) do
-    [
-      systems: socket.assigns.systems,
-      now: socket.assigns.now,
-      url: WandererAppWeb.Endpoint.url() <> "/scout"
-    ]
+    [systems: socket.assigns.systems, now: socket.assigns.now]
   end
 
   @doc false
