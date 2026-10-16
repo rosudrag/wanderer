@@ -79,7 +79,7 @@ defmodule WandererAppWeb.ScoutComponents do
     ~H"""
     <header class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-3">
       <h1 class="text-xl font-semibold tracking-tight">Scout</h1>
-
+      
       <span
         :if={@live?}
         class="flex items-center gap-1.5 text-[11px] text-gray-500"
@@ -87,11 +87,11 @@ defmodule WandererAppWeb.ScoutComponents do
       >
         <span class="w-1.5 h-1.5 rounded-full bg-success"></span> live
       </span>
-      <.scout_tabs active={@active} planner?={@planner?} />
+       <.scout_tabs active={@active} planner?={@planner?} />
       <span :if={@meta != []} class="text-[11px] text-gray-500 truncate">
         {render_slot(@meta)}
       </span>
-
+      
       <div class="ml-auto flex items-center gap-2">
         {render_slot(@actions)}
       </div>
@@ -126,7 +126,7 @@ defmodule WandererAppWeb.ScoutComponents do
       >
         Structures
       </.link>
-
+      
       <.link
         patch={~p"/scout/spawns"}
         role="tab"
@@ -135,7 +135,7 @@ defmodule WandererAppWeb.ScoutComponents do
       >
         Spawns
       </.link>
-
+      
       <.link
         :if={@planner?}
         patch={~p"/scout/planner"}
@@ -237,6 +237,17 @@ defmodule WandererAppWeb.ScoutComponents do
   attr :key, :string, default: nil
   attr :layout, :any, default: nil
   slot :inner_block, required: true
+  # CHEWY PATCH: a one-line footer that belongs TO this panel -- the
+  # asset-safety watcher notes. They used to be bare `<div>`s after the
+  # `</section>`, carrying the panel's `order:` by hand so a flex stack
+  # would not sort them to the top; rendered flush with the page gutter
+  # and pulled up by `-mt-3`, they read as orphaned text hanging off the
+  # bottom border rather than as part of the board. Inside the box they
+  # inherit its padding, its background and its position, and a collapsed
+  # board keeps the sentence (which is the one case the note exists for:
+  # an empty board with no consent and an empty board with nothing to
+  # report look identical).
+  slot :note
 
   @doc """
   A titled section. `count` renders as a chip beside the title — the
@@ -280,29 +291,29 @@ defmodule WandererAppWeb.ScoutComponents do
         >
           {if @collapsed, do: "▸", else: "▾"}
         </button>
-
+        
         <h2 class={[
           "text-xs font-semibold uppercase tracking-wider whitespace-nowrap",
           if(@empty, do: "text-gray-500", else: "text-gray-300")
         ]}>
           {@title}
         </h2>
-
+        
         <span :if={@count} class={["badge badge-sm font-mono border-0", count_class(@tone)]}>
           {@count}
         </span>
-
+        
         <span :if={@empty && @empty_text} class="text-xs text-gray-600 truncate">
           {@empty_text}
         </span>
-
+        
         <span
           :if={!@empty && !@collapsed && @hint}
           class="text-xs text-gray-500 truncate hidden md:inline"
         >
           {@hint}
         </span>
-
+        
         <div class="ml-auto flex items-center gap-1 shrink-0">
           <button
             :if={@copy && !@empty}
@@ -314,12 +325,22 @@ defmodule WandererAppWeb.ScoutComponents do
           >
             Discord
           </button>
-          <.panel_move :if={ScoutLayout.movable?(@layout, @key)} layout={@layout} key={@key} />
+           <.panel_move :if={ScoutLayout.movable?(@layout, @key)} layout={@layout} key={@key} />
         </div>
       </header>
-
+      
       <div :if={!@empty && !@collapsed} class="overflow-x-auto">
         {render_slot(@inner_block)}
+      </div>
+      
+      <div
+        :if={@note != []}
+        class={[
+          "flex items-center gap-2 px-3 py-1.5 text-xs bg-neutral-900/40",
+          !@empty && !@collapsed && "border-t border-neutral-800"
+        ]}
+      >
+        {render_slot(@note)}
       </div>
     </section>
     """
@@ -425,17 +446,17 @@ defmodule WandererAppWeb.ScoutComponents do
         >
           {if @collapsed, do: "▸", else: "▾"}
         </button>
-
+        
         <span :if={!(@key && @layout)} class="w-1.5 h-1.5 rounded-full bg-neutral-600 shrink-0">
         </span>
         <h2 class="text-[11px] font-mono uppercase tracking-wider text-gray-500 whitespace-nowrap">
           {@title}
         </h2>
-        <span :if={@count} class="text-[11px] font-mono text-gray-600">{@count}</span>
+         <span :if={@count} class="text-[11px] font-mono text-gray-600">{@count}</span>
         <span :if={@hint && !@collapsed} class="text-[11px] text-gray-600 truncate hidden md:inline">
           {@hint}
         </span>
-
+        
         <div
           :if={ScoutLayout.movable?(@layout, @key)}
           class="ml-auto flex items-center gap-1 shrink-0"
@@ -443,7 +464,7 @@ defmodule WandererAppWeb.ScoutComponents do
           <.panel_move layout={@layout} key={@key} />
         </div>
       </header>
-
+      
       <div :if={!@collapsed} class="overflow-x-auto opacity-80 hover:opacity-100 transition-opacity">
         {render_slot(@inner_block)}
       </div>
@@ -495,7 +516,7 @@ defmodule WandererAppWeb.ScoutComponents do
       >
         ⊖
       </button>
-
+      
       <button
         type="button"
         phx-click="layout_expand_all"
@@ -504,7 +525,7 @@ defmodule WandererAppWeb.ScoutComponents do
       >
         ⊕
       </button>
-
+      
       <button
         :if={ScoutLayout.customised?(@layout)}
         type="button"
@@ -543,11 +564,11 @@ defmodule WandererAppWeb.ScoutComponents do
         <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75">
         </span> <span class="relative inline-flex rounded-full h-3 w-3 bg-error"></span>
       </span>
-
+      
       <span class="font-semibold text-error uppercase tracking-wide text-sm">
         {plural(length(@rows), "structure", "structures")} unanchored
       </span>
-
+      
       <div class="flex flex-wrap items-center gap-1.5 ml-auto">
         <button
           :for={row <- Enum.take(@rows, 8)}
@@ -559,7 +580,7 @@ defmodule WandererAppWeb.ScoutComponents do
           {system(row, @systems)}
           <span class="text-error/80 font-mono">{ago(row.last_confirmed_at, @now)}</span>
         </button>
-
+        
         <span :if={length(@rows) > 8} class="text-xs text-gray-400">
           +{length(@rows) - 8}
         </span>
@@ -599,11 +620,11 @@ defmodule WandererAppWeb.ScoutComponents do
         <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75">
         </span> <span class="relative inline-flex rounded-full h-3 w-3 bg-error"></span>
       </span>
-
+      
       <span class="font-semibold text-error uppercase tracking-wide text-sm">
         {plural(length(@rows), "structure", "structures")} finished unanchoring
       </span>
-      <span class="text-xs text-gray-300">asset safety fired — the hull is loose now</span>
+       <span class="text-xs text-gray-300">asset safety fired — the hull is loose now</span>
       <div class="flex flex-wrap items-center gap-1.5 ml-auto">
         <button
           :for={row <- Enum.take(@rows, 8)}
@@ -615,7 +636,7 @@ defmodule WandererAppWeb.ScoutComponents do
           {system(row, @systems)}
           <span class="text-error/80 font-mono">{ago(row.notified_at, @now)}</span>
         </button>
-
+        
         <span :if={length(@rows) > 8} class="text-xs text-gray-400">
           +{length(@rows) - 8}
         </span>
@@ -640,11 +661,11 @@ defmodule WandererAppWeb.ScoutComponents do
       <span :if={@watchers.count == 0} class="text-warning">
         no character is watching — nothing can ever appear here
       </span>
-
+      
       <span :if={@watchers.count > 0} class="text-gray-400">
         {plural(@watchers.count, "character", "characters")} watching
       </span>
-
+      
       <span :if={@watchers.stalled > 0} class="text-error">
         · {@watchers.stalled} stalled (consent revoked or token dead)
       </span>
@@ -723,11 +744,11 @@ defmodule WandererAppWeb.ScoutComponents do
           </option>
         </select>
       </form>
-
+      
       <span :if={@characters == []} class="text-xs text-warning">
         no character on this account — nothing to fly
       </span>
-
+      
       <p
         :if={@status}
         class={[
@@ -927,7 +948,7 @@ defmodule WandererAppWeb.ScoutComponents do
       <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5 truncate">
         {@label}
       </label>
-      {render_slot(@inner_block)}
+       {render_slot(@inner_block)}
       <p :if={@hint} class="mt-0.5 text-[10px] text-gray-500 truncate">{@hint}</p>
     </div>
     """
@@ -1062,7 +1083,7 @@ defmodule WandererAppWeb.ScoutComponents do
         >
           {@status.text}
         </span>
-
+        
         <span :if={@loading or not @enabled or is_nil(@status)} class="block text-gray-500">
           {@hint}
         </span>
@@ -1111,7 +1132,7 @@ defmodule WandererAppWeb.ScoutComponents do
           Save preset
         </button>
       </form>
-
+      
       <div :if={@presets != []} class="flex flex-wrap items-center gap-1">
         <span
           :for={preset <- @presets}
@@ -1133,7 +1154,7 @@ defmodule WandererAppWeb.ScoutComponents do
           >
             {preset.name}
           </button>
-
+          
           <button
             type="button"
             phx-click="delete_preset"
@@ -1147,11 +1168,11 @@ defmodule WandererAppWeb.ScoutComponents do
           </button>
         </span>
       </div>
-
+      
       <span :if={@presets == []} class="text-[11px] text-gray-500">
         no presets yet — name this setup and save it
       </span>
-
+      
       <span
         :if={@status}
         id="scout-planner-preset-status"
@@ -1192,7 +1213,7 @@ defmodule WandererAppWeb.ScoutComponents do
       <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5 truncate">
         {@label}
       </label>
-
+      
       <div class="relative" phx-click-away="close_region_search" phx-value-scope={@scope}>
         <form phx-change="search_regions" phx-submit="search_regions">
           <input type="hidden" name="scope" value={@scope} />
@@ -1208,7 +1229,7 @@ defmodule WandererAppWeb.ScoutComponents do
             class="input input-sm input-bordered bg-neutral-950/60 w-full"
           />
         </form>
-
+        
         <div
           :if={@matches != []}
           id={"#{@id}-options"}
@@ -1228,7 +1249,7 @@ defmodule WandererAppWeb.ScoutComponents do
           </button>
         </div>
       </div>
-
+      
       <div :if={@selected != []} class="flex flex-wrap gap-1 mt-1">
         <button
           :for={region <- @selected}
@@ -1243,7 +1264,7 @@ defmodule WandererAppWeb.ScoutComponents do
           {region.region_name} ✕
         </button>
       </div>
-
+      
       <p class="mt-0.5 text-[10px] text-gray-500 truncate">
         <%= cond do %>
           <% @selected == [] and @max -> %>
@@ -1313,7 +1334,7 @@ defmodule WandererAppWeb.ScoutComponents do
         >
           {system(@row, @systems)}
         </button>
-
+        
         <button
           type="button"
           phx-click="set_waypoint"
@@ -1324,14 +1345,14 @@ defmodule WandererAppWeb.ScoutComponents do
         >
           ⤳
         </button>
-
+        
         <span
           :if={@class_title}
           class="badge badge-xs border-0 bg-violet-500/15 text-violet-300 font-mono"
         >
           {@class_title}
         </span>
-
+        
         <span
           :if={is_nil(@class_title) and @truesec and security(@sec)}
           class={["font-mono text-[11px]", security_class(@sec)]}
@@ -1340,7 +1361,7 @@ defmodule WandererAppWeb.ScoutComponents do
           {security(@sec)}
         </span>
       </div>
-
+      
       <div :if={@region} class="text-[11px] text-gray-500 truncate" title="Region">
         {@region}
       </div>
@@ -1399,7 +1420,7 @@ defmodule WandererAppWeb.ScoutComponents do
         >
           {@name}
         </button>
-
+        
         <span
           :if={@badge}
           class="badge badge-xs border-0 bg-neutral-800 text-gray-400 whitespace-nowrap"
@@ -1407,7 +1428,7 @@ defmodule WandererAppWeb.ScoutComponents do
           {@badge}
         </span>
       </div>
-
+      
       <div :if={@meta} class="text-[11px] text-gray-500 truncate">{@meta}</div>
     </div>
     """
@@ -1427,7 +1448,7 @@ defmodule WandererAppWeb.ScoutComponents do
       <span class={["badge badge-sm border", status_badge_class(@status)]}>
         {@status || "—"}
       </span>
-
+      
       <span
         :if={@vulnerable}
         class="badge badge-sm border-0 bg-error/20 text-error"
@@ -1519,7 +1540,7 @@ defmodule WandererAppWeb.ScoutComponents do
       <span class={["font-mono font-medium tabular-nums", urgency(@expires_at, @now)]}>
         {countdown(@expires_at, @now)}
       </span>
-
+      
       <div :if={@absolute} class="text-[11px] text-gray-500 font-mono">{at(@expires_at)}</div>
     </div>
     """
@@ -1561,7 +1582,7 @@ defmodule WandererAppWeb.ScoutComponents do
       <span class={["font-mono font-medium tabular-nums", urgency(@predicted_at, @now)]}>
         ≤ {countdown(@predicted_at, @now)}
       </span>
-
+      
       <div class="text-[11px] text-gray-500 font-mono">{at(@predicted_at)}</div>
     </div>
     """
@@ -1619,7 +1640,7 @@ defmodule WandererAppWeb.ScoutComponents do
       <span class="font-mono tabular-nums text-gray-400">
         ≥ {ago(Unanchor.predicted_max_at(@row), @now)}
       </span>
-
+      
       <div class="text-[11px] text-gray-500 font-mono">{at(Unanchor.predicted_max_at(@row))}</div>
     </div>
     """
@@ -1643,7 +1664,7 @@ defmodule WandererAppWeb.ScoutComponents do
       ]}>
         {ago(@at, @now)}
       </span>
-
+      
       <div class="text-[11px] text-gray-500 font-mono">{at(@at)}</div>
     </div>
     """
@@ -1668,7 +1689,7 @@ defmodule WandererAppWeb.ScoutComponents do
       >
         {@stop.class_title}
       </span>
-
+      
       <span
         :if={is_nil(@stop.class_title) and security(@stop.security)}
         class={["font-mono text-[11px]", security_class(@stop.security)]}
@@ -1676,7 +1697,7 @@ defmodule WandererAppWeb.ScoutComponents do
       >
         {security(@stop.security)}
       </span>
-
+      
       <span :if={is_nil(@stop.class_title) and is_nil(security(@stop.security))} class="text-gray-600">
         —
       </span>
@@ -1705,7 +1726,7 @@ defmodule WandererAppWeb.ScoutComponents do
     >
       {security(@stop.security)}
     </span>
-    <span :if={is_nil(security(@stop.security))} class="text-gray-600">—</span>
+     <span :if={is_nil(security(@stop.security))} class="text-gray-600">—</span>
     """
   end
 
@@ -1857,7 +1878,7 @@ defmodule WandererAppWeb.ScoutComponents do
     >
       mark stale
     </button>
-    <span :if={@stop.age_s < 0} class="text-gray-700">—</span>
+     <span :if={@stop.age_s < 0} class="text-gray-700">—</span>
     """
   end
 
@@ -1911,12 +1932,12 @@ defmodule WandererAppWeb.ScoutComponents do
     <div class="flex items-center gap-1.5 w-32">
       <div class="flex h-2 w-20 rounded-full overflow-hidden bg-neutral-800">
         <div class="bg-success/70" style={"width: #{heat_pct(@fresh, @systems)}%"}></div>
-
+        
         <div class="bg-warning/70" style={"width: #{heat_pct(@stale, @systems)}%"}></div>
-
+        
         <div class="bg-error/70" style={"width: #{heat_pct(@unseen, @systems)}%"}></div>
       </div>
-      <span class="text-[11px] text-gray-500 font-mono tabular-nums">{@covered}/{@systems}</span>
+       <span class="text-[11px] text-gray-500 font-mono tabular-nums">{@covered}/{@systems}</span>
     </div>
     """
   end
@@ -1938,7 +1959,7 @@ defmodule WandererAppWeb.ScoutComponents do
       <span class="text-xs text-gray-300 whitespace-nowrap">
         {plural(@target.structures, "structure", "structures")}
       </span>
-      <.status :for={s <- @target.statuses} status={s} />
+       <.status :for={s <- @target.statuses} status={s} />
     </div>
 
     <div :if={is_nil(@target)} class="text-gray-600">—</div>

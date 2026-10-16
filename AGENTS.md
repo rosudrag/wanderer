@@ -99,9 +99,11 @@ deliberately not in a planner preset, which names a QUERY and not a page shape. 
 board inherits: it must be listed in that page's `@panel_stacks` under the DOM container it is a
 sibling of, because the mechanism is CSS `order:` on a flex column and no number moves a node
 between containers (so a cross-stack drag is refused rather than pretended, and a stack of one
-renders no arrows); anything in a stack that is NOT a panel — the asset-safety/seeding watcher
-notes, the sweep's `Set full route` row — must carry its panel's `ScoutLayout.style/2`, or it sorts
-to the top of the stack; the drag hook (`assets/js/hooks/scoutPanelStack.ts`) reports a drop and
+renders no arrows); anything in a stack that is NOT a panel — the sweep's `Set full route` row —
+must carry its panel's `ScoutLayout.style/2`, or it sorts to the top of the stack (better still,
+use `panel/1`'s `note` slot, which renders a one-line footer INSIDE the box, with its padding and
+its position, and survives a collapse — the asset-safety/seeding watcher notes were bare siblings
+styled by hand and read as orphaned text hanging off the bottom border);
 never moves a node, since LiveView re-sorts a container to match the server on the next patch and
 these pages tick every 30s; and a stored order is a preference, not a schema — a key this build
 dropped is discarded and a key it ADDED is re-inserted at its default position, never appended

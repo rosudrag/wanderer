@@ -9,7 +9,7 @@
     class="hidden"
   >
   </div>
-
+  
   <%!-- CHEWY PATCH (panel layout): board order and collapsed set, own
         key. See `WandererAppWeb.ScoutLayout`. --%>
   <div
@@ -19,13 +19,14 @@
     class="hidden"
   >
   </div>
-
+  
   <.scout_header active={@tab} planner?={WandererApp.Env.scout_planner_enabled?()} live?={true}>
     <:meta :if={@tab != :planner}>
       structures <span class="text-gray-300">{ago(@last_observed.structures, @now)}</span>
       · spawns <span class="text-gray-300">{ago(@last_observed.spawns, @now)}</span>
       · times UTC
     </:meta>
+    
     <:actions :if={@tab != :planner}>
       <a
         href={export_path(assigns)}
@@ -35,6 +36,7 @@
       >
         Export CSV
       </a>
+      
       <button
         phx-click="discord"
         phx-value-board="digest"
@@ -43,7 +45,7 @@
       >
         Discord report
       </button>
-      <button phx-click="refresh" class="btn btn-sm btn-ghost">Refresh</button>
+       <button phx-click="refresh" class="btn btn-sm btn-ghost">Refresh</button>
       <%!-- CHEWY PATCH: the asset-safety opt-in. One EVE SSO round trip
             per character; the scope cannot be added to a token that
             already exists. See the handler for the invite-gate trap. --%>
@@ -55,6 +57,7 @@
       >
         Watch notifications
       </button>
+      
       <%!-- CHEWY PATCH: whose autopilot every ⤳ below writes to. In the
             header rather than per board, because it is one choice for
             the whole page and repeating it is how two boards end up
@@ -69,7 +72,7 @@
       </.link>
     </:actions>
   </.scout_header>
-
+  
   <%!-- CHEWY PATCH: above the unanchored bar on purpose — this one is
         EVE saying a decommission COMPLETED at a known instant, not a
         sweep reporting what it happened to fly past. --%>
@@ -80,7 +83,6 @@
     now={@now}
     horizon_days={asset_safety_horizon_days()}
   />
-
   <.unanchored_alert
     :if={@tab != :planner}
     rows={@unanchored_structures}
@@ -88,7 +90,6 @@
     now={@now}
     horizon_days={unanchored_horizon_days()}
   />
-
   <.scout_toolbar :if={@tab != :planner}>
     <form phx-change="select_window">
       <select
@@ -102,7 +103,7 @@
         </option>
       </select>
     </form>
-
+    
     <form phx-change="search" class="grow min-w-[180px] max-w-sm">
       <input
         type="text"
@@ -119,7 +120,7 @@
         class="input input-sm input-bordered w-full bg-neutral-950/60"
       />
     </form>
-
+    
     <div class="join" id="scout-space-filter">
       <.space_chip
         :for={{key, label} <- @space_types}
@@ -128,7 +129,7 @@
         selected={key in @space}
       />
     </div>
-
+    
     <button
       :if={@system_id}
       phx-click="clear_system"
@@ -138,7 +139,7 @@
     >
       {system_region(%{solar_system_id: @system_id, solar_system_name: nil}, @systems)} ✕
     </button>
-
+    
     <button
       :if={length(@space) < length(@space_types)}
       phx-click="reset_space"
@@ -148,7 +149,7 @@
     >
       All space ✕
     </button>
-
+    
     <%!-- CHEWY PATCH: a soloed board is a mode, and a mode with no way
           out reads as a broken page. The card stays ring-highlighted
           and clicking it again restores the rest; this is the second
@@ -162,13 +163,13 @@
     >
       Only {@board} ✕
     </button>
-
+    
     <%!-- CHEWY PATCH (panel layout): the whole page's boards, in one
           control. Per-board chevrons alone make "just show me Now" a
           dozen clicks. --%>
     <.layout_controls layout={@panel_layout} class="ml-auto" />
   </.scout_toolbar>
-
+  
   <div :if={@tab == :structures} class="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-3 mb-5">
     <.stat
       :if={asset_safety_enabled?()}
@@ -260,7 +261,7 @@
       hint={window_label(@days, @windows)}
     />
   </div>
-
+  
   <div :if={@tab == :spawns} class="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-5">
     <.stat
       label={"Seen last #{fresh_window_label()}"}
@@ -272,10 +273,9 @@
       label="Sightings"
       value={count_label(@spawns, @more?)}
       hint={window_label(@days, @windows)}
-    />
-    <.stat label="Richest sighting" value={isk(richest(@spawns))} />
+    /> <.stat label="Richest sighting" value={isk(richest(@spawns))} />
   </div>
-
+  
   <.panel_stack :if={@tab == :structures} id="scout-stack-structures">
     <%!-- CHEWY PATCH: the asset-safety trigger board, above Now.
 
@@ -310,29 +310,43 @@
         <thead>
           <tr>
             <th class="w-32">Fired</th>
+            
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th>Where</th>
+            
             <th class="w-40">Reported by</th>
+            
             <th class="w-10"></th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @asset_safety_events} id={"scout-asset-safety-#{row.id}"}>
             <td><.seen at={row.notified_at} now={@now} tone={true} /></td>
+            
             <td>
               <span class="font-medium text-gray-100">
                 {row.structure_name || to_string(row.structure_id)}
               </span>
+              
               <span :if={row.group_name} class="ml-1 badge badge-sm border-neutral-700">
                 {row.group_name}
               </span>
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{row.owner_name || "—"}</td>
+            
             <td class="text-xs text-gray-400">{where(row)}</td>
+            
             <td class="text-xs text-gray-400">{row.character_name || "—"}</td>
+            
             <td>
               <button
                 phx-click="dismiss_asset_safety"
@@ -346,8 +360,19 @@
           </tr>
         </tbody>
       </.grid>
+      
+      <:note>
+        <.watcher_note watchers={@asset_safety_watchers} />
+        <button
+          :if={@asset_safety_watchers.count == 0}
+          phx-click="request_notification_access"
+          class="btn btn-xs btn-outline btn-warning"
+        >
+          Watch notifications
+        </button>
+      </:note>
     </.panel>
-
+    
     <%!-- CHEWY PATCH: the undo list for the board above. Rendered only
           when non-empty and deliberately NOT window-bounded, like the
           structures' Archived board: a judgement you cannot find is a
@@ -368,13 +393,19 @@
         <thead>
           <tr>
             <th class="w-32">Fired</th>
+            
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th class="w-40">Reported by</th>
+            
             <th class="w-10"></th>
           </tr>
         </thead>
+        
         <tbody>
           <tr
             :for={row <- @asset_safety_dismissed}
@@ -382,17 +413,23 @@
             class="opacity-60"
           >
             <td><.seen at={row.notified_at} now={@now} /></td>
+            
             <td>
               <span class="font-medium text-gray-100">
                 {row.structure_name || to_string(row.structure_id)}
               </span>
+              
               <span :if={row.group_name} class="ml-1 badge badge-sm border-neutral-700">
                 {row.group_name}
               </span>
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{row.owner_name || "—"}</td>
+            
             <td class="text-xs text-gray-400">{row.character_name || "—"}</td>
+            
             <td>
               <button
                 phx-click="restore_asset_safety"
@@ -407,24 +444,7 @@
         </tbody>
       </.grid>
     </.panel>
-
-    <%!-- CHEWY PATCH (panel layout): not a panel, but it belongs under
-          the asset-safety boards, so it carries their `order:` too --
-          an unstyled child of a flex stack sorts to the top. --%>
-    <div
-      :if={asset_safety_enabled?() and show_board?(@board, "asset_safety")}
-      style={ScoutLayout.style(@panel_layout, "asset_safety_dismissed")}
-      class="-mt-3 mb-5 flex items-center gap-2"
-    >
-      <.watcher_note watchers={@asset_safety_watchers} />
-      <button
-        :if={@asset_safety_watchers.count == 0}
-        phx-click="request_notification_access"
-        class="btn btn-xs btn-outline btn-warning"
-      >
-        Watch notifications
-      </button>
-    </div>
+    
     <%!-- CHEWY PATCH: the lead. Not a read -- `now_rows/1` folds the
           three time-critical families out of rows this socket already
           holds, so it costs nothing and can never disagree with the
@@ -446,23 +466,31 @@
         <thead>
           <tr>
             <th class="w-28">When</th>
+            
             <th class="w-28">What</th>
+            
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th>Status</th>
+            
             <th class="w-32">Seen</th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={entry <- @now_board} id={"scout-now-#{entry.kind}-#{entry.row.id}"}>
             <td>
               <span :if={entry.kind == :unanchored} class="text-error font-semibold text-xs">
                 sitting there
               </span>
-              <.countdown_cell :if={entry.kind == :timer} expires_at={entry.at} now={@now} />
+               <.countdown_cell :if={entry.kind == :timer} expires_at={entry.at} now={@now} />
               <.predicted_out_cell :if={entry.kind == :unanchoring} row={entry.row} now={@now} />
             </td>
+            
             <td>
               <span class={[
                 "badge badge-sm border whitespace-nowrap",
@@ -471,6 +499,7 @@
                 {now_kind_label(entry.kind)}
               </span>
             </td>
+            
             <td>
               <.subject
                 name={entry.row.structure_name || to_string(entry.row.structure_id)}
@@ -479,15 +508,19 @@
                 phx-value-id={entry.row.structure_id}
               />
             </td>
+            
             <td><.sys row={entry.row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{entry.row.owner_name || "—"}</td>
+            
             <td><.status status={entry.row.status} vulnerable={entry.row.vulnerable} /></td>
+            
             <td><.seen at={entry.row.last_confirmed_at} now={@now} /></td>
           </tr>
         </tbody>
       </.grid>
     </.panel>
-
+    
     <.panel
       :if={show_board?(@board, "unanchored")}
       key="unanchored"
@@ -505,14 +538,21 @@
         <thead>
           <tr>
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th>Status</th>
+            
             <th>Where</th>
+            
             <th class="w-32">Seen</th>
+            
             <th class="w-10"></th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @unanchored_structures} id={"scout-unanchored-#{row.id}"}>
             <td>
@@ -523,17 +563,23 @@
                 phx-value-id={row.structure_id}
               />
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{row.owner_name || "—"}</td>
+            
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            
             <td class="text-xs text-gray-400">{where(row)}</td>
+            
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            
             <td><.archive_cell row={row} /></td>
           </tr>
         </tbody>
       </.grid>
     </.panel>
-
+    
     <.panel
       :if={show_board?(@board, "timers")}
       key="timers"
@@ -550,17 +596,25 @@
         <thead>
           <tr>
             <th class="w-28">Comes out</th>
+            
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th>Status</th>
+            
             <th class="w-32">Seen</th>
+            
             <th class="w-10"></th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @active_timers} id={"scout-timer-#{row.id}"}>
             <td><.countdown_cell expires_at={row.timer_expires_at} now={@now} /></td>
+            
             <td>
               <.subject
                 name={row.structure_name || to_string(row.structure_id)}
@@ -570,16 +624,21 @@
                 phx-value-id={row.structure_id}
               />
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{row.owner_name || "—"}</td>
+            
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            
             <td><.archive_cell row={row} /></td>
           </tr>
         </tbody>
       </.grid>
     </.panel>
-
+    
     <.panel
       :if={show_board?(@board, "anchoring")}
       key="anchoring"
@@ -596,18 +655,27 @@
         <thead>
           <tr>
             <th class="w-28">Anchors in</th>
+            
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th>Status</th>
+            
             <th>Where</th>
+            
             <th class="w-32">Seen</th>
+            
             <th class="w-10"></th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @anchoring_structures} id={"scout-anchoring-#{row.id}"}>
             <td><.countdown_cell expires_at={row.timer_expires_at} now={@now} /></td>
+            
             <td>
               <.subject
                 name={row.structure_name || to_string(row.structure_id)}
@@ -616,17 +684,23 @@
                 phx-value-id={row.structure_id}
               />
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{row.owner_name || "—"}</td>
+            
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            
             <td class="text-xs text-gray-400">{where(row)}</td>
+            
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            
             <td><.archive_cell row={row} /></td>
           </tr>
         </tbody>
       </.grid>
     </.panel>
-
+    
     <%!-- CHEWY PATCH: the errand the Unanchoring board cannot express.
 
           The asset-safety trigger only fires for a structure we put
@@ -654,16 +728,23 @@
         <thead>
           <tr>
             <th class="w-36">Predicted max out</th>
+            
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th>Where</th>
+            
             <th class="w-32">Seen</th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @unarmed_structures} id={"scout-unarmed-#{row.id}"}>
             <td><.predicted_out_cell row={row} now={@now} /></td>
+            
             <td>
               <.subject
                 name={row.structure_name || to_string(row.structure_id)}
@@ -672,25 +753,26 @@
                 phx-value-id={row.structure_id}
               />
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{row.owner_name || "—"}</td>
+            
             <td class="text-xs text-gray-400">{where(row)}</td>
+            
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
           </tr>
         </tbody>
       </.grid>
+      
+      <%!-- Same note as the trigger board: with nobody consented,
+            "armed" is unknowable and every hull reads as needing an
+            item. --%>
+      <:note>
+        <.watcher_note watchers={@asset_safety_watchers} />
+      </:note>
     </.panel>
-
-    <%!-- Same note as the trigger board: with nobody consented, "armed"
-          is unknowable and every hull reads as needing an item. --%>
-    <div
-      :if={asset_safety_enabled?() and show_board?(@board, "unarmed")}
-      style={ScoutLayout.style(@panel_layout, "unarmed")}
-      class="-mt-3 mb-5 flex items-center gap-2"
-    >
-      <.watcher_note watchers={@asset_safety_watchers} />
-    </div>
-
+    
     <.panel
       :if={show_board?(@board, "unanchoring")}
       key="unanchoring"
@@ -707,19 +789,29 @@
         <thead>
           <tr>
             <th class="w-36">Predicted max out</th>
+            
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th>Status</th>
+            
             <th :if={asset_safety_enabled?()} class="w-24">Trigger</th>
+            
             <th>Where</th>
+            
             <th class="w-32">Seen</th>
+            
             <th class="w-10"></th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @unanchoring_structures} id={"scout-unanchoring-#{row.id}"}>
             <td><.predicted_out_cell row={row} now={@now} /></td>
+            
             <td>
               <.subject
                 name={row.structure_name || to_string(row.structure_id)}
@@ -728,20 +820,27 @@
                 phx-value-id={row.structure_id}
               />
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{row.owner_name || "—"}</td>
+            
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            
             <td :if={asset_safety_enabled?()}>
               <.armed_cell row={row} armed_by={@armed_by} />
             </td>
+            
             <td class="text-xs text-gray-400">{where(row)}</td>
+            
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            
             <td><.archive_cell row={row} /></td>
           </tr>
         </tbody>
       </.grid>
     </.panel>
-
+    
     <%!-- CHEWY PATCH: the endings. An unanchoring run is the one finding
           on this page with a fixed lifetime, and until now it left the
           Unanchoring board by simply disappearing -- the row went
@@ -771,19 +870,29 @@
         <thead>
           <tr>
             <th class="w-36">Ended</th>
+            
             <th class="w-44">How</th>
+            
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th>Where</th>
+            
             <th class="w-32">Last seen</th>
+            
             <th class="w-10"></th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @sorted_structures} id={"scout-sorted-#{row.id}"}>
             <td><.ended_cell row={row} now={@now} /></td>
+            
             <td><.outcome_cell row={row} now={@now} /></td>
+            
             <td>
               <.subject
                 name={row.structure_name || to_string(row.structure_id)}
@@ -792,16 +901,21 @@
                 phx-value-id={row.structure_id}
               />
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{row.owner_name || "—"}</td>
+            
             <td class="text-xs text-gray-400">{where(row)}</td>
+            
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            
             <td><.archive_cell row={row} /></td>
           </tr>
         </tbody>
       </.grid>
     </.panel>
-
+    
     <.panel
       :if={show_board?(@board, "abandoned")}
       key="abandoned"
@@ -818,14 +932,21 @@
         <thead>
           <tr>
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th>Status</th>
+            
             <th>Where</th>
+            
             <th class="w-32">Seen</th>
+            
             <th class="w-10"></th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @abandoned_structures} id={"scout-abandoned-#{row.id}"}>
             <td>
@@ -836,17 +957,23 @@
                 phx-value-id={row.structure_id}
               />
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{row.owner_name || "—"}</td>
+            
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            
             <td class="text-xs text-gray-400">{where(row)}</td>
+            
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            
             <td><.archive_cell row={row} /></td>
           </tr>
         </tbody>
       </.grid>
     </.panel>
-
+    
     <%!-- CHEWY PATCH: its own board since 1.103.4-chewy.86. `NoFuel` and
           `Abandoned` shared one through `Status.dead_family/0`, and they
           are not the same errand: an abandoned hull is loot now, an
@@ -869,14 +996,21 @@
         <thead>
           <tr>
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th>Status</th>
+            
             <th>Where</th>
+            
             <th class="w-32">Seen</th>
+            
             <th class="w-10"></th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @no_fuel_structures} id={"scout-no-fuel-#{row.id}"}>
             <td>
@@ -887,17 +1021,23 @@
                 phx-value-id={row.structure_id}
               />
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{row.owner_name || "—"}</td>
+            
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            
             <td class="text-xs text-gray-400">{where(row)}</td>
+            
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            
             <td><.archive_cell row={row} /></td>
           </tr>
         </tbody>
       </.grid>
     </.panel>
-
+    
     <%!-- CHEWY PATCH: what a reader took off the boards by hand. Only
           rendered when there is something to undo, and deliberately not
           bounded by the window selector -- an archive that aged out of
@@ -914,14 +1054,21 @@
         <thead>
           <tr>
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th>Status</th>
+            
             <th class="w-32">Archived</th>
+            
             <th class="w-32">Seen</th>
+            
             <th class="w-10"></th>
           </tr>
         </thead>
+        
         <tbody>
           <tr
             :for={row <- @archived_structures}
@@ -937,17 +1084,23 @@
                 phx-value-id={row.structure_id}
               />
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{row.owner_name || "—"}</td>
+            
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            
             <td><.seen at={row.archived_at} now={@now} /></td>
+            
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            
             <td><.archive_cell row={row} /></td>
           </tr>
         </tbody>
       </.grid>
     </.panel>
-
+    
     <.log_panel
       :if={show_board?(@board, "log")}
       key="log"
@@ -961,14 +1114,21 @@
         <thead>
           <tr>
             <th>Structure</th>
+            
             <th>System</th>
+            
             <th>Owner</th>
+            
             <th>Status</th>
+            
             <th class="w-28">Comes out</th>
+            
             <th class="w-32">Seen</th>
+            
             <th class="w-10"></th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @structures} id={"scout-structure-#{row.id}"}>
             <td>
@@ -980,19 +1140,27 @@
                 phx-value-id={row.structure_id}
               />
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-300">{row.owner_name || "—"}</td>
+            
             <td><.status status={row.status} vulnerable={row.vulnerable} /></td>
+            
             <td><.countdown_cell expires_at={row.timer_expires_at} now={@now} /></td>
+            
             <td><.seen at={row.last_confirmed_at} now={@now} /></td>
+            
             <td><.archive_cell row={row} /></td>
           </tr>
+          
           <.empty :if={@structures == []} cols={7}>
             <span :if={@totals && @totals.structures == 0}>
               No structure has ever been reported — no scanner client has posted to
               <code class="text-gray-400">/api/maps/:map/scout/structures</code>
               yet.
             </span>
+            
             <span :if={is_nil(@totals) || @totals.structures > 0}>
               No structure matches this window and filter.
             </span>
@@ -1001,7 +1169,7 @@
       </.grid>
     </.log_panel>
   </.panel_stack>
-
+  
   <.panel_stack :if={@tab == :spawns} id="scout-stack-spawns">
     <.panel
       key="fresh_spawns"
@@ -1016,16 +1184,23 @@
         <thead>
           <tr>
             <th class="w-32">Seen</th>
+            
             <th>Spawn</th>
+            
             <th>System</th>
+            
             <th>Location</th>
+            
             <th class="w-16 text-right">Local</th>
+            
             <th class="w-24 text-right">Value</th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @fresh_spawns} id={"scout-fresh-spawn-#{row.id}"}>
             <td><.seen at={row.observed_at} now={@now} tone /></td>
+            
             <td>
               <.subject
                 name={row.spawn_name}
@@ -1037,23 +1212,28 @@
                 phx-value-spawn={row.spawn_name}
               />
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-400 text-xs">
               {row.location_name}
               <span :if={row.location_type} class="text-gray-600">· {row.location_type}</span>
             </td>
+            
             <td class="font-mono tabular-nums text-right">{row.players_in_local}</td>
+            
             <td class="font-mono tabular-nums text-right whitespace-nowrap">
               {isk(row.isk_value)}
             </td>
           </tr>
+          
           <.empty :if={@fresh_spawns == []} cols={6}>
             Nothing spawned in the last {fresh_window_label()}.
           </.empty>
         </tbody>
       </.grid>
     </.panel>
-
+    
     <.log_panel
       key="spawn_log"
       layout={@panel_layout}
@@ -1066,18 +1246,27 @@
         <thead>
           <tr>
             <th class="w-32">Seen</th>
+            
             <th>Spawn</th>
+            
             <th>System</th>
+            
             <th>Location</th>
+            
             <th class="w-16 text-right">Local</th>
+            
             <th class="w-16 text-right" title="Minutes since downtime">DT+</th>
+            
             <th>Outcome</th>
+            
             <th class="w-24 text-right">Value</th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @spawns} id={"scout-spawn-#{row.id}"}>
             <td><.seen at={row.observed_at} now={@now} /></td>
+            
             <td>
               <.subject
                 name={row.spawn_name}
@@ -1089,26 +1278,34 @@
                 phx-value-spawn={row.spawn_name}
               />
             </td>
+            
             <td><.sys row={row} systems={@systems} /></td>
+            
             <td class="text-gray-400 text-xs">
               {row.location_name}
               <span :if={row.location_type} class="text-gray-600">· {row.location_type}</span>
             </td>
+            
             <td class="font-mono tabular-nums text-right">{row.players_in_local}</td>
+            
             <td class="font-mono tabular-nums text-right text-gray-500">
               {if row.minutes_since_downtime, do: "#{row.minutes_since_downtime}m", else: "—"}
             </td>
+            
             <td class="text-gray-400 text-xs">{row.outcome || row.action_taken || "—"}</td>
+            
             <td class="font-mono tabular-nums text-right whitespace-nowrap">
               {isk(row.isk_value)}
             </td>
           </tr>
+          
           <.empty :if={@spawns == []} cols={8}>
             <span :if={@totals && @totals.spawns == 0}>
               No spawn has ever been reported — no scanner client has posted to
               <code class="text-gray-400">/api/maps/:map/scout/spawns</code>
               yet.
             </span>
+            
             <span :if={is_nil(@totals) || @totals.spawns > 0}>
               No spawn matches this window and filter.
             </span>
@@ -1117,8 +1314,7 @@
       </.grid>
     </.log_panel>
   </.panel_stack>
-
-  <%!-- It pages the ingest log and nothing else, so it follows it. --%>
+   <%!-- It pages the ingest log and nothing else, so it follows it. --%>
   <div
     :if={@more? and show_board?(@board, "log")}
     class="flex items-center gap-3 mb-6"
@@ -1127,7 +1323,7 @@
     <button phx-click="load_more" class="btn btn-sm">Load more</button>
     <span class="text-xs text-gray-500">first {@limit} rows</span>
   </div>
-
+  
   <div
     :if={@detail}
     class="modal modal-open !bg-black/70"
@@ -1141,6 +1337,7 @@
           <h3 class="font-semibold truncate">
             {(@detail.structure || %{}) |> Map.get(:structure_name) || @detail.structure_id}
           </h3>
+          
           <p class="text-xs text-gray-500">
             {plural(length(@detail.rows), "event", "events")} · {@detail.structure_id}
             <span :if={@detail.structure}>· {@detail.structure.presence}</span>
@@ -1149,23 +1346,29 @@
             </span>
           </p>
         </div>
-        <button phx-click="close_structure" class="btn btn-sm btn-ghost">✕</button>
+         <button phx-click="close_structure" class="btn btn-sm btn-ghost">✕</button>
       </div>
-
+      
       <div class="overflow-x-auto">
         <.grid id="scout-structure-history">
           <thead>
             <tr>
               <th class="w-32">When</th>
+              
               <th class="w-24">Event</th>
+              
               <th>System</th>
+              
               <th>Status</th>
+              
               <th>What moved</th>
             </tr>
           </thead>
+          
           <tbody>
             <tr :for={row <- @detail.rows} id={"scout-history-#{row.id}"}>
               <td><.seen at={row.observed_at} now={@now} /></td>
+              
               <td>
                 <span class={[
                   "badge badge-sm border",
@@ -1177,15 +1380,19 @@
                   {row.kind}
                 </span>
               </td>
+              
               <td><.sys row={row} systems={@systems} /></td>
+              
               <td class="text-xs text-gray-300">
-                <span :if={row.status_before}>{row.status_before} →</span>
-                {row.status_after || "—"}
+                <span :if={row.status_before}>{row.status_before} →</span> {row.status_after ||
+                  "—"}
               </td>
+              
               <td class="text-xs text-gray-500">
                 {Enum.join(row.changed_fields || [], ", ")}
               </td>
             </tr>
+            
             <.empty :if={@detail.rows == []} cols={5}>
               Nothing has happened to this structure yet.
             </.empty>
@@ -1193,9 +1400,9 @@
         </.grid>
       </div>
     </div>
-    <button class="modal-backdrop" phx-click="close_structure">close</button>
+     <button class="modal-backdrop" phx-click="close_structure">close</button>
   </div>
-
+  
   <div
     :if={@spawn_detail}
     class="modal modal-open !bg-black/70"
@@ -1207,6 +1414,7 @@
       <div class="flex items-start justify-between gap-4 px-4 py-3 border-b border-neutral-800 sticky top-0 bg-neutral-900 z-10">
         <div class="min-w-0">
           <h3 class="font-semibold truncate">{@spawn_detail.spawn_name}</h3>
+          
           <p class="text-xs text-gray-500 truncate">
             {plural(length(@spawn_detail.rows), "sighting", "sightings")} · {@spawn_detail.location_name} · {system(
               Map.put(@spawn_detail, :solar_system_name, nil),
@@ -1217,44 +1425,58 @@
             </span>
           </p>
         </div>
-        <button phx-click="close_spawn" class="btn btn-sm btn-ghost">✕</button>
+         <button phx-click="close_spawn" class="btn btn-sm btn-ghost">✕</button>
       </div>
-
+      
       <div class="overflow-x-auto">
         <.grid id="scout-spawn-history">
           <thead>
             <tr>
               <th class="w-32">Seen</th>
+              
               <th>System</th>
+              
               <th>Location</th>
+              
               <th class="w-16 text-right">Local</th>
+              
               <th class="w-16 text-right" title="Minutes since downtime">DT+</th>
+              
               <th>Outcome</th>
+              
               <th class="w-24 text-right">Value</th>
             </tr>
           </thead>
+          
           <tbody>
             <tr :for={row <- @spawn_detail.rows} id={"scout-spawn-history-#{row.id}"}>
               <td><.seen at={row.observed_at} now={@now} /></td>
+              
               <td><.sys row={row} systems={@systems} /></td>
+              
               <td class="text-gray-400 text-xs">{row.location_name}</td>
+              
               <td class="font-mono tabular-nums text-right">{row.players_in_local}</td>
+              
               <td class="font-mono tabular-nums text-right text-gray-500">
                 {if row.minutes_since_downtime, do: "#{row.minutes_since_downtime}m", else: "—"}
               </td>
+              
               <td class="text-gray-400 text-xs">{row.outcome || row.action_taken || "—"}</td>
+              
               <td class="font-mono tabular-nums text-right whitespace-nowrap">
                 {isk(row.isk_value)}
               </td>
             </tr>
+            
             <.empty :if={@spawn_detail.rows == []} cols={7}>No history for this spawn.</.empty>
           </tbody>
         </.grid>
       </div>
     </div>
-    <button class="modal-backdrop" phx-click="close_spawn">close</button>
+     <button class="modal-backdrop" phx-click="close_spawn">close</button>
   </div>
-
+  
   <%!-- CHEWY PATCH: the paste boxes. Discord renders `<t:…:R>` as a live
         countdown in each reader's own timezone, which is the whole
         reason this is a message rather than a screenshot. One box per
@@ -1272,24 +1494,25 @@
       <div class="flex items-start justify-between gap-4 px-4 py-3 border-b border-neutral-800">
         <div class="min-w-0">
           <h3 class="font-semibold truncate">{@discord.title} · Discord</h3>
+          
           <p class="text-xs text-gray-500">
             {@discord.total} rows · {length(@discord.parts)} {if length(@discord.parts) == 1,
               do: "message",
               else: "messages, paste them in order"} · timers stay live once pasted
           </p>
         </div>
-        <button phx-click="close_discord" class="btn btn-sm btn-ghost">✕</button>
+         <button phx-click="close_discord" class="btn btn-sm btn-ghost">✕</button>
       </div>
-
+      
       <div class="p-4 space-y-4 max-h-[70vh] overflow-auto">
         <div :for={{part, index} <- Enum.with_index(@discord.parts, 1)} class="space-y-1">
           <div class="flex items-baseline justify-between gap-2 text-xs text-gray-500">
             <span class="font-mono">
               Message {index}/{length(@discord.parts)}
             </span>
-            <span>{String.length(part)}/{discord_limit()} characters</span>
+             <span>{String.length(part)}/{discord_limit()} characters</span>
           </div>
-          <textarea
+           <textarea
             id={"scout-discord-part-#{index}"}
             readonly
             rows="12"
@@ -1298,15 +1521,15 @@
             onclick="this.select()"
           ><%= part %></textarea>
         </div>
-
+        
         <p class="text-xs text-gray-500">
           Click a box to select it, then copy. Paste as-is — Discord renders the times in each reader's own timezone.
         </p>
       </div>
     </div>
-    <button class="modal-backdrop" phx-click="close_discord">close</button>
+     <button class="modal-backdrop" phx-click="close_discord">close</button>
   </div>
-
+  
   <%!-- CHEWY PATCH: the planner, nested rather than routed (router.ex,
         ScoutIntelLive.handle_params/3). Mounted lazily on first visit to
         `/scout/planner` and then NEVER unmounted -- a parent-owned
@@ -1324,8 +1547,9 @@
           dropped a white, viewport-tall flex row in the middle of this
           page and the planner rendered as a squeezed column on a white
           slab. `{:div, class: ""}` is the same thing the layout already
-          does for its nested `ServerStatusLive`. --%>
-    {live_render(@socket, WandererAppWeb.ScoutPlannerLive,
+          does for its nested `ServerStatusLive`. --%> {live_render(
+      @socket,
+      WandererAppWeb.ScoutPlannerLive,
       id: "scout-planner-live",
       session: %{"user_id" => @current_user.id},
       container: {:div, class: ""}

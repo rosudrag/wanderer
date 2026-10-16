@@ -847,9 +847,14 @@ they live:
     chevron.
 
   * **Anything in a stack that is not a panel carries its panel's `order:`
-    too** — the asset-safety and seeding watcher notes, the sweep's
-    `Set full route` row. An unstyled child of a flex container sorts to the
-    top, which is how a note ends up above the board it annotates.
+    too** — the sweep's `Set full route` row. An unstyled child of a flex
+    container sorts to the top, which is how a note ends up above the board it
+    annotates. A one-line annotation belongs in `panel/1`'s `note` slot
+    instead: it renders as a footer inside the panel box, inherits its
+    padding, background and position, and stays visible when the board is
+    collapsed or empty — which is exactly when a "nobody is watching" note
+    matters. The asset-safety and seeding watcher notes were hand-styled
+    siblings (`-mt-3`, flush with the page gutter) until 1.103.4-chewy.113.
 
   * **It is stored in localStorage, under its own key** (`scout_layout`,
     `scout_planner_layout`, `scout_access_layout`), beside the filters and
@@ -1184,9 +1189,11 @@ Four deliberate shapes:
   later fact that should bring the row back. It is never a delete — the row
   stays in the table, in the retention purge's reach and in the history.
 
-The board says **who is watching** underneath itself (`watcher_note/1`): an
-empty board because nobody consented and an empty board because nothing
-unanchored look identical, and only one of them is a bug the reader can fix.
+The board says **who is watching** in its own footer (`panel/1`'s `note` slot,
+`watcher_note/1`): an empty board because nobody consented and an empty board
+because nothing unanchored look identical, and only one of them is a bug the
+reader can fix. It is a footer rather than a sibling `<div>` so it survives the
+board being collapsed or empty, which is the only state it ever matters in.
 
 ## Files
 
