@@ -21,6 +21,12 @@ defmodule WandererAppWeb.ScoutAccessLive do
   import WandererAppWeb.ScoutComponents
 
   alias WandererApp.Identity.ScoutAccess
+  alias WandererAppWeb.ScoutLayout
+
+  # CHEWY PATCH (panel layout): the same collapse/reorder the log and
+  # planner pages carry, so a scout page never behaves two ways.
+  @layout_store "scout_access_layout"
+  @panel_stacks %{"access" => ~w(grant members)}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -30,6 +36,7 @@ defmodule WandererAppWeb.ScoutAccessLive do
       {:ok,
        socket
        |> assign(active_tab: :scout_access, page_title: "Scout Log Access")
+       |> ScoutLayout.assign_layout(@layout_store, @panel_stacks)
        |> load()}
     else
       {:ok, socket |> push_navigate(to: ~p"/maps")}
@@ -58,6 +65,14 @@ defmodule WandererAppWeb.ScoutAccessLive do
       {:error, reason} ->
         {:noreply, socket |> put_flash(:error, message(reason))}
     end
+  end
+
+  def handle_event("ls_restore_#{@layout_store}", %{"value" => value}, socket) do
+    {:noreply, ScoutLayout.handle_restore(socket, value)}
+  end
+
+  def handle_event("layout_" <> _ = event, params, socket) do
+    {:noreply, ScoutLayout.handle(socket, event, params)}
   end
 
   defp load(socket) do

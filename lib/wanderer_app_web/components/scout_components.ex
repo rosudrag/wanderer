@@ -39,6 +39,7 @@ defmodule WandererAppWeb.ScoutComponents do
   use WandererAppWeb, :verified_routes
 
   alias WandererApp.Scout.{Status, Unanchor}
+  alias WandererAppWeb.ScoutLayout
 
   # A faction spawn seen within this long is worth flying to. Mirrored by
   # `ScoutIntelLive`'s read, which is what makes the list a *list*; this
@@ -86,9 +87,7 @@ defmodule WandererAppWeb.ScoutComponents do
       >
         <span class="w-1.5 h-1.5 rounded-full bg-success"></span> live
       </span>
-
       <.scout_tabs active={@active} planner?={@planner?} />
-
       <span :if={@meta != []} class="text-[11px] text-gray-500 truncate">
         {render_slot(@meta)}
       </span>
@@ -127,6 +126,7 @@ defmodule WandererAppWeb.ScoutComponents do
       >
         Structures
       </.link>
+
       <.link
         patch={~p"/scout/spawns"}
         role="tab"
@@ -135,6 +135,7 @@ defmodule WandererAppWeb.ScoutComponents do
       >
         Spawns
       </.link>
+
       <.link
         :if={@planner?}
         patch={~p"/scout/planner"}
@@ -229,6 +230,12 @@ defmodule WandererAppWeb.ScoutComponents do
   # CHEWY PATCH: this board has no rows. See the doc below.
   attr :empty, :boolean, default: false
   attr :empty_text, :string, default: nil
+  # CHEWY PATCH (panel layout): this panel's identity in
+  # `WandererAppWeb.ScoutLayout`. Set BOTH and the header grows the
+  # collapse chevron, the ▲/▼ buttons and the drag handle, and the
+  # section carries the `order:` the reader put it in.
+  attr :key, :string, default: nil
+  attr :layout, :any, default: nil
   slot :inner_block, required: true
 
   @doc """
@@ -245,46 +252,124 @@ defmodule WandererAppWeb.ScoutComponents do
   not on the page" is still explicit.
   """
   def panel(assigns) do
+    assigns =
+      assigns
+      |> assign(:collapsed, ScoutLayout.collapsed?(assigns.layout, assigns.key))
+      |> assign(:id, assigns.id || (assigns.key && "scout-panel-#{assigns.key}"))
+
     ~H"""
     <section
       id={@id}
+      data-panel-key={@key}
+      style={ScoutLayout.style(@layout, @key)}
       class={[
         "rounded-lg border border-neutral-800 bg-neutral-900/30 overflow-hidden",
-        if(@empty, do: "mb-2", else: "mb-5"),
+        if(@empty || @collapsed, do: "mb-2", else: "mb-5"),
         @class
       ]}
     >
       <header class="flex items-center gap-2 px-3 py-2 border-b border-neutral-800 bg-neutral-900/50">
+        <button
+          :if={@key && @layout}
+          type="button"
+          phx-click="layout_toggle"
+          phx-value-key={@key}
+          class="shrink-0 text-gray-500 hover:text-gray-200 leading-none w-4"
+          title={if @collapsed, do: "Expand this board", else: "Collapse this board"}
+          aria-expanded={to_string(!@collapsed)}
+        >
+          {if @collapsed, do: "▸", else: "▾"}
+        </button>
+
         <h2 class={[
           "text-xs font-semibold uppercase tracking-wider whitespace-nowrap",
           if(@empty, do: "text-gray-500", else: "text-gray-300")
         ]}>
           {@title}
         </h2>
+
         <span :if={@count} class={["badge badge-sm font-mono border-0", count_class(@tone)]}>
           {@count}
         </span>
+
         <span :if={@empty && @empty_text} class="text-xs text-gray-600 truncate">
           {@empty_text}
         </span>
-        <span :if={!@empty && @hint} class="text-xs text-gray-500 truncate hidden md:inline">
+
+        <span
+          :if={!@empty && !@collapsed && @hint}
+          class="text-xs text-gray-500 truncate hidden md:inline"
+        >
           {@hint}
         </span>
-        <button
-          :if={@copy && !@empty}
-          type="button"
-          phx-click="discord"
-          phx-value-board={@copy}
-          class="ml-auto btn btn-xs btn-ghost text-gray-400 shrink-0"
-          title="This board as a message you can paste into Discord — timers stay live there"
-        >
-          Discord
-        </button>
+
+        <div class="ml-auto flex items-center gap-1 shrink-0">
+          <button
+            :if={@copy && !@empty}
+            type="button"
+            phx-click="discord"
+            phx-value-board={@copy}
+            class="btn btn-xs btn-ghost text-gray-400"
+            title="This board as a message you can paste into Discord — timers stay live there"
+          >
+            Discord
+          </button>
+          <.panel_move :if={ScoutLayout.movable?(@layout, @key)} layout={@layout} key={@key} />
+        </div>
       </header>
-      <div :if={!@empty} class="overflow-x-auto">
+
+      <div :if={!@empty && !@collapsed} class="overflow-x-auto">
         {render_slot(@inner_block)}
       </div>
     </section>
+    """
+  end
+
+  attr :layout, :any, required: true
+  attr :key, :string, required: true
+
+  # CHEWY PATCH (panel layout): the three ways to move a panel.
+  #
+  # Drag-and-drop was asked for, but a drag is also the one gesture that
+  # is awkward on a trackpad, impossible on a touch screen that scrolls,
+  # and invisible to anybody who does not try it -- so the arrows ship
+  # beside the handle and do the same thing through `layout_move`. The
+  # handle itself carries no listener here:
+  # `assets/js/hooks/scoutPanelStack.ts` arms `draggable` on mousedown
+  # over it, so the rest of the header stays selectable text.
+  defp panel_move(assigns) do
+    ~H"""
+    <button
+      type="button"
+      phx-click="layout_move"
+      phx-value-key={@key}
+      phx-value-dir="up"
+      disabled={ScoutLayout.first?(@layout, @key)}
+      class="btn btn-xs btn-ghost px-1 text-gray-500 disabled:text-gray-700"
+      title="Move this board up"
+    >
+      ▲
+    </button>
+
+    <button
+      type="button"
+      phx-click="layout_move"
+      phx-value-key={@key}
+      phx-value-dir="down"
+      disabled={ScoutLayout.last?(@layout, @key)}
+      class="btn btn-xs btn-ghost px-1 text-gray-500 disabled:text-gray-700"
+      title="Move this board down"
+    >
+      ▼
+    </button>
+
+    <span
+      data-drag-handle
+      class="cursor-grab select-none px-1 text-gray-600 hover:text-gray-300"
+      title="Drag to reorder"
+    >
+      ⠿
+    </span>
     """
   end
 
@@ -297,6 +382,11 @@ defmodule WandererAppWeb.ScoutComponents do
   attr :title, :string, required: true
   attr :hint, :string, default: nil
   attr :count, :any, default: nil
+  # CHEWY PATCH (panel layout): same pair as `panel/1`. The tape is a
+  # stack member like any board -- a reader who never reads it collapses
+  # it once and keeps the boards above it on one screen.
+  attr :key, :string, default: nil
+  attr :layout, :any, default: nil
   slot :inner_block, required: true
 
   @doc """
@@ -311,23 +401,120 @@ defmodule WandererAppWeb.ScoutComponents do
   ingest it is, and a reader who wants it still has every row.
   """
   def log_panel(assigns) do
+    assigns =
+      assigns
+      |> assign(:collapsed, ScoutLayout.collapsed?(assigns.layout, assigns.key))
+      |> assign(:id, assigns.id || (assigns.key && "scout-panel-#{assigns.key}"))
+
     ~H"""
     <section
       id={@id}
+      data-panel-key={@key}
+      style={ScoutLayout.style(@layout, @key)}
       class="mt-8 mb-5 rounded-lg border border-dashed border-neutral-800 bg-neutral-950/40 overflow-hidden"
     >
       <header class="flex items-center gap-2 px-3 py-1.5 border-b border-dashed border-neutral-800">
-        <span class="w-1.5 h-1.5 rounded-full bg-neutral-600 shrink-0"></span>
+        <button
+          :if={@key && @layout}
+          type="button"
+          phx-click="layout_toggle"
+          phx-value-key={@key}
+          class="shrink-0 text-gray-600 hover:text-gray-300 leading-none w-4 text-[11px]"
+          title={if @collapsed, do: "Expand the log", else: "Collapse the log"}
+          aria-expanded={to_string(!@collapsed)}
+        >
+          {if @collapsed, do: "▸", else: "▾"}
+        </button>
+
+        <span :if={!(@key && @layout)} class="w-1.5 h-1.5 rounded-full bg-neutral-600 shrink-0">
+        </span>
         <h2 class="text-[11px] font-mono uppercase tracking-wider text-gray-500 whitespace-nowrap">
           {@title}
         </h2>
         <span :if={@count} class="text-[11px] font-mono text-gray-600">{@count}</span>
-        <span :if={@hint} class="text-[11px] text-gray-600 truncate hidden md:inline">{@hint}</span>
+        <span :if={@hint && !@collapsed} class="text-[11px] text-gray-600 truncate hidden md:inline">
+          {@hint}
+        </span>
+
+        <div
+          :if={ScoutLayout.movable?(@layout, @key)}
+          class="ml-auto flex items-center gap-1 shrink-0"
+        >
+          <.panel_move layout={@layout} key={@key} />
+        </div>
       </header>
-      <div class="overflow-x-auto opacity-80 hover:opacity-100 transition-opacity">
+
+      <div :if={!@collapsed} class="overflow-x-auto opacity-80 hover:opacity-100 transition-opacity">
         {render_slot(@inner_block)}
       </div>
     </section>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :class, :string, default: nil
+  slot :inner_block, required: true
+
+  @doc """
+  CHEWY PATCH (panel layout): one container of reorderable panels.
+
+  It is a flex COLUMN, because reordering is `order:` on its children —
+  see `WandererAppWeb.ScoutLayout` for why the server owns that number
+  and the drag hook never moves a node. Anything that is not a panel
+  (the watcher notes under the asset-safety boards) must carry its
+  panel's `order:` too, or it floats to the top of the stack.
+  """
+  def panel_stack(assigns) do
+    ~H"""
+    <div id={@id} phx-hook="ScoutPanelStack" class={["flex flex-col", @class]}>
+      {render_slot(@inner_block)}
+    </div>
+    """
+  end
+
+  attr :layout, :any, required: true
+  attr :class, :string, default: nil
+
+  @doc """
+  CHEWY PATCH (panel layout): collapse/expand/reset for the whole page.
+
+  Per-panel chevrons alone make "I want one board" a dozen clicks, and
+  a reader who has dragged six boards into a shape they no longer want
+  has no way back — the stored order outlives the session by design.
+  Reset is therefore shown only once something IS stored, so the
+  toolbar does not carry a permanently dead button.
+  """
+  def layout_controls(assigns) do
+    ~H"""
+    <div class={["join", @class]} title="Boards: collapse, expand, or put them back">
+      <button
+        type="button"
+        phx-click="layout_collapse_all"
+        class="btn btn-sm btn-ghost join-item text-gray-400"
+        title="Collapse every board to its header"
+      >
+        ⊖
+      </button>
+
+      <button
+        type="button"
+        phx-click="layout_expand_all"
+        class="btn btn-sm btn-ghost join-item text-gray-400"
+        title="Expand every board"
+      >
+        ⊕
+      </button>
+
+      <button
+        :if={ScoutLayout.customised?(@layout)}
+        type="button"
+        phx-click="layout_reset"
+        class="btn btn-sm btn-ghost join-item text-gray-400"
+        title="Back to the default order, everything open"
+      >
+        ↺
+      </button>
+    </div>
     """
   end
 
@@ -354,8 +541,7 @@ defmodule WandererAppWeb.ScoutComponents do
     >
       <span class="relative flex h-3 w-3 shrink-0">
         <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75">
-        </span>
-        <span class="relative inline-flex rounded-full h-3 w-3 bg-error"></span>
+        </span> <span class="relative inline-flex rounded-full h-3 w-3 bg-error"></span>
       </span>
 
       <span class="font-semibold text-error uppercase tracking-wide text-sm">
@@ -373,6 +559,7 @@ defmodule WandererAppWeb.ScoutComponents do
           {system(row, @systems)}
           <span class="text-error/80 font-mono">{ago(row.last_confirmed_at, @now)}</span>
         </button>
+
         <span :if={length(@rows) > 8} class="text-xs text-gray-400">
           +{length(@rows) - 8}
         </span>
@@ -410,15 +597,13 @@ defmodule WandererAppWeb.ScoutComponents do
     >
       <span class="relative flex h-3 w-3 shrink-0">
         <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75">
-        </span>
-        <span class="relative inline-flex rounded-full h-3 w-3 bg-error"></span>
+        </span> <span class="relative inline-flex rounded-full h-3 w-3 bg-error"></span>
       </span>
 
       <span class="font-semibold text-error uppercase tracking-wide text-sm">
         {plural(length(@rows), "structure", "structures")} finished unanchoring
       </span>
       <span class="text-xs text-gray-300">asset safety fired — the hull is loose now</span>
-
       <div class="flex flex-wrap items-center gap-1.5 ml-auto">
         <button
           :for={row <- Enum.take(@rows, 8)}
@@ -430,6 +615,7 @@ defmodule WandererAppWeb.ScoutComponents do
           {system(row, @systems)}
           <span class="text-error/80 font-mono">{ago(row.notified_at, @now)}</span>
         </button>
+
         <span :if={length(@rows) > 8} class="text-xs text-gray-400">
           +{length(@rows) - 8}
         </span>
@@ -454,9 +640,11 @@ defmodule WandererAppWeb.ScoutComponents do
       <span :if={@watchers.count == 0} class="text-warning">
         no character is watching — nothing can ever appear here
       </span>
+
       <span :if={@watchers.count > 0} class="text-gray-400">
         {plural(@watchers.count, "character", "characters")} watching
       </span>
+
       <span :if={@watchers.stalled > 0} class="text-error">
         · {@watchers.stalled} stalled (consent revoked or token dead)
       </span>
@@ -491,6 +679,7 @@ defmodule WandererAppWeb.ScoutComponents do
     >
       armed
     </span>
+
     <span
       :if={is_nil(@names)}
       class="badge badge-sm border border-warning/50 bg-warning/15 text-warning"
@@ -534,9 +723,11 @@ defmodule WandererAppWeb.ScoutComponents do
           </option>
         </select>
       </form>
+
       <span :if={@characters == []} class="text-xs text-warning">
         no character on this account — nothing to fly
       </span>
+
       <p
         :if={@status}
         class={[
@@ -619,6 +810,7 @@ defmodule WandererAppWeb.ScoutComponents do
   defp stat_body(assigns) do
     ~H"""
     <div class="text-[10px] uppercase tracking-wider text-gray-500 truncate">{@label}</div>
+
     <div class={[
       "text-xl font-semibold tabular-nums leading-tight",
       @tone == :urgent && "text-error",
@@ -627,6 +819,7 @@ defmodule WandererAppWeb.ScoutComponents do
     ]}>
       {@value}
     </div>
+
     <div class="text-[11px] text-gray-500 truncate h-4">{@hint}</div>
     """
   end
@@ -780,8 +973,7 @@ defmodule WandererAppWeb.ScoutComponents do
       class="flex items-center gap-1.5 text-[11px] text-orange-300 whitespace-nowrap"
       role="status"
     >
-      <span class="loading loading-spinner loading-xs"></span>
-      {@label}…
+      <span class="loading loading-spinner loading-xs"></span> {@label}…
     </span>
     """
   end
@@ -870,6 +1062,7 @@ defmodule WandererAppWeb.ScoutComponents do
         >
           {@status.text}
         </span>
+
         <span :if={@loading or not @enabled or is_nil(@status)} class="block text-gray-500">
           {@hint}
         </span>
@@ -940,6 +1133,7 @@ defmodule WandererAppWeb.ScoutComponents do
           >
             {preset.name}
           </button>
+
           <button
             type="button"
             phx-click="delete_preset"
@@ -998,6 +1192,7 @@ defmodule WandererAppWeb.ScoutComponents do
       <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5 truncate">
         {@label}
       </label>
+
       <div class="relative" phx-click-away="close_region_search" phx-value-scope={@scope}>
         <form phx-change="search_regions" phx-submit="search_regions">
           <input type="hidden" name="scope" value={@scope} />
@@ -1013,6 +1208,7 @@ defmodule WandererAppWeb.ScoutComponents do
             class="input input-sm input-bordered bg-neutral-950/60 w-full"
           />
         </form>
+
         <div
           :if={@matches != []}
           id={"#{@id}-options"}
@@ -1032,6 +1228,7 @@ defmodule WandererAppWeb.ScoutComponents do
           </button>
         </div>
       </div>
+
       <div :if={@selected != []} class="flex flex-wrap gap-1 mt-1">
         <button
           :for={region <- @selected}
@@ -1046,6 +1243,7 @@ defmodule WandererAppWeb.ScoutComponents do
           {region.region_name} ✕
         </button>
       </div>
+
       <p class="mt-0.5 text-[10px] text-gray-500 truncate">
         <%= cond do %>
           <% @selected == [] and @max -> %>
@@ -1115,6 +1313,7 @@ defmodule WandererAppWeb.ScoutComponents do
         >
           {system(@row, @systems)}
         </button>
+
         <button
           type="button"
           phx-click="set_waypoint"
@@ -1125,12 +1324,14 @@ defmodule WandererAppWeb.ScoutComponents do
         >
           ⤳
         </button>
+
         <span
           :if={@class_title}
           class="badge badge-xs border-0 bg-violet-500/15 text-violet-300 font-mono"
         >
           {@class_title}
         </span>
+
         <span
           :if={is_nil(@class_title) and @truesec and security(@sec)}
           class={["font-mono text-[11px]", security_class(@sec)]}
@@ -1139,6 +1340,7 @@ defmodule WandererAppWeb.ScoutComponents do
           {security(@sec)}
         </span>
       </div>
+
       <div :if={@region} class="text-[11px] text-gray-500 truncate" title="Region">
         {@region}
       </div>
@@ -1197,6 +1399,7 @@ defmodule WandererAppWeb.ScoutComponents do
         >
           {@name}
         </button>
+
         <span
           :if={@badge}
           class="badge badge-xs border-0 bg-neutral-800 text-gray-400 whitespace-nowrap"
@@ -1204,6 +1407,7 @@ defmodule WandererAppWeb.ScoutComponents do
           {@badge}
         </span>
       </div>
+
       <div :if={@meta} class="text-[11px] text-gray-500 truncate">{@meta}</div>
     </div>
     """
@@ -1223,6 +1427,7 @@ defmodule WandererAppWeb.ScoutComponents do
       <span class={["badge badge-sm border", status_badge_class(@status)]}>
         {@status || "—"}
       </span>
+
       <span
         :if={@vulnerable}
         class="badge badge-sm border-0 bg-error/20 text-error"
@@ -1282,6 +1487,7 @@ defmodule WandererAppWeb.ScoutComponents do
     >
       ✕
     </button>
+
     <button
       :if={archived?(@row)}
       phx-click="restore_structure"
@@ -1308,10 +1514,12 @@ defmodule WandererAppWeb.ScoutComponents do
   def countdown_cell(assigns) do
     ~H"""
     <div :if={is_nil(@expires_at)} class="text-gray-600">—</div>
+
     <div :if={@expires_at} class="whitespace-nowrap">
       <span class={["font-mono font-medium tabular-nums", urgency(@expires_at, @now)]}>
         {countdown(@expires_at, @now)}
       </span>
+
       <div :if={@absolute} class="text-[11px] text-gray-500 font-mono">{at(@expires_at)}</div>
     </div>
     """
@@ -1344,6 +1552,7 @@ defmodule WandererAppWeb.ScoutComponents do
     >
       —
     </div>
+
     <div
       :if={@predicted_at}
       class="whitespace-nowrap"
@@ -1352,6 +1561,7 @@ defmodule WandererAppWeb.ScoutComponents do
       <span class={["font-mono font-medium tabular-nums", urgency(@predicted_at, @now)]}>
         ≤ {countdown(@predicted_at, @now)}
       </span>
+
       <div class="text-[11px] text-gray-500 font-mono">{at(@predicted_at)}</div>
     </div>
     """
@@ -1409,6 +1619,7 @@ defmodule WandererAppWeb.ScoutComponents do
       <span class="font-mono tabular-nums text-gray-400">
         ≥ {ago(Unanchor.predicted_max_at(@row), @now)}
       </span>
+
       <div class="text-[11px] text-gray-500 font-mono">{at(Unanchor.predicted_max_at(@row))}</div>
     </div>
     """
@@ -1432,6 +1643,7 @@ defmodule WandererAppWeb.ScoutComponents do
       ]}>
         {ago(@at, @now)}
       </span>
+
       <div class="text-[11px] text-gray-500 font-mono">{at(@at)}</div>
     </div>
     """
@@ -1456,6 +1668,7 @@ defmodule WandererAppWeb.ScoutComponents do
       >
         {@stop.class_title}
       </span>
+
       <span
         :if={is_nil(@stop.class_title) and security(@stop.security)}
         class={["font-mono text-[11px]", security_class(@stop.security)]}
@@ -1463,6 +1676,7 @@ defmodule WandererAppWeb.ScoutComponents do
       >
         {security(@stop.security)}
       </span>
+
       <span :if={is_nil(@stop.class_title) and is_nil(security(@stop.security))} class="text-gray-600">
         —
       </span>
@@ -1666,6 +1880,7 @@ defmodule WandererAppWeb.ScoutComponents do
     >
       WP
     </span>
+
     <span
       :if={!@waypoint?}
       class="text-gray-700 font-mono text-[11px]"
@@ -1696,7 +1911,9 @@ defmodule WandererAppWeb.ScoutComponents do
     <div class="flex items-center gap-1.5 w-32">
       <div class="flex h-2 w-20 rounded-full overflow-hidden bg-neutral-800">
         <div class="bg-success/70" style={"width: #{heat_pct(@fresh, @systems)}%"}></div>
+
         <div class="bg-warning/70" style={"width: #{heat_pct(@stale, @systems)}%"}></div>
+
         <div class="bg-error/70" style={"width: #{heat_pct(@unseen, @systems)}%"}></div>
       </div>
       <span class="text-[11px] text-gray-500 font-mono tabular-nums">{@covered}/{@systems}</span>
@@ -1723,6 +1940,7 @@ defmodule WandererAppWeb.ScoutComponents do
       </span>
       <.status :for={s <- @target.statuses} status={s} />
     </div>
+
     <div :if={is_nil(@target)} class="text-gray-600">—</div>
     """
   end
@@ -1754,6 +1972,7 @@ defmodule WandererAppWeb.ScoutComponents do
         {countdown(@target.earliest_deadline, @now)}
       </span>
     </div>
+
     <div :if={is_nil(@target) or is_nil(@target.earliest_deadline)} class="text-gray-600">—</div>
     """
   end

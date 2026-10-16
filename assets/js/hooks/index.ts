@@ -10,6 +10,7 @@ import NewVersionUpdate from './newVersionUpdate';
 import MapAction from './maps/mapAction';
 import ShowCharactersAddAlert from './showCharactersAddAlert';
 import WysiwygEditor from './wysiwygEditor';
+import ScoutPanelStack from './scoutPanelStack';
 
 export default {
   DownloadJson,
@@ -24,4 +25,5 @@ export default {
   NewVersionUpdate,
   ShowCharactersAddAlert,
   WysiwygEditor,
+  ScoutPanelStack,
 };
