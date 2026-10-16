@@ -814,6 +814,55 @@ was the other half of the jank.
 `limit` is deliberately not persisted: "Load more" is about the page you are
 on, not about how you like to read the log.
 
+### The boards collapse, and they move
+
+Every panel on every scout page — the log's twelve structure boards and its
+two spawn boards, the planner's rank/sweep/targets panels, even the access
+page's two — carries three controls in its own header:
+
+|Control|What it does|
+|---|---|
+|`▾` / `▸` (left of the title)|collapses the board to its header line. The count chip stays, so a collapsed board still answers "is there anything in it"|
+|`▲` / `▼` (right)|moves it one place up or down|
+|`⠿` (right)|drags it to any position in the same stack|
+
+Plus `⊖` / `⊕` / `↺` in the toolbar: collapse everything, expand everything,
+and put the page back the way it ships. `↺` renders only once something IS
+stored, so the toolbar never carries a dead button.
+
+Four decisions are load-bearing, and `WandererAppWeb.ScoutLayout` is where
+they live:
+
+  * **The server owns the order.** It renders `style="order:N"` on each
+    panel and the drag hook (`assets/js/hooks/scoutPanelStack.ts`) only
+    reports the drop. LiveView re-sorts a container's children to match the
+    server's markup on the next patch, and these pages tick every 30s, so a
+    client-side move would snap back within half a minute.
+
+  * **Order is per STACK — one flex column of sibling panels** (the
+    structures tab, the sweep's result pane, …). `order:` cannot move a node
+    into another container, so a cross-stack drag is refused rather than
+    pretended: the arrows stop at the ends of their own stack, and a stack
+    of one (the planner's `Region heat`) renders no arrows at all, only the
+    chevron.
+
+  * **Anything in a stack that is not a panel carries its panel's `order:`
+    too** — the asset-safety and seeding watcher notes, the sweep's
+    `Set full route` row. An unstyled child of a flex container sorts to the
+    top, which is how a note ends up above the board it annotates.
+
+  * **It is stored in localStorage, under its own key** (`scout_layout`,
+    `scout_planner_layout`, `scout_access_layout`), beside the filters and
+    never inside them: a filter narrows what is on the page, this decides
+    what the page looks like, and clearing one is no reason to lose the
+    other. A planner PRESET deliberately does not carry it either — a preset
+    names a query, not a page shape.
+
+Restoring re-validates like a click, for the same reason the filters do. A
+board this build no longer renders is dropped; a board this build ADDED is
+re-inserted at the position the template gives it, after its default-order
+neighbour, never appended under a 250-row log where nobody would find it.
+
 ### The space filter
 
 Six chips — High, Low, Null, W-Space, Pochven, Other — all on by default,
@@ -1157,6 +1206,7 @@ unanchored look identical, and only one of them is a bug the reader can fix.
 |Pages (shell + access)|`lib/wanderer_app_web/live/scout/scout_{intel,access}_live.ex`|
 |Planner, as a nested child of the shell|`lib/wanderer_app_web/live/scout/scout_planner_live.ex`|
 |Page shell (header, tab strip, toolbar, pane), panels, cells, formatters|`lib/wanderer_app_web/components/scout_components.ex`|
+|Panel order + collapsed set (per page, localStorage)|`lib/wanderer_app_web/live/scout/scout_layout.ex`, `assets/js/hooks/scoutPanelStack.ts`|
 |Asset-safety trigger (parse, reads, watchers)|`lib/wanderer_app/scout/asset_safety.ex`|
 |Asset-safety notification feed|`lib/wanderer_app/sync/feeds/asset_safety_feed.ex`|
 |Asset-safety resource|`lib/wanderer_app/api/scout_asset_safety.ex`|

@@ -1707,6 +1707,123 @@ defmodule WandererAppWeb.ScoutIntelLiveTest do
     end
   end
 
+  describe "collapsing and moving the boards" do
+    # The order a reader sees is `style="order:N"` on each panel, so the
+    # assertions read exactly what the browser lays out from.
+    defp panel_order(html) do
+      Regex.scan(~r/data-panel-key="([a-z_]+)"[^>]*style="order:(\d+)"/, html)
+      |> Map.new(fn [_, key, idx] -> {key, String.to_integer(idx)} end)
+    end
+
+    test "a collapsed board keeps its header and loses its table", %{conn: conn} do
+      structure(%{structure_name: "Folded Astrahus", status: "Anchoring"})
+
+      {:ok, view, html} = live(conn, ~p"/scout")
+      assert html =~ ~s(id="scout-anchoring")
+
+      collapsed = render_click(view, "layout_toggle", %{"key" => "anchoring"})
+
+      # The board is still listed -- "collapsed" and "not on the page"
+      # must stay distinguishable -- but its table is not rendered. The
+      # structure's NAME is no proof either way: every structure is also
+      # on the ingest log at the bottom of the same tab.
+      assert collapsed =~ "Anchoring"
+      refute collapsed =~ ~s(id="scout-anchoring")
+
+      assert render_click(view, "layout_toggle", %{"key" => "anchoring"}) =~
+               ~s(id="scout-anchoring")
+    end
+
+    test "moving a board up swaps it with the one above", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/scout")
+
+      before = panel_order(html)
+      assert before["unanchored"] < before["timers"]
+
+      after_move =
+        panel_order(render_click(view, "layout_move", %{"key" => "timers", "dir" => "up"}))
+
+      assert after_move["timers"] < after_move["unanchored"]
+      # Nothing else moved.
+      assert after_move["now"] == before["now"]
+      assert after_move["log"] == before["log"]
+    end
+
+    test "the last board cannot be moved off the end", %{conn: conn} do
+      # The ingest log is last in the structures stack, and the page
+      # renders it, which the first few boards (asset safety, behind its
+      # own flag) are not guaranteed to be.
+      {:ok, view, html} = live(conn, ~p"/scout")
+      last = html |> panel_order() |> Enum.max_by(fn {_key, idx} -> idx end) |> elem(0)
+      assert last == "log"
+
+      moved = panel_order(render_click(view, "layout_move", %{"key" => last, "dir" => "down"}))
+
+      assert moved[last] == panel_order(html)[last]
+    end
+
+    test "a drag drops a board next to another one", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/scout")
+      assert panel_order(html)["log"] > panel_order(html)["now"]
+
+      dropped =
+        panel_order(
+          render_click(view, "layout_drop", %{
+            "key" => "log",
+            "target" => "now",
+            "position" => "before"
+          })
+        )
+
+      assert dropped["log"] < dropped["now"]
+    end
+
+    test "collapse all, then reset, puts every board back", %{conn: conn} do
+      structure(%{structure_name: "Reset Astrahus", status: "Anchoring"})
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      folded =
+        view
+        |> render_click("layout_move", %{"key" => "log", "dir" => "up"})
+        |> then(fn _ -> render_click(view, "layout_collapse_all", %{}) end)
+
+      refute folded =~ "Reset Astrahus"
+
+      restored = render_click(view, "layout_reset", %{})
+
+      assert restored =~ "Reset Astrahus"
+      assert panel_order(restored)["now"] < panel_order(restored)["log"]
+    end
+
+    test "the browser's stored layout is applied on restore", %{conn: conn} do
+      structure(%{structure_name: "Stored Astrahus", status: "Anchoring"})
+
+      {:ok, view, _html} = live(conn, ~p"/scout")
+
+      stored =
+        Jason.encode!(%{
+          "order" => %{"structures" => ["log", "now"]},
+          "collapsed" => ["anchoring"]
+        })
+
+      html = render_hook(view, "ls_restore_scout_layout", %{"value" => stored})
+
+      # Stored order wins for the keys it names; everything it does not
+      # name keeps its default place rather than piling up at the end.
+      assert panel_order(html)["log"] < panel_order(html)["now"]
+      assert panel_order(html)["unanchored"] > panel_order(html)["now"]
+      refute html =~ ~s(id="scout-anchoring")
+    end
+
+    test "a corrupt stored layout leaves the page as it ships", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/scout")
+
+      assert panel_order(render_hook(view, "ls_restore_scout_layout", %{"value" => "{["})) ==
+               panel_order(html)
+    end
+  end
+
   describe "the permission gate" do
     test "a user without :scout_intel_view is redirected off the page", %{conn: _conn} do
       Application.delete_env(:wanderer_app, :bootstrap_admin_character)

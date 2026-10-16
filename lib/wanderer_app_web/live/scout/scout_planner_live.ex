@@ -89,6 +89,7 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   alias WandererApp.Scout.{Assignments, PilotLocation, Planner, Presets, Regions, Space}
   alias WandererApp.Scout.{Split, Sweep}
   alias WandererApp.Scout.Targets
+  alias WandererAppWeb.ScoutLayout
   alias WandererAppWeb.ScoutWaypoint
 
   @kinds ~w(visit anoms sigs grid)
@@ -112,6 +113,20 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   # cap, which enforces the same limit on the wire.
   @max_sweep_regions 3
   @max_split_k 6
+
+  # CHEWY PATCH (panel layout): the planner's panels, grouped by the DOM
+  # container they are siblings in. Three modes render three different
+  # containers, and `Region heat` renders OUTSIDE the sweep's result
+  # pane (it answers "which region" before there is a sweep), so it is
+  # a stack of its own -- see `WandererAppWeb.ScoutLayout` on why order
+  # cannot cross a container.
+  @layout_store "scout_planner_layout"
+  @panel_stacks %{
+    "rank" => ~w(rank_table),
+    "sweep" => ~w(sweep_starts sweep_split sweep_route),
+    "sweep_heat" => ~w(region_heat),
+    "targets" => ~w(targets_route targets_excluded)
+  }
 
   @impl true
   def mount(params, session, socket) do
@@ -299,6 +314,11 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            pilot_start_loading?: false,
            pilot_start_token: 0
          )
+         # CHEWY PATCH (panel layout): this page's panels are collapsible
+         # and reorderable like the log's, under their own key -- the
+         # planner is a separate LiveView and must never write the
+         # parent's blob.
+         |> ScoutLayout.assign_layout(@layout_store, @panel_stacks)
          |> load()}
     end
   end
@@ -1230,6 +1250,18 @@ defmodule WandererAppWeb.ScoutPlannerLive do
       {:ok, socket} -> {:noreply, reload_all(socket)}
       :unchanged -> {:noreply, socket}
     end
+  end
+
+  # CHEWY PATCH (panel layout): panel order + collapsed set, own
+  # localStorage key, own socket assign. Deliberately NOT part of
+  # `planner_state/1`: a preset names a QUERY (scope, bands, pilots), and
+  # loading somebody's Delve split should not also rearrange the page.
+  def handle_event("ls_restore_#{@layout_store}", %{"value" => value}, socket) do
+    {:noreply, ScoutLayout.handle_restore(socket, value)}
+  end
+
+  def handle_event("layout_" <> _ = event, params, socket) do
+    {:noreply, ScoutLayout.handle(socket, event, params)}
   end
 
   # Every mode, because a restore (or a preset) can change all three at

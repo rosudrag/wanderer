@@ -15,7 +15,17 @@
     class="hidden"
   >
   </div>
-
+  
+  <%!-- CHEWY PATCH (panel layout): panel order + collapsed set, own key
+        again -- a preset names a query, not a page shape. --%>
+  <div
+    id="scout-planner-layout-store"
+    phx-hook="LocalStorageSetting"
+    data-key="scout_planner_layout"
+    class="hidden"
+  >
+  </div>
+  
   <%!-- What used to be this page's own `<header>`: the mode switch (this
         page's second axis, not a second route), the busy/1 indicator,
         the generated-at line and the only button that re-reads
@@ -26,7 +36,6 @@
       busy={@rank_loading? or @sweep_loading? or @split_loading? or @heat_loading?}
       label="computing"
     />
-
     <span
       :if={@mode == :rank and not is_nil(@generated_at) and not @rank_loading?}
       class="text-[11px] text-gray-500 whitespace-nowrap"
@@ -34,7 +43,7 @@
     >
       generated <span class="text-gray-300">{ago(@generated_at, @now)}</span> · times UTC
     </span>
-
+    
     <div class="ml-auto flex items-center gap-2">
       <%!-- CHEWY PATCH (scout sweep): a second MODE on this same page, not
             a second route -- `rank` is the origin-ball ranking, `sweep` is
@@ -52,6 +61,7 @@
         >
           Rank
         </button>
+        
         <button
           type="button"
           phx-click="switch_mode"
@@ -63,6 +73,7 @@
         >
           Sweep
         </button>
+        
         <button
           type="button"
           phx-click="switch_mode"
@@ -75,12 +86,13 @@
           Targets
         </button>
       </div>
-
+      
       <button phx-click="refresh" id="scout-planner-refresh" class="btn btn-sm btn-ghost">
         Refresh
       </button>
+      <.layout_controls layout={@panel_layout} />
     </div>
-
+    
     <%!-- CHEWY PATCH (planner presets): saved control sets. Last row of
           the toolbar, under the mode tabs, because a preset applies to
           every mode at once -- it is not one mode's filter. --%>
@@ -92,8 +104,7 @@
       max_name_length={WandererApp.Scout.Presets.max_name_length()}
     />
   </.scout_toolbar>
-
-  <%!-- ================================ RANK ============================ --%>
+   <%!-- ================================ RANK ============================ --%>
   <div :if={@mode == :rank}>
     <div class="mb-4 p-2 rounded-lg border border-neutral-800 bg-neutral-900/30">
       <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2 items-start">
@@ -101,6 +112,7 @@
           <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">
             Origin system
           </label>
+          
           <div class="relative" phx-click-away="close_origin_search">
             <form phx-change="search_origin" phx-submit="search_origin">
               <input
@@ -114,6 +126,7 @@
                 class="input input-sm input-bordered bg-neutral-950/60 w-full"
               />
             </form>
+            
             <div
               :if={@origin_matches != []}
               class="absolute z-20 mt-1 w-full min-w-[14rem] rounded-lg border border-neutral-700 bg-neutral-900 shadow-lg max-h-64 overflow-auto"
@@ -131,6 +144,7 @@
               </button>
             </div>
           </div>
+          
           <div class="mt-1 min-h-[1.25rem]">
             <button
               :if={@origin_id}
@@ -141,12 +155,13 @@
             >
               {@origin_name || @origin_id} ✕
             </button>
+            
             <span :if={is_nil(@origin_id)} class="text-[10px] text-gray-500">
               nothing ranks until an origin is picked
             </span>
           </div>
         </div>
-
+        
         <.field label="Kind">
           <form phx-change="select_kind">
             <select
@@ -165,7 +180,7 @@
             </select>
           </form>
         </.field>
-
+        
         <.field label="Stops">
           <form phx-change="select_limit">
             <select
@@ -179,7 +194,7 @@
             </select>
           </form>
         </.field>
-
+        
         <.field label="Max jumps" hint={if @max_jumps == 0, do: "no limit", else: "0 = no limit"}>
           <form phx-change="update_max_jumps">
             <input
@@ -194,7 +209,7 @@
             />
           </form>
         </.field>
-
+        
         <div class="col-span-2 sm:col-span-1">
           <.region_picker
             id="scout-planner-regions"
@@ -206,7 +221,7 @@
             title="Narrows the ranking to these regions — empty means no narrowing"
           />
         </div>
-
+        
         <%!-- CHEWY PATCH (pilot start): the origin is the one thing nothing
               ranks without, and it was always typed. --%>
         <.pilot_start_toggle
@@ -217,7 +232,7 @@
           hint="the origin follows the selected pilot"
         />
       </div>
-
+      
       <div class="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-neutral-800/70">
         <div class="max-w-full overflow-x-auto">
           <div class="join" id="scout-planner-security">
@@ -231,7 +246,7 @@
             />
           </div>
         </div>
-
+        
         <button
           :if={length(@security) < length(@security_types)}
           phx-click="reset_space"
@@ -242,7 +257,7 @@
         </button>
       </div>
     </div>
-
+    
     <.scout_pane loading={@rank_loading?}>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         <.stat label="Candidates in scope" value={to_string(@candidates)} />
@@ -255,10 +270,9 @@
           label="Unseen"
           value={to_string(count_reason(@stops, :unseen))}
           tone={if count_reason(@stops, :unseen) > 0, do: :urgent, else: :neutral}
-        />
-        <.stat label="Frontier" value={to_string(count_reason(@stops, :frontier))} />
+        /> <.stat label="Frontier" value={to_string(count_reason(@stops, :frontier))} />
       </div>
-
+      
       <div :if={@route_ids != ""} class="flex flex-wrap items-center gap-2 mb-3">
         <input
           type="text"
@@ -278,7 +292,7 @@
         >
           Copy route
         </button>
-
+        
         <%!-- Setting the route is ESI-only: the game client can take a single
               destination, not an ordered list, so this goes out with ONE
               character's token and the page has to name whose. --%>
@@ -298,6 +312,7 @@
             </option>
           </select>
         </form>
+        
         <button
           type="button"
           phx-click="set_route"
@@ -308,13 +323,16 @@
         >
           Set route
         </button>
+        
         <span :if={@characters == []} class="text-[11px] text-gray-500">
           No tracked character on this account to set a route on.
         </span>
-        <.route_outcome status={@route_status} scope={:rank} />
+         <.route_outcome status={@route_status} scope={:rank} />
       </div>
-
+      
       <.panel
+        key="rank_table"
+        layout={@panel_layout}
         id="scout-planner-table-panel"
         title="Ranked systems"
         count={length(@stops)}
@@ -326,18 +344,29 @@
           <thead>
             <tr>
               <th>System</th>
+              
               <th>Region</th>
+              
               <th>Class / Sec</th>
+              
               <th>Coverage</th>
+              
               <th>Verdict</th>
+              
               <th>Score</th>
+              
               <th>Reason</th>
+              
               <th class="text-right">Jumps</th>
+              
               <th>Leg</th>
+              
               <th>Why</th>
+              
               <th class="w-24"></th>
             </tr>
           </thead>
+          
           <tbody>
             <tr :for={stop <- @stops} id={"scout-planner-#{stop.solar_system_id}"}>
               <td>
@@ -351,26 +380,39 @@
                   >
                     {stop.name}
                   </button>
-                  <.space_badge space={stop.space} />
+                   <.space_badge space={stop.space} />
                 </div>
               </td>
+              
               <td class="text-xs text-gray-400">{stop.region_name || "—"}</td>
+              
               <td><.stop_class stop={stop} /></td>
+              
               <td><.coverage_ladder coverage={stop.coverage} kind={@kind} now={@now} /></td>
+              
               <td><.grid_verdict stop={stop} /></td>
+              
               <td class="font-mono tabular-nums">{score_fmt(stop.score)}</td>
+              
               <td><.reason_badge reason={stop.reason} /></td>
+              
               <td class="text-right tabular-nums">{stop.jumps}</td>
+              
               <td class="text-xs text-gray-400">{stop.leg}</td>
+              
               <td><.terms_hint terms={stop.terms} /></td>
+              
               <td><.stale_cell stop={stop} /></td>
             </tr>
+            
             <.empty :if={@stops == [] and @rank_loading?} cols={11}>
               Ranking…
             </.empty>
+            
             <.empty :if={@stops == [] and not @rank_loading? and is_nil(@origin_id)} cols={11}>
               Search for an origin system to begin.
             </.empty>
+            
             <%!-- `@origin_id` is an integer or nil, never a boolean, and `and`
                   raises BadBooleanError on anything else -- which crashed the
                   whole page on first render. --%>
@@ -383,6 +425,7 @@
             >
               {plan_error_message(@plan_error)}
             </.empty>
+            
             <.empty
               :if={
                 @stops == [] and not @rank_loading? and not is_nil(@origin_id) and
@@ -397,8 +440,7 @@
       </.panel>
     </.scout_pane>
   </div>
-
-  <%!-- ================================ SWEEP =========================== --%>
+   <%!-- ================================ SWEEP =========================== --%>
   <%!-- CHEWY PATCH (scout sweep): design doc "whole-region sweeps" --
         scope is a MEMBERSHIP over up to 3 regions, not a ball, so there
         is no origin/limit/max_jumps here; `compress` is an explicit,
@@ -419,7 +461,7 @@
             title="The regions this sweep covers -- at most 3 (~450 systems), the matrix cap"
           />
         </div>
-
+        
         <.field label="Kind">
           <form phx-change="select_sweep_kind">
             <select
@@ -438,7 +480,7 @@
             </select>
           </form>
         </.field>
-
+        
         <.field label="Split (k)">
           <form phx-change="update_sweep_k">
             <input
@@ -453,6 +495,7 @@
               class="input input-sm input-bordered bg-neutral-950/60 w-full"
             />
           </form>
+          
           <%!-- Feedback AT the control. The split panel is a screenful below a
                 189-row sweep table, so without this a changed `k` looks like it
                 did nothing at all. --%>
@@ -463,9 +506,11 @@
             </span>
             jumps
           </p>
+          
           <p :if={@split_loading?} class="mt-0.5 text-[10px] text-orange-300 truncate">
             splitting…
           </p>
+          
           <p
             :if={
               @sweep_k > 1 and @sweep_parts == [] and not @split_loading? and
@@ -476,7 +521,7 @@
             nothing to split
           </p>
         </.field>
-
+        
         <label
           class="flex min-w-0 items-start gap-1.5 text-[11px] text-gray-300 cursor-pointer col-span-2 sm:col-span-1"
           title="Assumes the client routes shortest-path with no avoidance list -- ESI exposes no way to read a pilot's autopilot preference, so a wrong assumption here produces a route with holes in it, not a slower one"
@@ -494,7 +539,7 @@
             </span>
           </span>
         </label>
-
+        
         <%!-- CHEWY PATCH (stable sweeps): the reason the same region gave
               three different start systems on three different days. A
               sweep's MEMBERSHIP is normally time-dependent -- anything
@@ -523,7 +568,7 @@
             </span>
           </span>
         </label>
-
+        
         <%!-- CHEWY PATCH (pilot start): in sweep mode this pins the sweep's
               own start AND every split part to its own pilot, which is the
               "keep my chars in same place" case without typing k system
@@ -536,7 +581,7 @@
           hint="sweep and each split part start where their pilot is"
         />
       </div>
-
+      
       <div class="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-neutral-800/70">
         <div class="max-w-full overflow-x-auto">
           <div class="join" id="scout-sweep-security">
@@ -551,6 +596,7 @@
             />
           </div>
         </div>
+        
         <button
           :if={length(@sweep_security) < length(@security_types)}
           phx-click="reset_sweep_space"
@@ -559,6 +605,7 @@
         >
           All space ✕
         </button>
+        
         <%!-- CHEWY PATCH: the band filter picks STOPS, not the graph the
               route runs over -- "sweep Metropolis lowsec" still drives
               through its highsec, which is the whole point of routing
@@ -569,7 +616,7 @@
           visiting {security_summary(@sweep_security)}; the route still transits whatever it must
         </span>
       </div>
-
+      
       <%!-- CHEWY PATCH (pinned split starts): "I would like to keep my
             chars in same place" -- a split normally picks each part's
             start geometrically, which sends every pilot somewhere else
@@ -589,12 +636,14 @@
         <span class="text-[10px] uppercase tracking-wider text-gray-500 mt-4">
           Pilot starts
         </span>
+        
         <div
           :for={slot <- 0..(@sweep_k - 1)}
           id={"scout-sweep-start-slot-#{slot}"}
           class="relative w-36"
         >
           <div class="text-[10px] text-gray-500 mb-0.5">Part {slot + 1}</div>
+          
           <button
             :if={Map.has_key?(@sweep_starts, slot)}
             type="button"
@@ -606,6 +655,7 @@
           >
             {@sweep_starts[slot].name} ✕
           </button>
+          
           <form
             :if={not Map.has_key?(@sweep_starts, slot)}
             phx-change="search_part_start"
@@ -624,6 +674,7 @@
               class="input input-xs input-bordered bg-neutral-950/60 w-full"
             />
           </form>
+          
           <div
             :if={@sweep_start_slot == slot and @sweep_start_matches != []}
             class="absolute z-20 mt-1 w-full min-w-[14rem] rounded-lg border border-neutral-700 bg-neutral-900 shadow-lg max-h-64 overflow-auto"
@@ -642,6 +693,7 @@
             </button>
           </div>
         </div>
+        
         <button
           :if={@sweep_starts != %{}}
           type="button"
@@ -651,27 +703,28 @@
         >
           Unpin all ✕
         </button>
+        
         <span class="text-[11px] text-gray-500 mt-4 max-w-sm">
           a pinned part starts where its character already is; unpinned parts are seeded as before
         </span>
       </div>
     </div>
-
+    
     <%!-- `empty/1` is a `<tr>`; dropped straight into a `<div>` the browser
           discards it, so these two messages were invisible. `note/1` is the
           non-table empty state. --%>
     <.note :if={@sweep_regions == [] and is_nil(@sweep_error)} id="scout-sweep-no-scope">
       Pick a scope above, or a region from the heat table below, to sweep it.
     </.note>
-
+    
     <.note :if={@sweep_error} id="scout-sweep-error">
       {plan_error_message(@sweep_error)}
     </.note>
-
+    
     <.note :if={@sweep_loading? and is_nil(@sweep_result)} id="scout-sweep-loading">
       Routing this scope…
     </.note>
-
+    
     <.scout_pane :if={@sweep_result} loading={@sweep_loading?}>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         <.stat label="Systems" value={to_string(@sweep_result.systems)} />
@@ -687,242 +740,285 @@
           hint="guess: 5 min/system, jump time not counted"
         />
       </div>
-
-      <.panel
-        id="scout-sweep-starts-panel"
-        title="Start points"
-        hint="top 3 by route cost, or search for the system you are in"
-      >
-        <div class="flex flex-wrap items-center gap-2 p-2">
-          <button
-            :for={s <- @sweep_result.starts}
-            type="button"
-            phx-click="select_sweep_start"
-            phx-value-id={s.solar_system_id}
-            phx-value-name={s.name}
-            id={"scout-sweep-start-#{s.solar_system_id}"}
-            class={[
-              "btn btn-sm gap-1",
-              if(s.solar_system_id == @sweep_result.start, do: "btn-primary", else: "btn-outline")
-            ]}
-          >
-            {s.name}
-            <span class="font-mono text-[11px] opacity-80">{s.jumps}j</span>
-          </button>
-
-          <%!-- CHEWY PATCH (searchable start picker): the three buttons
+      
+      <%!-- CHEWY PATCH (panel layout): the sweep's three result panels
+            reorder among themselves. `Region heat` is outside this pane
+            (it renders before there is a sweep) and is its own stack. --%>
+      <.panel_stack id="scout-planner-stack-sweep">
+        <.panel
+          key="sweep_starts"
+          layout={@panel_layout}
+          id="scout-sweep-starts-panel"
+          title="Start points"
+          hint="top 3 by route cost, or search for the system you are in"
+        >
+          <div class="flex flex-wrap items-center gap-2 p-2">
+            <button
+              :for={s <- @sweep_result.starts}
+              type="button"
+              phx-click="select_sweep_start"
+              phx-value-id={s.solar_system_id}
+              phx-value-name={s.name}
+              id={"scout-sweep-start-#{s.solar_system_id}"}
+              class={[
+                "btn btn-sm gap-1",
+                if(s.solar_system_id == @sweep_result.start,
+                  do: "btn-primary",
+                  else: "btn-outline"
+                )
+              ]}
+            >
+              {s.name} <span class="font-mono text-[11px] opacity-80">{s.jumps}j</span>
+            </button>
+            
+            <%!-- CHEWY PATCH (searchable start picker): the three buttons
                 above are the three CHEAPEST starts, which is never "the
                 system my character is parked in". This is the same
                 type-to-search dropdown the rank mode's origin uses, on
                 slot "main", and the system it picks does not have to be
                 a stop: `Sweep.sweep/1` routes FROM an out-of-scope start
                 and counts the approach leg without listing it. --%>
-          <div class="relative w-48" phx-click-away="close_part_start_search">
-            <form phx-change="search_part_start" phx-submit="search_part_start">
-              <input type="hidden" name="slot" value="main" />
-              <input
-                type="text"
-                name="q"
-                id="scout-sweep-start-q"
-                value={if @sweep_start_slot == :main, do: @sweep_start_q, else: ""}
-                phx-debounce="300"
-                autocomplete="off"
-                placeholder="Start somewhere else…"
-                title="Start this sweep from any system by name -- typically the one your character is already in"
-                class="input input-sm input-bordered bg-neutral-950/60 w-full"
-              />
-            </form>
-            <div
-              :if={@sweep_start_slot == :main and @sweep_start_matches != []}
-              id="scout-sweep-start-matches"
-              class="absolute z-20 mt-1 w-full min-w-[14rem] rounded-lg border border-neutral-700 bg-neutral-900 shadow-lg max-h-64 overflow-auto"
-            >
-              <button
-                :for={m <- @sweep_start_matches}
-                type="button"
-                phx-click="select_part_start"
-                phx-value-slot="main"
-                phx-value-id={m.solar_system_id}
-                phx-value-name={m.solar_system_name}
-                class="flex w-full items-baseline justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-neutral-800"
+            <div class="relative w-48" phx-click-away="close_part_start_search">
+              <form phx-change="search_part_start" phx-submit="search_part_start">
+                <input type="hidden" name="slot" value="main" />
+                <input
+                  type="text"
+                  name="q"
+                  id="scout-sweep-start-q"
+                  value={if @sweep_start_slot == :main, do: @sweep_start_q, else: ""}
+                  phx-debounce="300"
+                  autocomplete="off"
+                  placeholder="Start somewhere else…"
+                  title="Start this sweep from any system by name -- typically the one your character is already in"
+                  class="input input-sm input-bordered bg-neutral-950/60 w-full"
+                />
+              </form>
+              
+              <div
+                :if={@sweep_start_slot == :main and @sweep_start_matches != []}
+                id="scout-sweep-start-matches"
+                class="absolute z-20 mt-1 w-full min-w-[14rem] rounded-lg border border-neutral-700 bg-neutral-900 shadow-lg max-h-64 overflow-auto"
               >
-                <span class="truncate">{m.solar_system_name}</span>
-                <span class="text-[11px] text-gray-500 truncate">{m.region_name}</span>
-              </button>
+                <button
+                  :for={m <- @sweep_start_matches}
+                  type="button"
+                  phx-click="select_part_start"
+                  phx-value-slot="main"
+                  phx-value-id={m.solar_system_id}
+                  phx-value-name={m.solar_system_name}
+                  class="flex w-full items-baseline justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-neutral-800"
+                >
+                  <span class="truncate">{m.solar_system_name}</span>
+                  <span class="text-[11px] text-gray-500 truncate">{m.region_name}</span>
+                </button>
+              </div>
             </div>
-          </div>
-
-          <span
-            :if={
-              @sweep_start &&
-                not Enum.any?(@sweep_result.starts, &(&1.solar_system_id == @sweep_start))
-            }
-            id="scout-sweep-start-custom"
-            class="badge badge-sm border-0 bg-primary/20 text-primary"
-            title="Starting from this system; it is only a stop if the sweep needed it anyway"
-          >
-            from {@sweep_start_name || @sweep_start}
-          </span>
-
-          <button
-            :if={@sweep_start}
-            type="button"
-            phx-click="clear_sweep_start"
-            id="scout-sweep-start-clear"
-            class="btn btn-sm btn-ghost text-gray-400"
-          >
-            Auto-pick best ✕
-          </button>
-        </div>
-      </.panel>
-
-      <div class="flex flex-wrap items-center gap-2 mb-3">
-        <form phx-change="select_character" class="flex items-center gap-2">
-          <select
-            name="character_eve_id"
-            id="scout-sweep-character"
-            title="Whose autopilot the full route is written to, through ESI"
-            class="select select-sm select-bordered bg-neutral-950/60 py-0 max-w-[12rem]"
-          >
-            <option
-              :for={character <- @characters}
-              value={character.eve_id}
-              selected={character.eve_id == @character_eve_id}
+            
+            <span
+              :if={
+                @sweep_start &&
+                  not Enum.any?(@sweep_result.starts, &(&1.solar_system_id == @sweep_start))
+              }
+              id="scout-sweep-start-custom"
+              class="badge badge-sm border-0 bg-primary/20 text-primary"
+              title="Starting from this system; it is only a stop if the sweep needed it anyway"
             >
-              {character.name}
-            </option>
-          </select>
-        </form>
-        <button
-          type="button"
-          phx-click="set_sweep_route"
-          id="scout-sweep-set-route"
-          disabled={@characters == []}
-          title="Replaces this character's in-game route with the full sweep, in order"
-          class="btn btn-sm btn-primary"
+              from {@sweep_start_name || @sweep_start}
+            </span>
+            
+            <button
+              :if={@sweep_start}
+              type="button"
+              phx-click="clear_sweep_start"
+              id="scout-sweep-start-clear"
+              class="btn btn-sm btn-ghost text-gray-400"
+            >
+              Auto-pick best ✕
+            </button>
+          </div>
+        </.panel>
+        
+        <%!-- Not a panel, but it belongs with the start points above it:
+            an unstyled child of a flex stack sorts to the top. --%>
+        <div
+          style={ScoutLayout.style(@panel_layout, "sweep_starts")}
+          class="flex flex-wrap items-center gap-2 mb-3"
         >
-          Set full route
-        </button>
-        <.route_outcome status={@route_status} scope={:sweep} />
-      </div>
-
-      <%!-- The split sits ABOVE the route table: on a 189-system sweep the
+          <form phx-change="select_character" class="flex items-center gap-2">
+            <select
+              name="character_eve_id"
+              id="scout-sweep-character"
+              title="Whose autopilot the full route is written to, through ESI"
+              class="select select-sm select-bordered bg-neutral-950/60 py-0 max-w-[12rem]"
+            >
+              <option
+                :for={character <- @characters}
+                value={character.eve_id}
+                selected={character.eve_id == @character_eve_id}
+              >
+                {character.name}
+              </option>
+            </select>
+          </form>
+          
+          <button
+            type="button"
+            phx-click="set_sweep_route"
+            id="scout-sweep-set-route"
+            disabled={@characters == []}
+            title="Replaces this character's in-game route with the full sweep, in order"
+            class="btn btn-sm btn-primary"
+          >
+            Set full route
+          </button>
+           <.route_outcome status={@route_status} scope={:sweep} />
+        </div>
+        
+        <%!-- The split sits ABOVE the route table: on a 189-system sweep the
             table is several screens, and a panel below it is a panel nobody
             scrolls to. --%>
-      <.panel
-        :if={@sweep_k > 1 and @sweep_parts != []}
-        id="scout-sweep-split-panel"
-        title={"Split across #{@sweep_k} pilots"}
-        hint="makespan, not total jumps -- parts fly in parallel"
-      >
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 p-3">
-          <div
-            :for={part <- @sweep_parts}
-            id={"scout-sweep-part-#{part.index}"}
-            class="rounded-lg border border-neutral-800 bg-neutral-950/40 p-3"
-          >
-            <div class="text-xs uppercase tracking-wider text-gray-500 mb-1">
-              Part {part.index + 1}
-            </div>
-            <div class="text-sm text-gray-200 mb-2">
-              {length(part.system_ids)} systems · {part.jumps} jumps · starts {start_name(
-                part.start,
-                @sweep_result.stops,
-                @sweep_starts
-              )}
-              <span
-                :if={part.pinned?}
-                class="badge badge-xs border-0 bg-primary/20 text-primary align-middle"
-                title="Pinned: this part was built around the system you parked this character in, and the jumps include flying out of it"
-              >
-                pinned
-              </span>
-            </div>
-            <form phx-change="select_part_character" class="flex items-center gap-2 mb-2">
-              <input type="hidden" name="part" value={part.index} />
-              <select
-                name="character_eve_id"
-                id={"scout-sweep-part-#{part.index}-character"}
-                class="select select-sm select-bordered bg-neutral-950/60 py-0 w-full"
-              >
-                <option
-                  :for={character <- @characters}
-                  value={character.eve_id}
-                  selected={character.eve_id == Map.get(@sweep_pilots, part.index)}
+        <.panel
+          :if={@sweep_k > 1 and @sweep_parts != []}
+          key="sweep_split"
+          layout={@panel_layout}
+          id="scout-sweep-split-panel"
+          title={"Split across #{@sweep_k} pilots"}
+          hint="makespan, not total jumps -- parts fly in parallel"
+        >
+          <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 p-3">
+            <div
+              :for={part <- @sweep_parts}
+              id={"scout-sweep-part-#{part.index}"}
+              class="rounded-lg border border-neutral-800 bg-neutral-950/40 p-3"
+            >
+              <div class="text-xs uppercase tracking-wider text-gray-500 mb-1">
+                Part {part.index + 1}
+              </div>
+              
+              <div class="text-sm text-gray-200 mb-2">
+                {length(part.system_ids)} systems · {part.jumps} jumps · starts {start_name(
+                  part.start,
+                  @sweep_result.stops,
+                  @sweep_starts
+                )}
+                <span
+                  :if={part.pinned?}
+                  class="badge badge-xs border-0 bg-primary/20 text-primary align-middle"
+                  title="Pinned: this part was built around the system you parked this character in, and the jumps include flying out of it"
                 >
-                  {character.name}
-                </option>
-              </select>
-            </form>
+                  pinned
+                </span>
+              </div>
+              
+              <form phx-change="select_part_character" class="flex items-center gap-2 mb-2">
+                <input type="hidden" name="part" value={part.index} />
+                <select
+                  name="character_eve_id"
+                  id={"scout-sweep-part-#{part.index}-character"}
+                  class="select select-sm select-bordered bg-neutral-950/60 py-0 w-full"
+                >
+                  <option
+                    :for={character <- @characters}
+                    value={character.eve_id}
+                    selected={character.eve_id == Map.get(@sweep_pilots, part.index)}
+                  >
+                    {character.name}
+                  </option>
+                </select>
+              </form>
+              
+              <button
+                type="button"
+                phx-click="set_part_route"
+                phx-value-part={part.index}
+                id={"scout-sweep-part-#{part.index}-set-route"}
+                disabled={@characters == []}
+                class="btn btn-sm btn-primary"
+              >
+                Set route
+              </button>
+               <.route_outcome status={@route_status} scope={{:part, part.index}} />
+            </div>
+          </div>
+          
+          <div class="p-3 pt-0">
             <button
               type="button"
-              phx-click="set_part_route"
-              phx-value-part={part.index}
-              id={"scout-sweep-part-#{part.index}-set-route"}
-              disabled={@characters == []}
-              class="btn btn-sm btn-primary"
+              phx-click="assign_all_parts"
+              id="scout-sweep-assign-all"
+              class="btn btn-sm btn-outline"
             >
-              Set route
+              Assign all
             </button>
-            <.route_outcome status={@route_status} scope={{:part, part.index}} />
           </div>
-        </div>
-        <div class="p-3 pt-0">
-          <button
-            type="button"
-            phx-click="assign_all_parts"
-            id="scout-sweep-assign-all"
-            class="btn btn-sm btn-outline"
-          >
-            Assign all
-          </button>
-        </div>
-      </.panel>
-
-      <.panel
-        id="scout-sweep-table-panel"
-        title="Sweep route"
-        count={length(@sweep_result.stops)}
-        hint={to_string(@sweep_kind) <> " coverage"}
-      >
-        <.grid id="scout-sweep-table">
-          <thead>
-            <tr>
-              <th class="text-right">#</th>
-              <th>System</th>
-              <th>Region</th>
-              <th>Class / Sec</th>
-              <th>Coverage</th>
-              <th>Reason</th>
-              <th class="text-right">Jumps</th>
-              <th>WP</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr :for={stop <- @sweep_result.stops} id={"scout-sweep-#{stop.solar_system_id}"}>
-              <td class="text-right text-xs text-gray-500">{stop.order}</td>
-              <td>
-                <div class="flex items-center gap-1.5 whitespace-nowrap">
-                  {stop.name}
-                  <.space_badge space={stop.space} />
-                </div>
-              </td>
-              <td class="text-xs text-gray-400">{stop.region_name || "—"}</td>
-              <td><.sweep_class_cell stop={stop} /></td>
-              <td><.coverage_ladder coverage={stop.coverage} kind={@sweep_kind} now={@now} /></td>
-              <td><.reason_badge reason={stop.reason} /></td>
-              <td class="text-right tabular-nums">{stop.jumps_from_prev}</td>
-              <td><.waypoint_badge waypoint?={stop.waypoint?} /></td>
-            </tr>
-            <.empty :if={@sweep_result.stops == []} cols={8}>
-              Nothing in this scope needs scouting right now.
-            </.empty>
-          </tbody>
-        </.grid>
-      </.panel>
+        </.panel>
+        
+        <.panel
+          key="sweep_route"
+          layout={@panel_layout}
+          id="scout-sweep-table-panel"
+          title="Sweep route"
+          count={length(@sweep_result.stops)}
+          hint={to_string(@sweep_kind) <> " coverage"}
+        >
+          <.grid id="scout-sweep-table">
+            <thead>
+              <tr>
+                <th class="text-right">#</th>
+                
+                <th>System</th>
+                
+                <th>Region</th>
+                
+                <th>Class / Sec</th>
+                
+                <th>Coverage</th>
+                
+                <th>Reason</th>
+                
+                <th class="text-right">Jumps</th>
+                
+                <th>WP</th>
+              </tr>
+            </thead>
+            
+            <tbody>
+              <tr :for={stop <- @sweep_result.stops} id={"scout-sweep-#{stop.solar_system_id}"}>
+                <td class="text-right text-xs text-gray-500">{stop.order}</td>
+                
+                <td>
+                  <div class="flex items-center gap-1.5 whitespace-nowrap">
+                    {stop.name} <.space_badge space={stop.space} />
+                  </div>
+                </td>
+                
+                <td class="text-xs text-gray-400">{stop.region_name || "—"}</td>
+                
+                <td><.sweep_class_cell stop={stop} /></td>
+                
+                <td>
+                  <.coverage_ladder coverage={stop.coverage} kind={@sweep_kind} now={@now} />
+                </td>
+                
+                <td><.reason_badge reason={stop.reason} /></td>
+                
+                <td class="text-right tabular-nums">{stop.jumps_from_prev}</td>
+                
+                <td><.waypoint_badge waypoint?={stop.waypoint?} /></td>
+              </tr>
+              
+              <.empty :if={@sweep_result.stops == []} cols={8}>
+                Nothing in this scope needs scouting right now.
+              </.empty>
+            </tbody>
+          </.grid>
+        </.panel>
+      </.panel_stack>
     </.scout_pane>
-
+    
     <.panel
+      key="region_heat"
+      layout={@panel_layout}
       id="scout-region-heat-panel"
       title="Region heat"
       hint={
@@ -934,13 +1030,19 @@
         <thead>
           <tr>
             <th>Region</th>
+            
             <th class="text-right">Systems</th>
+            
             <th>Coverage</th>
+            
             <th class="text-right">Stale</th>
+            
             <th class="text-right">Unseen</th>
+            
             <th class="text-right">Median age</th>
           </tr>
         </thead>
+        
         <tbody>
           <tr :for={row <- @region_heat || []} id={"scout-heat-#{row.region_id}"}>
             <td>
@@ -954,7 +1056,9 @@
                 {row.region_name}
               </button>
             </td>
+            
             <td class="text-right tabular-nums">{row.systems}</td>
+            
             <td>
               <.heat_bar
                 covered={row.covered}
@@ -963,13 +1067,18 @@
                 systems={row.systems}
               />
             </td>
+            
             <td class="text-right tabular-nums">{row.stale}</td>
+            
             <td class="text-right tabular-nums">{row.unseen}</td>
+            
             <td class="text-right tabular-nums font-mono text-xs">{age_fmt(row.median_age_s)}</td>
           </tr>
+          
           <.empty :if={(@region_heat || []) == [] and @heat_loading?} cols={6}>
             Measuring every region…
           </.empty>
+          
           <.empty :if={(@region_heat || []) == [] and not @heat_loading?} cols={6}>
             No region holds {security_summary(@sweep_security)}, or no coverage has ever been
             recorded there.
@@ -978,8 +1087,7 @@
       </.grid>
     </.panel>
   </div>
-
-  <%!-- =============================== TARGETS ========================== --%>
+   <%!-- =============================== TARGETS ========================== --%>
   <%!-- CHEWY PATCH (target routing): the candidate set is a FINDING set,
         not a region and not a ball -- `WandererApp.Scout.Targets` turns
         `scout_structures_v1` rows into a system list and hands it to the
@@ -1009,7 +1117,7 @@
           </button>
         </div>
       </div>
-
+      
       <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2 items-start mt-2 pt-2 border-t border-neutral-800/70">
         <.field label="Confirmed within">
           <form phx-change="select_targets_window">
@@ -1026,11 +1134,12 @@
               >
                 {days}d
               </option>
+              
               <option value="any" selected={is_nil(@targets_window_days)}>Any age</option>
             </select>
           </form>
         </.field>
-
+        
         <.field label="Max jumps">
           <form phx-change="update_targets_radius">
             <input
@@ -1045,6 +1154,7 @@
               class="input input-sm input-bordered bg-neutral-950/60 w-full"
             />
           </form>
+          
           <p
             :if={@targets_radius > 0 and is_nil(@targets_start)}
             class="mt-0.5 text-[10px] text-gray-500 truncate"
@@ -1052,7 +1162,7 @@
             pick a start to apply it
           </p>
         </.field>
-
+        
         <%!-- The same type-to-search dropdown the other two modes use, on
               its own slot: a target run starts where the character is
               parked, which is almost never one of the targets. --%>
@@ -1068,6 +1178,7 @@
             >
               {@targets_start_name || @targets_start} ✕
             </button>
+            
             <form
               :if={is_nil(@targets_start)}
               phx-change="search_part_start"
@@ -1085,6 +1196,7 @@
                 class="input input-sm input-bordered bg-neutral-950/60 w-full"
               />
             </form>
+            
             <div
               :if={@sweep_start_slot == :target and @sweep_start_matches != []}
               id="scout-targets-start-matches"
@@ -1105,7 +1217,7 @@
             </div>
           </div>
         </.field>
-
+        
         <%!-- A decommission is a FIXED 7 days from a start nobody saw, so
               `unanchoring_since + 7d` is the latest the hull can still be
               there (`WandererApp.Scout.Unanchor`). Past it, the trip is
@@ -1127,7 +1239,7 @@
             <span class="block text-gray-500">unanchoring: first sighting + 7d</span>
           </span>
         </label>
-
+        
         <%!-- CHEWY PATCH (pilot start): the Start picker above is a NAME
               search -- read the system off the game client, type it back
               in. This reads it from ESI instead. --%>
@@ -1139,7 +1251,7 @@
           hint="the run opens where the selected pilot is parked"
         />
       </div>
-
+      
       <div class="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-neutral-800/70">
         <div class="max-w-full overflow-x-auto">
           <div class="join" id="scout-targets-security">
@@ -1154,6 +1266,7 @@
             />
           </div>
         </div>
+        
         <button
           :if={length(@targets_security) < length(@security_types)}
           phx-click="reset_targets_space"
@@ -1163,7 +1276,7 @@
           All space ✕
         </button>
       </div>
-
+      
       <%!-- The strike-off list. Kept visible whenever it is non-empty, in
             the toolbar rather than next to the table, because a filter
             you cannot see is a route you cannot explain. --%>
@@ -1184,6 +1297,7 @@
         >
           {name} ✕
         </button>
+        
         <button
           type="button"
           phx-click="clear_targets_ignore"
@@ -1194,7 +1308,7 @@
         </button>
       </div>
     </div>
-
+    
     <.note :if={@targets_error == :no_targets} id="scout-targets-none">
       Nothing matches these filters — no {Enum.map_join(
         @targets_families,
@@ -1202,15 +1316,15 @@
         &String.downcase(Targets.family_label(&1))
       )} finding is both recent enough and reachable. That is the good day.
     </.note>
-
+    
     <.note :if={@targets_error && @targets_error != :no_targets} id="scout-targets-error">
       {plan_error_message(@targets_error)}
     </.note>
-
+    
     <.note :if={@targets_loading? and is_nil(@targets_result)} id="scout-targets-loading">
       Finding targets…
     </.note>
-
+    
     <.scout_pane :if={@targets_result} loading={@targets_loading?}>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         <.stat label="Target systems" value={to_string(@targets_result.route.systems)} />
@@ -1218,8 +1332,7 @@
           label="Structures"
           value={to_string(targets_structures(@targets_result))}
           hint={"of #{@targets_result.candidates} systems found"}
-        />
-        <.stat label="Total jumps" value={to_string(@targets_result.route.jumps)} />
+        /> <.stat label="Total jumps" value={to_string(@targets_result.route.jumps)} />
         <.stat
           label="Waypoints"
           value={to_string(length(@targets_result.route.waypoints))}
@@ -1228,7 +1341,7 @@
           }
         />
       </div>
-
+      
       <p
         :if={targets_excluded_summary(@targets_result, @targets_radius) != ""}
         id="scout-targets-excluded"
@@ -1236,7 +1349,7 @@
       >
         Not on this route: {targets_excluded_summary(@targets_result, @targets_radius)}.
       </p>
-
+      
       <div class="flex flex-wrap items-center gap-2 mb-3">
         <form phx-change="select_character" class="flex items-center gap-2">
           <select
@@ -1254,6 +1367,7 @@
             </option>
           </select>
         </form>
+        
         <button
           type="button"
           phx-click="set_targets_route"
@@ -1264,130 +1378,161 @@
         >
           Set route
         </button>
-        <.route_outcome status={@route_status} scope={:targets} />
+         <.route_outcome status={@route_status} scope={:targets} />
       </div>
-
-      <.panel
-        id="scout-targets-table-panel"
-        title="Target route"
-        count={length(@targets_result.route.stops)}
-        hint="soonest predicted deadline is an upper bound, never a timer"
-      >
-        <.grid id="scout-targets-table">
-          <thead>
-            <tr>
-              <th class="text-right">#</th>
-              <th>System</th>
-              <th>Region</th>
-              <th>Findings</th>
-              <th>Out by</th>
-              <th>Last seen</th>
-              <th class="text-right">Jumps</th>
-              <th>WP</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              :for={stop <- @targets_result.route.stops}
-              id={"scout-target-#{stop.solar_system_id}"}
-            >
-              <td class="text-right text-xs text-gray-500">{stop.order}</td>
-              <td>
-                <div class="flex items-center gap-1.5 whitespace-nowrap">
-                  {stop.name}
-                  <.space_badge space={stop.space} />
-                </div>
-              </td>
-              <td class="text-xs text-gray-400">{stop.region_name || "—"}</td>
-              <td>
-                <.target_findings target={target_of(@targets_result, stop.solar_system_id)} />
-              </td>
-              <td>
-                <.target_deadline
-                  target={target_of(@targets_result, stop.solar_system_id)}
-                  now={@now}
-                />
-              </td>
-              <td>
-                <.target_seen
-                  target={target_of(@targets_result, stop.solar_system_id)}
-                  now={@now}
-                />
-              </td>
-              <td class="text-right tabular-nums">{stop.jumps_from_prev}</td>
-              <td><.waypoint_badge waypoint?={stop.waypoint?} /></td>
-              <td class="text-right">
-                <button
-                  type="button"
-                  phx-click="ignore_target"
-                  phx-value-id={stop.solar_system_id}
-                  phx-value-name={stop.name}
-                  id={"scout-target-#{stop.solar_system_id}-ignore"}
-                  title="Drop this system from the route — undo it from the Ignored chips above"
-                  class="btn btn-ghost btn-xs text-gray-500 hover:text-error"
-                >
-                  ✕
-                </button>
-              </td>
-            </tr>
-            <.empty :if={@targets_result.route.stops == []} cols={9}>
-              Nothing to fly to.
-            </.empty>
-          </tbody>
-        </.grid>
-      </.panel>
-
-      <%!-- A finding the route could not take. Listed, never dropped
+      
+      <.panel_stack id="scout-planner-stack-targets">
+        <.panel
+          key="targets_route"
+          layout={@panel_layout}
+          id="scout-targets-table-panel"
+          title="Target route"
+          count={length(@targets_result.route.stops)}
+          hint="soonest predicted deadline is an upper bound, never a timer"
+        >
+          <.grid id="scout-targets-table">
+            <thead>
+              <tr>
+                <th class="text-right">#</th>
+                
+                <th>System</th>
+                
+                <th>Region</th>
+                
+                <th>Findings</th>
+                
+                <th>Out by</th>
+                
+                <th>Last seen</th>
+                
+                <th class="text-right">Jumps</th>
+                
+                <th>WP</th>
+                
+                <th></th>
+              </tr>
+            </thead>
+            
+            <tbody>
+              <tr
+                :for={stop <- @targets_result.route.stops}
+                id={"scout-target-#{stop.solar_system_id}"}
+              >
+                <td class="text-right text-xs text-gray-500">{stop.order}</td>
+                
+                <td>
+                  <div class="flex items-center gap-1.5 whitespace-nowrap">
+                    {stop.name} <.space_badge space={stop.space} />
+                  </div>
+                </td>
+                
+                <td class="text-xs text-gray-400">{stop.region_name || "—"}</td>
+                
+                <td>
+                  <.target_findings target={target_of(@targets_result, stop.solar_system_id)} />
+                </td>
+                
+                <td>
+                  <.target_deadline
+                    target={target_of(@targets_result, stop.solar_system_id)}
+                    now={@now}
+                  />
+                </td>
+                
+                <td>
+                  <.target_seen
+                    target={target_of(@targets_result, stop.solar_system_id)}
+                    now={@now}
+                  />
+                </td>
+                
+                <td class="text-right tabular-nums">{stop.jumps_from_prev}</td>
+                
+                <td><.waypoint_badge waypoint?={stop.waypoint?} /></td>
+                
+                <td class="text-right">
+                  <button
+                    type="button"
+                    phx-click="ignore_target"
+                    phx-value-id={stop.solar_system_id}
+                    phx-value-name={stop.name}
+                    id={"scout-target-#{stop.solar_system_id}-ignore"}
+                    title="Drop this system from the route — undo it from the Ignored chips above"
+                    class="btn btn-ghost btn-xs text-gray-500 hover:text-error"
+                  >
+                    ✕
+                  </button>
+                </td>
+              </tr>
+              
+              <.empty :if={@targets_result.route.stops == []} cols={9}>
+                Nothing to fly to.
+              </.empty>
+            </tbody>
+          </.grid>
+        </.panel>
+        
+        <%!-- A finding the route could not take. Listed, never dropped
             silently: a wormhole has no gate path and an out-of-radius
             target is a choice, not an absence. --%>
-      <.panel
-        :if={@targets_result.excluded.radius != [] or @targets_result.excluded.unroutable != []}
-        id="scout-targets-excluded-panel"
-        title="Left out"
-        count={
-          length(@targets_result.excluded.radius) + length(@targets_result.excluded.unroutable)
-        }
-        hint="real findings this route does not visit"
-      >
-        <.grid id="scout-targets-excluded-table">
-          <thead>
-            <tr>
-              <th>System</th>
-              <th>Region</th>
-              <th>Findings</th>
-              <th>Why</th>
-              <th>Last seen</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              :for={
-                {t, why} <-
-                  Enum.map(
-                    @targets_result.excluded.radius,
-                    &{&1, "beyond #{@targets_radius} jumps"}
-                  ) ++
-                    Enum.map(@targets_result.excluded.unroutable, &{&1, "no gate route"})
-              }
-              id={"scout-target-out-#{t.solar_system_id}"}
-            >
-              <td>
-                <div class="flex items-center gap-1.5 whitespace-nowrap">
-                  {t.name}
-                  <.space_badge space={t.space} />
-                </div>
-              </td>
-              <td class="text-xs text-gray-400">{t.region_name || "—"}</td>
-              <td class="text-xs text-gray-300">
-                {plural(t.structures, "structure", "structures")}
-              </td>
-              <td class="text-xs text-gray-500">{why}</td>
-              <td><.seen at={t.last_confirmed_at} now={@now} /></td>
-            </tr>
-          </tbody>
-        </.grid>
-      </.panel>
+        <.panel
+          :if={@targets_result.excluded.radius != [] or @targets_result.excluded.unroutable != []}
+          key="targets_excluded"
+          layout={@panel_layout}
+          id="scout-targets-excluded-panel"
+          title="Left out"
+          count={
+            length(@targets_result.excluded.radius) + length(@targets_result.excluded.unroutable)
+          }
+          hint="real findings this route does not visit"
+        >
+          <.grid id="scout-targets-excluded-table">
+            <thead>
+              <tr>
+                <th>System</th>
+                
+                <th>Region</th>
+                
+                <th>Findings</th>
+                
+                <th>Why</th>
+                
+                <th>Last seen</th>
+              </tr>
+            </thead>
+            
+            <tbody>
+              <tr
+                :for={
+                  {t, why} <-
+                    Enum.map(
+                      @targets_result.excluded.radius,
+                      &{&1, "beyond #{@targets_radius} jumps"}
+                    ) ++
+                      Enum.map(@targets_result.excluded.unroutable, &{&1, "no gate route"})
+                }
+                id={"scout-target-out-#{t.solar_system_id}"}
+              >
+                <td>
+                  <div class="flex items-center gap-1.5 whitespace-nowrap">
+                    {t.name} <.space_badge space={t.space} />
+                  </div>
+                </td>
+                
+                <td class="text-xs text-gray-400">{t.region_name || "—"}</td>
+                
+                <td class="text-xs text-gray-300">
+                  {plural(t.structures, "structure", "structures")}
+                </td>
+                
+                <td class="text-xs text-gray-500">{why}</td>
+                
+                <td><.seen at={t.last_confirmed_at} now={@now} /></td>
+              </tr>
+            </tbody>
+          </.grid>
+        </.panel>
+      </.panel_stack>
     </.scout_pane>
   </div>
 <% else %>

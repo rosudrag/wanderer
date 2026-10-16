@@ -10,6 +10,16 @@
   >
   </div>
 
+  <%!-- CHEWY PATCH (panel layout): board order and collapsed set, own
+        key. See `WandererAppWeb.ScoutLayout`. --%>
+  <div
+    id="scout-layout-store"
+    phx-hook="LocalStorageSetting"
+    data-key="scout_layout"
+    class="hidden"
+  >
+  </div>
+
   <.scout_header active={@tab} planner?={WandererApp.Env.scout_planner_enabled?()} live?={true}>
     <:meta :if={@tab != :planner}>
       structures <span class="text-gray-300">{ago(@last_observed.structures, @now)}</span>
@@ -152,6 +162,11 @@
     >
       Only {@board} ✕
     </button>
+
+    <%!-- CHEWY PATCH (panel layout): the whole page's boards, in one
+          control. Per-board chevrons alone make "just show me Now" a
+          dozen clicks. --%>
+    <.layout_controls layout={@panel_layout} class="ml-auto" />
   </.scout_toolbar>
 
   <div :if={@tab == :structures} class="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-3 mb-5">
@@ -261,7 +276,7 @@
     <.stat label="Richest sighting" value={isk(richest(@spawns))} />
   </div>
 
-  <div :if={@tab == :structures}>
+  <.panel_stack :if={@tab == :structures} id="scout-stack-structures">
     <%!-- CHEWY PATCH: the asset-safety trigger board, above Now.
 
           Every other board on this page reports what a sweep SAW. This
@@ -279,6 +294,8 @@
           render in that table's columns. --%>
     <.panel
       :if={asset_safety_enabled?() and show_board?(@board, "asset_safety")}
+      key="asset_safety"
+      layout={@panel_layout}
       id="scout-asset-safety"
       title="Asset safety fired"
       count={length(@asset_safety_events)}
@@ -340,6 +357,8 @@
         asset_safety_enabled?() and show_board?(@board, "asset_safety") and
           @asset_safety_dismissed != []
       }
+      key="asset_safety_dismissed"
+      layout={@panel_layout}
       id="scout-asset-safety-dismissed"
       title="Dismissed asset safety"
       count={length(@asset_safety_dismissed)}
@@ -389,8 +408,12 @@
       </.grid>
     </.panel>
 
+    <%!-- CHEWY PATCH (panel layout): not a panel, but it belongs under
+          the asset-safety boards, so it carries their `order:` too --
+          an unstyled child of a flex stack sorts to the top. --%>
     <div
       :if={asset_safety_enabled?() and show_board?(@board, "asset_safety")}
+      style={ScoutLayout.style(@panel_layout, "asset_safety_dismissed")}
       class="-mt-3 mb-5 flex items-center gap-2"
     >
       <.watcher_note watchers={@asset_safety_watchers} />
@@ -408,6 +431,8 @@
           boards below, where every one of these rows also appears. --%>
     <.panel
       :if={show_board?(@board, "now")}
+      key="now"
+      layout={@panel_layout}
       id="scout-now"
       title="Now"
       count={length(@now_board)}
@@ -465,6 +490,8 @@
 
     <.panel
       :if={show_board?(@board, "unanchored")}
+      key="unanchored"
+      layout={@panel_layout}
       title="Unanchored"
       count={length(@unanchored_structures)}
       tone={:urgent}
@@ -509,6 +536,8 @@
 
     <.panel
       :if={show_board?(@board, "timers")}
+      key="timers"
+      layout={@panel_layout}
       title="Live timers"
       count={length(@active_timers)}
       tone={if urgent_timers(@active_timers, @now) > 0, do: :urgent, else: :neutral}
@@ -553,6 +582,8 @@
 
     <.panel
       :if={show_board?(@board, "anchoring")}
+      key="anchoring"
+      layout={@panel_layout}
       title="Anchoring"
       count={length(@anchoring_structures)}
       tone={if @anchoring_structures != [], do: :warn, else: :neutral}
@@ -608,6 +639,8 @@
           and nobody notices. --%>
     <.panel
       :if={asset_safety_enabled?() and show_board?(@board, "unarmed")}
+      key="unarmed"
+      layout={@panel_layout}
       id="scout-unarmed"
       title="Needs seeding"
       count={length(@unarmed_structures)}
@@ -652,6 +685,7 @@
           is unknowable and every hull reads as needing an item. --%>
     <div
       :if={asset_safety_enabled?() and show_board?(@board, "unarmed")}
+      style={ScoutLayout.style(@panel_layout, "unarmed")}
       class="-mt-3 mb-5 flex items-center gap-2"
     >
       <.watcher_note watchers={@asset_safety_watchers} />
@@ -659,6 +693,8 @@
 
     <.panel
       :if={show_board?(@board, "unanchoring")}
+      key="unanchoring"
+      layout={@panel_layout}
       title="Unanchoring"
       count={length(@unanchoring_structures)}
       tone={if @unanchoring_structures != [], do: :warn, else: :neutral}
@@ -720,6 +756,8 @@
           alert above. --%>
     <.panel
       :if={show_board?(@board, "sorted")}
+      key="sorted"
+      layout={@panel_layout}
       id="scout-sorted"
       title="Someone else sorted it"
       count={length(@sorted_structures)}
@@ -766,6 +804,8 @@
 
     <.panel
       :if={show_board?(@board, "abandoned")}
+      key="abandoned"
+      layout={@panel_layout}
       title="Abandoned"
       count={length(@abandoned_structures)}
       tone={if @abandoned_structures != [], do: :good, else: :neutral}
@@ -815,6 +855,8 @@
           tell which was which. --%>
     <.panel
       :if={show_board?(@board, "no_fuel")}
+      key="no_fuel"
+      layout={@panel_layout}
       title="No fuel"
       count={length(@no_fuel_structures)}
       tone={if @no_fuel_structures != [], do: :good, else: :neutral}
@@ -862,6 +904,8 @@
           the window would be unrecoverable from this page. --%>
     <.panel
       :if={show_board?(@board, "archived") and @archived_structures != []}
+      key="archived"
+      layout={@panel_layout}
       title="Archived"
       count={length(@archived_structures)}
       hint="hidden from the boards until the feed reports a change; ignores the window"
@@ -906,6 +950,8 @@
 
     <.log_panel
       :if={show_board?(@board, "log")}
+      key="log"
+      layout={@panel_layout}
       id="scout-structure-log"
       title="Ingest log · structures"
       count={count_label(@structures, @more?)}
@@ -954,10 +1000,12 @@
         </tbody>
       </.grid>
     </.log_panel>
-  </div>
+  </.panel_stack>
 
-  <div :if={@tab == :spawns}>
+  <.panel_stack :if={@tab == :spawns} id="scout-stack-spawns">
     <.panel
+      key="fresh_spawns"
+      layout={@panel_layout}
       title={"Seen in the last #{fresh_window_label()}"}
       count={length(@fresh_spawns)}
       tone={if @fresh_spawns != [], do: :good, else: :neutral}
@@ -1007,6 +1055,8 @@
     </.panel>
 
     <.log_panel
+      key="spawn_log"
+      layout={@panel_layout}
       id="scout-spawn-log"
       title="Ingest log · spawns"
       count={count_label(@spawns, @more?)}
@@ -1066,7 +1116,7 @@
         </tbody>
       </.grid>
     </.log_panel>
-  </div>
+  </.panel_stack>
 
   <%!-- It pages the ingest log and nothing else, so it follows it. --%>
   <div

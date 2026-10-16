@@ -73,6 +73,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
   alias WandererApp.Scout.Stats
   alias WandererApp.Scout.Unanchor
   alias WandererAppWeb.ScoutDiscord
+  alias WandererAppWeb.ScoutLayout
   alias WandererAppWeb.ScoutWaypoint
 
   @windows [{"24 hours", 1}, {"7 days", 7}, {"30 days", 30}, {"90 days", 90}]
@@ -97,6 +98,20 @@ defmodule WandererAppWeb.ScoutIntelLive do
   # CHEWY PATCH: the structures tab's boards, in render order. The
   # summary strip is keyed on these, so a card can solo its own board.
   @boards ~w(asset_safety unarmed now unanchored timers anchoring unanchoring sorted abandoned no_fuel archived log)
+
+  # CHEWY PATCH (panel layout): every panel on this page, grouped by the
+  # DOM container it is a sibling in -- `WandererAppWeb.ScoutLayout`
+  # orders within a stack because the mechanism is CSS `order:` on a
+  # flex column, and nothing can move a panel out of its own container.
+  # The structures list is the template's own order; a reader's stored
+  # order is merged onto it, so a board added here later still lands
+  # where this list puts it.
+  @layout_store "scout_layout"
+  @panel_stacks %{
+    "structures" =>
+      ~w(asset_safety asset_safety_dismissed now unanchored timers anchoring unarmed unanchoring sorted abandoned no_fuel archived log),
+    "spawns" => ~w(fresh_spawns spawn_log)
+  }
 
   # CHEWY PATCH: how far ahead "Now" looks. A timer further out than
   # this is something to plan around, not something to undock for, and
@@ -186,7 +201,11 @@ defmodule WandererAppWeb.ScoutIntelLive do
          planner_mounted?: false,
          filters: default_filters(),
          can_manage_access?: ScoutAccess.superadmin?(socket.assigns.current_user.id)
-       )}
+       )
+       # CHEWY PATCH (panel layout): which board sits where, and which
+       # ones are rolled up. Defaults here; the browser's stored copy
+       # arrives on connect through `ls_restore_scout_layout`.
+       |> ScoutLayout.assign_layout(@layout_store, @panel_stacks)}
     else
       {:ok, socket |> push_navigate(to: ~p"/maps")}
     end
@@ -340,6 +359,24 @@ defmodule WandererAppWeb.ScoutIntelLive do
       {:ok, socket, false} -> {:noreply, socket}
       :unchanged -> {:noreply, socket}
     end
+  end
+
+  # CHEWY PATCH (panel layout): the board order and the collapsed set,
+  # under their own localStorage key. Separate from `scout_filters`
+  # because they answer a different question -- a filter narrows what is
+  # on the page, this decides what the page LOOKS like -- and because a
+  # reader who clears one has no reason to lose the other. No read runs:
+  # every board is already on the socket.
+  def handle_event("ls_restore_#{@layout_store}", %{"value" => value}, socket) do
+    {:noreply, ScoutLayout.handle_restore(socket, value)}
+  end
+
+  # One clause for every control `panel/1` renders -- collapse, move,
+  # drop, and the toolbar's collapse/expand/reset. The events belong to
+  # the component, so a page that enumerated them would raise the day
+  # the component grew one.
+  def handle_event("layout_" <> _ = event, params, socket) do
+    {:noreply, ScoutLayout.handle(socket, event, params)}
   end
 
   def handle_event("load_more", _params, socket) do

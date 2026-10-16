@@ -91,6 +91,22 @@ distinct — `scout_nav.ex` shipped `hero-viewfinder-circle-solid`, which is alr
 glyph. Add to that module rather than styling a new table inline. See `docs/chewy/scout-intel.md`
 §"How it is rendered".
 
+**Every panel on a `/scout` page collapses and moves, and the server owns where it sits.**
+`panel/1` and `log_panel/1` take `key` + `layout`; `WandererAppWeb.ScoutLayout` holds the order and
+the collapsed set per page and persists them to localStorage under their own key (`scout_layout`,
+`scout_planner_layout`, `scout_access_layout`) — beside the filter blob, never inside it, and
+deliberately not in a planner preset, which names a QUERY and not a page shape. Four rules a new
+board inherits: it must be listed in that page's `@panel_stacks` under the DOM container it is a
+sibling of, because the mechanism is CSS `order:` on a flex column and no number moves a node
+between containers (so a cross-stack drag is refused rather than pretended, and a stack of one
+renders no arrows); anything in a stack that is NOT a panel — the asset-safety/seeding watcher
+notes, the sweep's `Set full route` row — must carry its panel's `ScoutLayout.style/2`, or it sorts
+to the top of the stack; the drag hook (`assets/js/hooks/scoutPanelStack.ts`) reports a drop and
+never moves a node, since LiveView re-sorts a container to match the server on the next patch and
+these pages tick every 30s; and a stored order is a preference, not a schema — a key this build
+dropped is discarded and a key it ADDED is re-inserted at its default position, never appended
+under a 250-row log. See `docs/chewy/scout-intel.md` §"The boards collapse, and they move".
+
 **The unanchored alert is the one thing on `/scout` allowed to shout.** `status == "Unanchored"`
 (floating undeployed — no fitting, no services, no timer) is its own status family, its own
 `:unanchored` read action, and four surfaces: a cached red count badge on the sidebar icon visible
