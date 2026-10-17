@@ -90,6 +90,8 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   alias WandererApp.Scout.{Split, Sweep}
   alias WandererApp.Scout.Targets
   alias WandererAppWeb.ScoutLayout
+  alias WandererAppWeb.ScoutPlannerColumns, as: Columns
+  alias WandererAppWeb.ScoutTable
   alias WandererAppWeb.ScoutWaypoint
 
   @kinds ~w(visit anoms sigs grid)
@@ -312,7 +314,34 @@ defmodule WandererAppWeb.ScoutPlannerLive do
            pilot_start?: false,
            pilot_start_status: nil,
            pilot_start_loading?: false,
-           pilot_start_token: 0
+           pilot_start_token: 0,
+           # CHEWY PATCH (scout column sort/filter): `ScoutPlannerColumns`
+           # is the column spec for every table on this page, built once
+           # here (closures cannot live in a module attribute);
+           # `table_state` is the sort/filter the reader set, NOT
+           # persisted (see `planner_state/1` below -- a preset names a
+           # query, not a table shape); `table_raw` is this page's own
+           # "rows before the view" per table, written wherever those
+           # rows are produced (`apply_rank/2`, `apply_sweep/2`, …) and
+           # turned into the filtered/sorted display lists below by
+           # `apply_tables/1`, which runs at the end of every one of
+           # those paths and on every sort/filter/clear event -- never a
+           # second read.
+           table_cols: Columns.all(),
+           table_state: ScoutTable.new(),
+           table_meta: %{},
+           table_raw: %{},
+           # Sweep/targets keep their OWN display copy rather than
+           # filtering `sweep_result.stops` / `targets_result.route.stops`
+           # in place: `load_split/1` reads the sweep's `.stops` to build
+           # the k-way split, and a stale filter from a previous table
+           # interaction corrupting that input would be a silent routing
+           # bug, not a view concern. The two stay the full, canonical
+           # answer; `@sweep_stops` / `@targets_stops` are what the table
+           # renders.
+           sweep_stops: [],
+           targets_stops: [],
+           targets_excluded_rows: []
          )
          # CHEWY PATCH (panel layout): this page's panels are collapsible
          # and reorderable like the log's, under their own key -- the
@@ -325,6 +354,19 @@ defmodule WandererAppWeb.ScoutPlannerLive do
 
   defp character_eve_id(nil), do: nil
   defp character_eve_id(%{eve_id: eve_id}), do: eve_id
+
+  # CHEWY PATCH (scout column sort/filter): the attrs `<.table_head>`
+  # takes, for one table, read straight off this LiveView's own
+  # assigns -- called from the colocated `.heex`, which compiles into
+  # this module, so the private function is reachable from there.
+  defp head_attrs(assigns, table) do
+    %{
+      table: table,
+      cols: assigns.table_cols[table],
+      state: assigns.table_state,
+      meta: Map.get(assigns.table_meta, table, %{options: %{}, types: %{}, total: 0, shown: 0})
+    }
+  end
 
   # -------------------------------------------------------------------
   # Origin search -- `MapSolarSystem.find_by_name/1`, the same
@@ -1264,6 +1306,47 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     {:noreply, ScoutLayout.handle(socket, event, params)}
   end
 
+  # -------------------------------------------------------------------
+  # CHEWY PATCH (scout column sort/filter): the three events every
+  # `<.table_head>` on this page emits, shared by all five tables.
+  # `table` must name one of `@table_cols`'s own keys and (for a filter)
+  # `col` must name one of THAT table's own columns -- an unvalidated
+  # pair would let a forged or stale event write `ScoutTable` state for
+  # a table or column that no longer exists. No re-read, no DB query:
+  # `apply_tables/1` re-derives every display list from `table_raw`,
+  # which the last read already left in the socket.
+  # -------------------------------------------------------------------
+
+  def handle_event("sort_table", %{"table" => table, "col" => col}, socket) do
+    if valid_column?(socket, table, col) do
+      {:noreply,
+       socket
+       |> update_table_state(&ScoutTable.toggle_sort(&1, table, col))
+       |> apply_tables()}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("filter_table", %{"table" => table, "col" => col, "value" => value}, socket) do
+    if valid_column?(socket, table, col) do
+      {:noreply,
+       socket
+       |> update_table_state(&ScoutTable.put_filter(&1, table, col, value))
+       |> apply_tables()}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("clear_table", %{"table" => table}, socket) do
+    if valid_table?(socket, table) do
+      {:noreply, socket |> update_table_state(&ScoutTable.clear(&1, table)) |> apply_tables()}
+    else
+      {:noreply, socket}
+    end
+  end
+
   # Every mode, because a restore (or a preset) can change all three at
   # once. A restored "follow my pilot" has to actually follow it: the
   # stored start is where that character was LAST time, which is the
@@ -1882,21 +1965,109 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     end
   end
 
+  # -------------------------------------------------------------------
+  # CHEWY PATCH (scout column sort/filter): the one place every table's
+  # raw rows become what the five `<.grid>`s render. Runs at the END of
+  # every path that changes `table_raw` (a read landing, or failing) and
+  # from the three `sort_table`/`filter_table`/`clear_table` events --
+  # never inside a task, and never a second query: `ScoutTable.apply/5`
+  # works entirely over rows the socket already holds.
+  # -------------------------------------------------------------------
+
+  @table_assign %{
+    "rank" => :stops,
+    "sweep" => :sweep_stops,
+    "heat" => :region_heat,
+    "targets" => :targets_stops,
+    "targets_excluded" => :targets_excluded_rows
+  }
+
+  defp apply_tables(socket) do
+    {meta, display} =
+      Enum.reduce(socket.assigns.table_cols, {%{}, %{}}, fn {table, cols}, {meta_acc, disp_acc} ->
+        raw = Map.get(socket.assigns.table_raw, table, [])
+        ctx = table_ctx(socket, table)
+
+        {rows, row_meta} = ScoutTable.apply(raw, table, cols, socket.assigns.table_state, ctx)
+
+        display_key = Map.fetch!(@table_assign, table)
+        {Map.put(meta_acc, table, row_meta), Map.put(disp_acc, display_key, rows)}
+      end)
+
+    socket |> assign(display) |> assign(table_meta: meta)
+  end
+
+  # `rank`/`sweep` share the coverage ladder's own `kind:` (the entry it
+  # bolds); `targets` carries the finding each stop is ABOUT, keyed by
+  # system id -- that data lives beside the stop, not on it.
+  defp table_ctx(socket, "rank"), do: %{now: socket.assigns.now, kind: socket.assigns.kind}
+  defp table_ctx(socket, "sweep"), do: %{now: socket.assigns.now, kind: socket.assigns.sweep_kind}
+
+  defp table_ctx(socket, "targets"),
+    do: %{now: socket.assigns.now, targets: targets_lookup(socket.assigns.targets_result)}
+
+  defp table_ctx(socket, _table), do: %{now: socket.assigns.now}
+
+  defp targets_lookup(%{targets: targets}), do: targets
+  defp targets_lookup(_result), do: %{}
+
+  defp put_table_raw(socket, table, rows),
+    do: assign(socket, table_raw: Map.put(socket.assigns.table_raw, table, rows))
+
+  defp update_table_state(socket, fun),
+    do: assign(socket, table_state: fun.(socket.assigns.table_state))
+
+  defp valid_table?(socket, table), do: Map.has_key?(socket.assigns.table_cols, table)
+
+  defp valid_column?(socket, table, col) do
+    case Map.get(socket.assigns.table_cols, table) do
+      nil -> false
+      cols -> Enum.any?(cols, &(&1.key == col))
+    end
+  end
+
+  # The "Left out" table's rows: a finding the route could not take,
+  # paired with WHY, built here (where `targets_radius` -- the current
+  # one, since `load_targets/1` always re-reads on a radius change -- is
+  # still in scope) rather than in the template, which must only read a
+  # row, never assemble one.
+  defp targets_excluded_rows(%{excluded: excluded}, radius) do
+    Enum.map(excluded.radius, &{&1, "beyond #{radius} jumps"}) ++
+      Enum.map(excluded.unroutable, &{&1, "no gate route"})
+  end
+
   defp apply_targets(socket, {:ok, {:ok, result}}) do
-    assign(socket,
+    socket
+    |> assign(
       targets_loading?: false,
       now: DateTime.utc_now(),
       targets_result: result,
       targets_error: nil
     )
+    |> put_table_raw("targets", result.route.stops)
+    |> put_table_raw(
+      "targets_excluded",
+      targets_excluded_rows(result, socket.assigns.targets_radius)
+    )
+    |> apply_tables()
   end
 
-  defp apply_targets(socket, {:ok, {:error, reason}}),
-    do: assign(socket, targets_loading?: false, targets_result: nil, targets_error: reason)
+  defp apply_targets(socket, {:ok, {:error, reason}}) do
+    socket
+    |> assign(targets_loading?: false, targets_result: nil, targets_error: reason)
+    |> put_table_raw("targets", [])
+    |> put_table_raw("targets_excluded", [])
+    |> apply_tables()
+  end
 
   defp apply_targets(socket, {:exit, reason}) do
     Logger.error("[scout planner] targets task exited: #{inspect(reason)}")
-    assign(socket, targets_loading?: false, targets_result: nil, targets_error: :targets_crashed)
+
+    socket
+    |> assign(targets_loading?: false, targets_result: nil, targets_error: :targets_crashed)
+    |> put_table_raw("targets", [])
+    |> put_table_raw("targets_excluded", [])
+    |> apply_tables()
   end
 
   # -------------------------------------------------------------------
@@ -2100,17 +2271,19 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   end
 
   defp apply_rank(socket, {:ok, {:ok, %{rank: rank, plan: plan}}}) do
-    assign(socket,
+    socket
+    |> assign(
       rank_loading?: false,
       now: DateTime.utc_now(),
       result: rank,
-      stops: rank.stops,
       candidates: rank.candidates,
       generated_at: rank.generated_at,
       plan_stops: plan.stops,
       route_ids: route_ids(plan.stops),
       plan_error: nil
     )
+    |> put_table_raw("rank", rank.stops)
+    |> apply_tables()
   end
 
   defp apply_rank(socket, {:ok, {:error, reason}}), do: rank_failed(socket, reason)
@@ -2121,16 +2294,18 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   end
 
   defp rank_failed(socket, reason) do
-    assign(socket,
+    socket
+    |> assign(
       rank_loading?: false,
       result: nil,
-      stops: [],
       candidates: 0,
       generated_at: nil,
       plan_stops: [],
       route_ids: "",
       plan_error: reason
     )
+    |> put_table_raw("rank", [])
+    |> apply_tables()
   end
 
   # -------------------------------------------------------------------
@@ -2212,6 +2387,8 @@ defmodule WandererAppWeb.ScoutPlannerLive do
       sweep_result: result,
       sweep_error: nil
     )
+    |> put_table_raw("sweep", result.stops)
+    |> apply_tables()
     |> load_split()
   end
 
@@ -2223,13 +2400,16 @@ defmodule WandererAppWeb.ScoutPlannerLive do
   end
 
   defp sweep_failed(socket, reason) do
-    assign(socket,
+    socket
+    |> assign(
       sweep_loading?: false,
       split_loading?: false,
       sweep_result: nil,
       sweep_error: reason,
       sweep_parts: []
     )
+    |> put_table_raw("sweep", [])
+    |> apply_tables()
   end
 
   # k=1 is just the sweep above with nowhere to split; `Split.split/3`
@@ -2338,12 +2518,16 @@ defmodule WandererAppWeb.ScoutPlannerLive do
     end
   end
 
-  defp apply_heat(socket, {:ok, rows}) when is_list(rows),
-    do: assign(socket, heat_loading?: false, region_heat: sort_region_heat(rows))
+  defp apply_heat(socket, {:ok, rows}) when is_list(rows) do
+    socket
+    |> assign(heat_loading?: false)
+    |> put_table_raw("heat", sort_region_heat(rows))
+    |> apply_tables()
+  end
 
   defp apply_heat(socket, {:exit, reason}) do
     Logger.error("[scout planner] region heat task exited: #{inspect(reason)}")
-    assign(socket, heat_loading?: false, region_heat: [])
+    socket |> assign(heat_loading?: false) |> put_table_raw("heat", []) |> apply_tables()
   end
 
   defp apply_heat(socket, _other), do: assign(socket, heat_loading?: false)

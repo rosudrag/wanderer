@@ -91,6 +91,24 @@ distinct — `scout_nav.ex` shipped `hero-viewfinder-circle-solid`, which is alr
 glyph. Add to that module rather than styling a new table inline. See `docs/chewy/scout-intel.md`
 §"How it is rendered".
 
+**No `/scout` table writes its own `<thead>`, because the header IS the sort/filter.** Every
+column on both scout pages sorts and filters, and the mechanism is three parts:
+`WandererAppWeb.ScoutTable` (`col/3` + `apply/5`, pure, in the BEAM, over rows the socket already
+holds — never a query), one spec list per table in `live/scout/scout_{intel,planner}_columns.ex`,
+and `ScoutComponents.table_head/1`, which renders the whole header from that list. A column's
+`value` fun is the ONE comparable both halves read and MUST return what the cell SHOWS, through
+the same public helper the cell calls, or "filter by what I can read" stops being true. Filter
+syntax follows the value's TYPE with no configuration (substring / `>10` / `<2h`, where a
+reinforcement timer is in the future and therefore has a negative age); a `<select>` appears only
+where the spec DECLARES `select?: true`, because inferring it from cardinality makes a control
+change shape as the data moves. Sort cycles asc → desc → the page's own order, nils last in both
+directions. State is per table and is NOT persisted — not in the sticky filter blob, not in a
+preset. The one trap: the spec list and the template's `<td>` list are different files and nothing
+relates them, so a spec one column short silently offsets every value a reader sorts on —
+`test/integration/scout_table_live_test.exs` walks the rendered DOM of every table and asserts
+header cells against body cells. Add a column to BOTH, or add neither. See
+`docs/chewy/scout-intel.md` §"Every column sorts, and every column filters".
+
 **Every panel on a `/scout` page collapses and moves, and the server owns where it sits.**
 `panel/1` and `log_panel/1` take `key` + `layout`; `WandererAppWeb.ScoutLayout` holds the order and
 the collapsed set per page and persists them to localStorage under their own key (`scout_layout`,

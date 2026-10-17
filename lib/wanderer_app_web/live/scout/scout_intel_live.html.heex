@@ -307,24 +307,7 @@
       empty_text="nothing has finished unanchoring on us"
     >
       <.grid id="scout-asset-safety-table">
-        <thead>
-          <tr>
-            <th class="w-32">Fired</th>
-            
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th>Where</th>
-            
-            <th class="w-40">Reported by</th>
-            
-            <th class="w-10"></th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "asset_safety")} />
         <tbody>
           <tr :for={row <- @asset_safety_events} id={"scout-asset-safety-#{row.id}"}>
             <td><.seen at={row.notified_at} now={@now} tone={true} /></td>
@@ -390,22 +373,7 @@
       hint="hidden from the alert and the board; ignores the window selector"
     >
       <.grid id="scout-asset-safety-dismissed-table">
-        <thead>
-          <tr>
-            <th class="w-32">Fired</th>
-            
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th class="w-40">Reported by</th>
-            
-            <th class="w-10"></th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "asset_safety_dismissed")} />
         <tbody>
           <tr
             :for={row <- @asset_safety_dismissed}
@@ -463,24 +431,7 @@
       empty_text={"nothing to undock for in the #{now_horizon_label()}"}
     >
       <.grid id="scout-now-table">
-        <thead>
-          <tr>
-            <th class="w-28">When</th>
-            
-            <th class="w-28">What</th>
-            
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th>Status</th>
-            
-            <th class="w-32">Seen</th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "now")} />
         <tbody>
           <tr :for={entry <- @now_board} id={"scout-now-#{entry.kind}-#{entry.row.id}"}>
             <td>
@@ -535,24 +486,7 @@
       empty_text="nothing is sitting unanchored"
     >
       <.grid id="scout-unanchored">
-        <thead>
-          <tr>
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th>Status</th>
-            
-            <th>Where</th>
-            
-            <th class="w-32">Seen</th>
-            
-            <th class="w-10"></th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "unanchored")} />
         <tbody>
           <tr :for={row <- @unanchored_structures} id={"scout-unanchored-#{row.id}"}>
             <td>
@@ -593,24 +527,7 @@
       empty_text="no structure timer is running"
     >
       <.grid id="scout-active-timers">
-        <thead>
-          <tr>
-            <th class="w-28">Comes out</th>
-            
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th>Status</th>
-            
-            <th class="w-32">Seen</th>
-            
-            <th class="w-10"></th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "timers")} />
         <tbody>
           <tr :for={row <- @active_timers} id={"scout-timer-#{row.id}"}>
             <td><.countdown_cell expires_at={row.timer_expires_at} now={@now} /></td>
@@ -652,26 +569,7 @@
       empty_text="nothing anchoring right now"
     >
       <.grid id="scout-anchoring">
-        <thead>
-          <tr>
-            <th class="w-28">Anchors in</th>
-            
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th>Status</th>
-            
-            <th>Where</th>
-            
-            <th class="w-32">Seen</th>
-            
-            <th class="w-10"></th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "anchoring")} />
         <tbody>
           <tr :for={row <- @anchoring_structures} id={"scout-anchoring-#{row.id}"}>
             <td><.countdown_cell expires_at={row.timer_expires_at} now={@now} /></td>
@@ -725,22 +623,7 @@
       empty_text="every unanchoring structure we can see is armed"
     >
       <.grid id="scout-unarmed-table">
-        <thead>
-          <tr>
-            <th class="w-36">Predicted max out</th>
-            
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th>Where</th>
-            
-            <th class="w-32">Seen</th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "unarmed")} />
         <tbody>
           <tr :for={row <- @unarmed_structures} id={"scout-unarmed-#{row.id}"}>
             <td><.predicted_out_cell row={row} now={@now} /></td>
@@ -786,28 +669,7 @@
       empty_text="nothing unanchoring right now"
     >
       <.grid id="scout-unanchoring">
-        <thead>
-          <tr>
-            <th class="w-36">Predicted max out</th>
-            
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th>Status</th>
-            
-            <th :if={asset_safety_enabled?()} class="w-24">Trigger</th>
-            
-            <th>Where</th>
-            
-            <th class="w-32">Seen</th>
-            
-            <th class="w-10"></th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "unanchoring")} />
         <tbody>
           <tr :for={row <- @unanchoring_structures} id={"scout-unanchoring-#{row.id}"}>
             <td><.predicted_out_cell row={row} now={@now} /></td>
@@ -867,26 +729,7 @@
       empty_text="no unanchoring run has ended in this window"
     >
       <.grid id="scout-sorted-table">
-        <thead>
-          <tr>
-            <th class="w-36">Ended</th>
-            
-            <th class="w-44">How</th>
-            
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th>Where</th>
-            
-            <th class="w-32">Last seen</th>
-            
-            <th class="w-10"></th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "sorted")} />
         <tbody>
           <tr :for={row <- @sorted_structures} id={"scout-sorted-#{row.id}"}>
             <td><.ended_cell row={row} now={@now} /></td>
@@ -929,24 +772,7 @@
       empty_text="nothing abandoned in this window"
     >
       <.grid id="scout-abandoned">
-        <thead>
-          <tr>
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th>Status</th>
-            
-            <th>Where</th>
-            
-            <th class="w-32">Seen</th>
-            
-            <th class="w-10"></th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "abandoned")} />
         <tbody>
           <tr :for={row <- @abandoned_structures} id={"scout-abandoned-#{row.id}"}>
             <td>
@@ -993,24 +819,7 @@
       empty_text="nothing unfuelled in this window"
     >
       <.grid id="scout-no-fuel">
-        <thead>
-          <tr>
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th>Status</th>
-            
-            <th>Where</th>
-            
-            <th class="w-32">Seen</th>
-            
-            <th class="w-10"></th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "no_fuel")} />
         <tbody>
           <tr :for={row <- @no_fuel_structures} id={"scout-no-fuel-#{row.id}"}>
             <td>
@@ -1051,24 +860,7 @@
       hint="hidden from the boards until the feed reports a change; ignores the window"
     >
       <.grid id="scout-archived">
-        <thead>
-          <tr>
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th>Status</th>
-            
-            <th class="w-32">Archived</th>
-            
-            <th class="w-32">Seen</th>
-            
-            <th class="w-10"></th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "archived")} />
         <tbody>
           <tr
             :for={row <- @archived_structures}
@@ -1111,24 +903,7 @@
       hint="every structure reported in this window, latest report per structure"
     >
       <.grid id="scout-structures">
-        <thead>
-          <tr>
-            <th>Structure</th>
-            
-            <th>System</th>
-            
-            <th>Owner</th>
-            
-            <th>Status</th>
-            
-            <th class="w-28">Comes out</th>
-            
-            <th class="w-32">Seen</th>
-            
-            <th class="w-10"></th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "structures")} />
         <tbody>
           <tr :for={row <- @structures} id={"scout-structure-#{row.id}"}>
             <td>
@@ -1181,22 +956,7 @@
       copy="spawns"
     >
       <.grid id="scout-fresh-spawns">
-        <thead>
-          <tr>
-            <th class="w-32">Seen</th>
-            
-            <th>Spawn</th>
-            
-            <th>System</th>
-            
-            <th>Location</th>
-            
-            <th class="w-16 text-right">Local</th>
-            
-            <th class="w-24 text-right">Value</th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "fresh_spawns")} />
         <tbody>
           <tr :for={row <- @fresh_spawns} id={"scout-fresh-spawn-#{row.id}"}>
             <td><.seen at={row.observed_at} now={@now} tone /></td>
@@ -1243,26 +1003,7 @@
       hint="every sighting reported in this window"
     >
       <.grid id="scout-spawns">
-        <thead>
-          <tr>
-            <th class="w-32">Seen</th>
-            
-            <th>Spawn</th>
-            
-            <th>System</th>
-            
-            <th>Location</th>
-            
-            <th class="w-16 text-right">Local</th>
-            
-            <th class="w-16 text-right" title="Minutes since downtime">DT+</th>
-            
-            <th>Outcome</th>
-            
-            <th class="w-24 text-right">Value</th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "spawns")} />
         <tbody>
           <tr :for={row <- @spawns} id={"scout-spawn-#{row.id}"}>
             <td><.seen at={row.observed_at} now={@now} /></td>
@@ -1351,20 +1092,7 @@
       
       <div class="overflow-x-auto">
         <.grid id="scout-structure-history">
-          <thead>
-            <tr>
-              <th class="w-32">When</th>
-              
-              <th class="w-24">Event</th>
-              
-              <th>System</th>
-              
-              <th>Status</th>
-              
-              <th>What moved</th>
-            </tr>
-          </thead>
-          
+          <.table_head {head_attrs(assigns, "structure_history")} />
           <tbody>
             <tr :for={row <- @detail.rows} id={"scout-history-#{row.id}"}>
               <td><.seen at={row.observed_at} now={@now} /></td>
@@ -1430,24 +1158,7 @@
       
       <div class="overflow-x-auto">
         <.grid id="scout-spawn-history">
-          <thead>
-            <tr>
-              <th class="w-32">Seen</th>
-              
-              <th>System</th>
-              
-              <th>Location</th>
-              
-              <th class="w-16 text-right">Local</th>
-              
-              <th class="w-16 text-right" title="Minutes since downtime">DT+</th>
-              
-              <th>Outcome</th>
-              
-              <th class="w-24 text-right">Value</th>
-            </tr>
-          </thead>
-          
+          <.table_head {head_attrs(assigns, "spawn_history")} />
           <tbody>
             <tr :for={row <- @spawn_detail.rows} id={"scout-spawn-history-#{row.id}"}>
               <td><.seen at={row.observed_at} now={@now} /></td>

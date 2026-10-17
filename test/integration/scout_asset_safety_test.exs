@@ -55,14 +55,22 @@ defmodule WandererApp.ScoutAssetSafetyTest do
     """
   end
 
+  # The default timestamp is RELATIVE, not the wire sample's own
+  # `2026-10-09T18:22:00Z`: `recent/1` has a 7-day horizon, so a fixed
+  # date silently falls out of it a week after it is written and four
+  # tests here start failing on a calendar, not on a change. A case that
+  # cares about an exact instant passes `timestamp:` itself.
   defp notification(id, opts \\ []) do
+    default_at =
+      DateTime.utc_now() |> DateTime.add(-3_600, :second) |> DateTime.truncate(:second)
+
     %{
       "notification_id" => id,
       "type" => Keyword.get(opts, :type, "StructureItemsMovedToSafety"),
       "sender_id" => 1_000_132,
       "sender_type" => "corporation",
       "is_read" => false,
-      "timestamp" => Keyword.get(opts, :timestamp, "2026-10-09T18:22:00Z"),
+      "timestamp" => Keyword.get(opts, :timestamp, DateTime.to_iso8601(default_at)),
       "text" =>
         Keyword.get(opts, :text, text(Keyword.get(opts, :structure_id, @structure_id), @system))
     }
@@ -74,7 +82,9 @@ defmodule WandererApp.ScoutAssetSafetyTest do
 
   describe "parse/1" do
     test "reads the structure, the system and both asset-safety deadlines" do
-      assert {:ok, attrs} = AssetSafety.parse(notification(1))
+      # This case is ABOUT the wire instant, so it pins one rather than
+      # taking the fixture's relative default.
+      assert {:ok, attrs} = AssetSafety.parse(notification(1, timestamp: "2026-10-09T18:22:00Z"))
 
       assert attrs.notification_id == 1
       assert attrs.type == "StructureItemsMovedToSafety"
@@ -190,16 +200,17 @@ defmodule WandererApp.ScoutAssetSafetyTest do
     end
 
     test "lists one row per structure, newest first" do
-      assert 1 == AssetSafety.store([notification(40)], character())
+      now = DateTime.utc_now()
+      older = now |> DateTime.add(-2, :day) |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+      newer = now |> DateTime.add(-1, :day) |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+      # Both instants are relative: the order is the point, and the
+      # 7-day horizon of `recent/1` is what a fixed date falls out of.
+      assert 1 == AssetSafety.store([notification(40, timestamp: older)], character())
 
       assert 1 ==
                AssetSafety.store(
-                 [
-                   notification(41,
-                     structure_id: @other_structure_id,
-                     timestamp: "2026-10-10T09:00:00Z"
-                   )
-                 ],
+                 [notification(41, structure_id: @other_structure_id, timestamp: newer)],
                  character()
                )
 

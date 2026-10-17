@@ -90,7 +90,7 @@
       <button phx-click="refresh" id="scout-planner-refresh" class="btn btn-sm btn-ghost">
         Refresh
       </button>
-      <.layout_controls layout={@panel_layout} />
+       <.layout_controls layout={@panel_layout} />
     </div>
     
     <%!-- CHEWY PATCH (planner presets): saved control sets. Last row of
@@ -341,32 +341,7 @@
         }
       >
         <.grid id="scout-planner-table">
-          <thead>
-            <tr>
-              <th>System</th>
-              
-              <th>Region</th>
-              
-              <th>Class / Sec</th>
-              
-              <th>Coverage</th>
-              
-              <th>Verdict</th>
-              
-              <th>Score</th>
-              
-              <th>Reason</th>
-              
-              <th class="text-right">Jumps</th>
-              
-              <th>Leg</th>
-              
-              <th>Why</th>
-              
-              <th class="w-24"></th>
-            </tr>
-          </thead>
-          
+          <.table_head {head_attrs(assigns, "rank")} />
           <tbody>
             <tr :for={stop <- @stops} id={"scout-planner-#{stop.solar_system_id}"}>
               <td>
@@ -958,32 +933,13 @@
           layout={@panel_layout}
           id="scout-sweep-table-panel"
           title="Sweep route"
-          count={length(@sweep_result.stops)}
+          count={length(@sweep_stops)}
           hint={to_string(@sweep_kind) <> " coverage"}
         >
           <.grid id="scout-sweep-table">
-            <thead>
-              <tr>
-                <th class="text-right">#</th>
-                
-                <th>System</th>
-                
-                <th>Region</th>
-                
-                <th>Class / Sec</th>
-                
-                <th>Coverage</th>
-                
-                <th>Reason</th>
-                
-                <th class="text-right">Jumps</th>
-                
-                <th>WP</th>
-              </tr>
-            </thead>
-            
+            <.table_head {head_attrs(assigns, "sweep")} />
             <tbody>
-              <tr :for={stop <- @sweep_result.stops} id={"scout-sweep-#{stop.solar_system_id}"}>
+              <tr :for={stop <- @sweep_stops} id={"scout-sweep-#{stop.solar_system_id}"}>
                 <td class="text-right text-xs text-gray-500">{stop.order}</td>
                 
                 <td>
@@ -1007,7 +963,7 @@
                 <td><.waypoint_badge waypoint?={stop.waypoint?} /></td>
               </tr>
               
-              <.empty :if={@sweep_result.stops == []} cols={8}>
+              <.empty :if={@sweep_stops == []} cols={8}>
                 Nothing in this scope needs scouting right now.
               </.empty>
             </tbody>
@@ -1027,22 +983,7 @@
       class={@heat_loading? && "opacity-50"}
     >
       <.grid id="scout-region-heat-table">
-        <thead>
-          <tr>
-            <th>Region</th>
-            
-            <th class="text-right">Systems</th>
-            
-            <th>Coverage</th>
-            
-            <th class="text-right">Stale</th>
-            
-            <th class="text-right">Unseen</th>
-            
-            <th class="text-right">Median age</th>
-          </tr>
-        </thead>
-        
+        <.table_head {head_attrs(assigns, "heat")} />
         <tbody>
           <tr :for={row <- @region_heat || []} id={"scout-heat-#{row.region_id}"}>
             <td>
@@ -1387,37 +1328,13 @@
           layout={@panel_layout}
           id="scout-targets-table-panel"
           title="Target route"
-          count={length(@targets_result.route.stops)}
+          count={length(@targets_stops)}
           hint="soonest predicted deadline is an upper bound, never a timer"
         >
           <.grid id="scout-targets-table">
-            <thead>
-              <tr>
-                <th class="text-right">#</th>
-                
-                <th>System</th>
-                
-                <th>Region</th>
-                
-                <th>Findings</th>
-                
-                <th>Out by</th>
-                
-                <th>Last seen</th>
-                
-                <th class="text-right">Jumps</th>
-                
-                <th>WP</th>
-                
-                <th></th>
-              </tr>
-            </thead>
-            
+            <.table_head {head_attrs(assigns, "targets")} />
             <tbody>
-              <tr
-                :for={stop <- @targets_result.route.stops}
-                id={"scout-target-#{stop.solar_system_id}"}
-              >
+              <tr :for={stop <- @targets_stops} id={"scout-target-#{stop.solar_system_id}"}>
                 <td class="text-right text-xs text-gray-500">{stop.order}</td>
                 
                 <td>
@@ -1465,7 +1382,7 @@
                 </td>
               </tr>
               
-              <.empty :if={@targets_result.route.stops == []} cols={9}>
+              <.empty :if={@targets_stops == []} cols={9}>
                 Nothing to fly to.
               </.empty>
             </tbody>
@@ -1481,36 +1398,14 @@
           layout={@panel_layout}
           id="scout-targets-excluded-panel"
           title="Left out"
-          count={
-            length(@targets_result.excluded.radius) + length(@targets_result.excluded.unroutable)
-          }
+          count={length(@targets_excluded_rows)}
           hint="real findings this route does not visit"
         >
           <.grid id="scout-targets-excluded-table">
-            <thead>
-              <tr>
-                <th>System</th>
-                
-                <th>Region</th>
-                
-                <th>Findings</th>
-                
-                <th>Why</th>
-                
-                <th>Last seen</th>
-              </tr>
-            </thead>
-            
+            <.table_head {head_attrs(assigns, "targets_excluded")} />
             <tbody>
               <tr
-                :for={
-                  {t, why} <-
-                    Enum.map(
-                      @targets_result.excluded.radius,
-                      &{&1, "beyond #{@targets_radius} jumps"}
-                    ) ++
-                      Enum.map(@targets_result.excluded.unroutable, &{&1, "no gate route"})
-                }
+                :for={{t, why} <- @targets_excluded_rows}
                 id={"scout-target-out-#{t.solar_system_id}"}
               >
                 <td>

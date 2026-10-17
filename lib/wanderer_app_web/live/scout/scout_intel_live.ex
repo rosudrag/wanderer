@@ -73,7 +73,9 @@ defmodule WandererAppWeb.ScoutIntelLive do
   alias WandererApp.Scout.Stats
   alias WandererApp.Scout.Unanchor
   alias WandererAppWeb.ScoutDiscord
+  alias WandererAppWeb.ScoutIntelColumns
   alias WandererAppWeb.ScoutLayout
+  alias WandererAppWeb.ScoutTable
   alias WandererAppWeb.ScoutWaypoint
 
   @windows [{"24 hours", 1}, {"7 days", 7}, {"30 days", 30}, {"90 days", 90}]
@@ -200,6 +202,17 @@ defmodule WandererAppWeb.ScoutIntelLive do
          # rank/sweep that cost real seconds to compute.
          planner_mounted?: false,
          filters: default_filters(),
+         # CHEWY PATCH (scout column sort/filter): column specs built
+         # once per mount (closures can't live in a module attribute),
+         # the per-table sort/filter state, the per-table meta
+         # `apply_tables/1` reports, and the raw rows each table
+         # filters FROM -- the exact lists this module already
+         # produces, before `apply_tables/1` narrows them to the
+         # existing assign the template renders.
+         table_cols: ScoutIntelColumns.all(),
+         table_state: ScoutTable.new(),
+         table_meta: %{},
+         table_raw: %{},
          can_manage_access?: ScoutAccess.superadmin?(socket.assigns.current_user.id)
        )
        # CHEWY PATCH (panel layout): which board sits where, and which
@@ -340,6 +353,38 @@ defmodule WandererAppWeb.ScoutIntelLive do
     {:noreply, assign(socket, board: nil)}
   end
 
+  # CHEWY PATCH (scout column sort/filter): the three events
+  # `WandererAppWeb.ScoutComponents.table_head/1` emits. `table` and
+  # `col` are user input (`phx-value-*`), validated against the column
+  # specs this socket already holds -- never a re-read, the whole point
+  # of filtering/sorting rows the socket is already holding.
+  def handle_event("sort_table", %{"table" => table, "col" => col}, socket) do
+    if valid_table_col?(socket, table, col) do
+      state = ScoutTable.toggle_sort(socket.assigns.table_state, table, col)
+      {:noreply, socket |> assign(:table_state, state) |> apply_tables()}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("filter_table", %{"table" => table, "col" => col, "value" => value}, socket) do
+    if valid_table_col?(socket, table, col) do
+      state = ScoutTable.put_filter(socket.assigns.table_state, table, col, value)
+      {:noreply, socket |> assign(:table_state, state) |> apply_tables()}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("clear_table", %{"table" => table}, socket) do
+    if Map.has_key?(socket.assigns.table_cols, table) do
+      state = ScoutTable.clear(socket.assigns.table_state, table)
+      {:noreply, socket |> assign(:table_state, state) |> apply_tables()}
+    else
+      {:noreply, socket}
+    end
+  end
+
   # The browser hands back the filters this page was last left with --
   # `LocalStorageSetting` (assets/js/hooks/localStorageSetting.ts) pushes
   # this once on mount, with `nil` on a first visit. A scout who turned
@@ -399,7 +444,9 @@ defmodule WandererAppWeb.ScoutIntelLive do
       {:noreply,
        socket
        |> assign(detail: %{structure_id: structure_id, structure: structure, rows: rows})
-       |> assign_systems([rows])}
+       |> put_raw("structure_history", rows)
+       |> assign_systems([rows])
+       |> apply_tables()}
     else
       _ -> {:noreply, socket}
     end
@@ -427,7 +474,9 @@ defmodule WandererAppWeb.ScoutIntelLive do
            rows: rows
          }
        )
-       |> assign_systems([rows])}
+       |> put_raw("spawn_history", rows)
+       |> assign_systems([rows])
+       |> apply_tables()}
     else
       _ -> {:noreply, socket}
     end
@@ -619,14 +668,26 @@ defmodule WandererAppWeb.ScoutIntelLive do
     Process.send_after(self(), :tick, @tick)
     now = DateTime.utc_now()
 
+    # Filters the RAW lists, not `@active_timers`/`@fresh_spawns` --
+    # those are whatever a reader's own column filter last narrowed
+    # them to, and a timer that ran out must drop out of the lead and
+    # the board even while a reader has that board filtered down to
+    # something else entirely.
+    timers =
+      socket.assigns.table_raw |> Map.get("timers", []) |> Enum.filter(&running?(&1, now))
+
+    fresh_spawns =
+      socket.assigns.table_raw
+      |> Map.get("fresh_spawns", [])
+      |> Enum.filter(&fresh?(&1, now))
+
     {:noreply,
      socket
-     |> assign(
-       now: now,
-       active_timers: Enum.filter(socket.assigns.active_timers, &running?(&1, now)),
-       fresh_spawns: Enum.filter(socket.assigns.fresh_spawns, &fresh?(&1, now))
-     )
-     |> assign_now_board()}
+     |> assign(now: now)
+     |> put_raw("timers", timers)
+     |> put_raw("fresh_spawns", fresh_spawns)
+     |> assign_now_board()
+     |> apply_tables()}
   end
 
   def handle_info({:scout_intel_ingested, kind}, socket) do
@@ -826,6 +887,126 @@ defmodule WandererAppWeb.ScoutIntelLive do
   defp restore_space(_saved), do: Space.all()
 
   # -------------------------------------------------------------------
+  # CHEWY PATCH (scout column sort/filter)
+  #
+  # One raw list per table, named by the same key the board/template
+  # already uses (`@boards`, or the modal it lives in for the two
+  # drill-downs) -- written wherever that table's rows are produced,
+  # and read back out here, once per read and once per sort/filter/
+  # clear event, never on a tick that merely advances the clock.
+  # -------------------------------------------------------------------
+
+  # table key -> the assign the FILTERED rows land back on, which is
+  # also the assign the template already renders -- so wiring a new
+  # table into `ScoutIntelColumns` costs one line here, not a template
+  # change.
+  @table_assign %{
+    "asset_safety" => :asset_safety_events,
+    "asset_safety_dismissed" => :asset_safety_dismissed,
+    "now" => :now_board,
+    "unanchored" => :unanchored_structures,
+    "timers" => :active_timers,
+    "anchoring" => :anchoring_structures,
+    "unarmed" => :unarmed_structures,
+    "unanchoring" => :unanchoring_structures,
+    "sorted" => :sorted_structures,
+    "abandoned" => :abandoned_structures,
+    "no_fuel" => :no_fuel_structures,
+    "archived" => :archived_structures,
+    "structures" => :structures,
+    "fresh_spawns" => :fresh_spawns,
+    "spawns" => :spawns
+  }
+
+  defp put_raw(socket, table, rows),
+    do: assign(socket, :table_raw, Map.put(socket.assigns.table_raw, table, rows))
+
+  # Filters, sorts, and re-reports every table's meta. No query: every
+  # row it touches is already on the socket, under `table_raw`.
+  defp apply_tables(socket) do
+    ctx = %{
+      now: socket.assigns.now,
+      systems: socket.assigns.systems,
+      armed_by: socket.assigns.armed_by
+    }
+
+    @table_assign
+    |> Enum.reduce(socket, fn {table, assign_name}, socket ->
+      apply_one_table(socket, table, assign_name, ctx)
+    end)
+    |> apply_detail_table(ctx)
+    |> apply_spawn_detail_table(ctx)
+  end
+
+  defp apply_one_table(socket, table, assign_name, ctx) do
+    raw = Map.get(socket.assigns.table_raw, table, [])
+    cols = Map.fetch!(socket.assigns.table_cols, table)
+    {rows, meta} = ScoutTable.apply(raw, table, cols, socket.assigns.table_state, ctx)
+
+    socket
+    |> assign(assign_name, rows)
+    |> put_table_meta(table, meta)
+  end
+
+  # The structure drill-down's rows live inside `@detail`, not a
+  # top-level assign -- a nested update, same mechanism, skipped
+  # entirely while the modal is closed, so a reader sorting the
+  # background boards never pays for a table nobody can see.
+  defp apply_detail_table(%{assigns: %{detail: nil}} = socket, _ctx), do: socket
+
+  defp apply_detail_table(socket, ctx) do
+    raw = Map.get(socket.assigns.table_raw, "structure_history", [])
+    cols = Map.fetch!(socket.assigns.table_cols, "structure_history")
+
+    {rows, meta} =
+      ScoutTable.apply(raw, "structure_history", cols, socket.assigns.table_state, ctx)
+
+    socket
+    |> assign(:detail, Map.put(socket.assigns.detail, :rows, rows))
+    |> put_table_meta("structure_history", meta)
+  end
+
+  defp apply_spawn_detail_table(%{assigns: %{spawn_detail: nil}} = socket, _ctx), do: socket
+
+  defp apply_spawn_detail_table(socket, ctx) do
+    raw = Map.get(socket.assigns.table_raw, "spawn_history", [])
+    cols = Map.fetch!(socket.assigns.table_cols, "spawn_history")
+
+    {rows, meta} = ScoutTable.apply(raw, "spawn_history", cols, socket.assigns.table_state, ctx)
+
+    socket
+    |> assign(:spawn_detail, Map.put(socket.assigns.spawn_detail, :rows, rows))
+    |> put_table_meta("spawn_history", meta)
+  end
+
+  defp put_table_meta(socket, table, meta),
+    do: assign(socket, :table_meta, Map.put(socket.assigns.table_meta, table, meta))
+
+  # Validated the same way every other event here is: `table`/`col`
+  # arrive as `phx-value-*` strings, which is to say user input, and an
+  # unknown one must cost nothing rather than a `KeyError` crash.
+  defp valid_table_col?(socket, table, col) do
+    case Map.get(socket.assigns.table_cols, table) do
+      nil -> false
+      cols -> Enum.any?(cols, &(&1.key == col))
+    end
+  end
+
+  # Called from the colocated `.heex`, which compiles into this module,
+  # so the private helper is reachable from the template. Falls back to
+  # an empty meta rather than crash the header on a table that has not
+  # been through `apply_tables/1` yet -- there is none in practice,
+  # since `apply_tables/1` always runs before the first render.
+  defp head_attrs(assigns, table) do
+    %{
+      table: table,
+      cols: assigns.table_cols[table],
+      state: assigns.table_state,
+      meta: Map.get(assigns.table_meta, table, %{options: %{}, types: %{}, total: 0, shown: 0})
+    }
+  end
+
+  # -------------------------------------------------------------------
   # Reads
   # -------------------------------------------------------------------
 
@@ -848,12 +1029,29 @@ defmodule WandererAppWeb.ScoutIntelLive do
     |> load_tab(tab, since, now, filters, limit)
     |> assign_freshness()
     |> assign_now_board()
+    |> apply_tables()
   end
 
   # CHEWY PATCH: folded here rather than in the template, which cannot
   # bind an intermediate value: five `now_rows/1` calls per render was
   # the alternative, and it ticks every 30 seconds.
-  defp assign_now_board(socket), do: assign(socket, now_board: now_rows(socket.assigns))
+  #
+  # Reads straight off `table_raw` rather than `@active_timers`/etc --
+  # those assigns are whatever a reader's OWN per-column filter on the
+  # Timers/Unanchoring board last narrowed them to, and this lead must
+  # answer from the full domain list regardless: a reader filtering the
+  # Timers board down to one row must not be able to make this board
+  # disappear.
+  defp assign_now_board(socket) do
+    raw = %{
+      active_timers: Map.get(socket.assigns.table_raw, "timers", []),
+      unanchored_structures: Map.get(socket.assigns.table_raw, "unanchored", []),
+      unanchoring_structures: Map.get(socket.assigns.table_raw, "unanchoring", []),
+      now: socket.assigns.now
+    }
+
+    put_raw(socket, "now", now_rows(raw))
+  end
 
   # The alert, read on BOTH tabs: a structure sitting unanchored is the
   # highest-value thing this log ever reports, and a reader who happens
@@ -866,6 +1064,7 @@ defmodule WandererAppWeb.ScoutIntelLive do
 
     socket
     |> assign(unanchored_structures: rows)
+    |> put_raw("unanchored", rows)
     |> assign_systems([rows])
   end
 
@@ -889,17 +1088,21 @@ defmodule WandererAppWeb.ScoutIntelLive do
           space: filters.space
         )
 
+      dismissed =
+        AssetSafety.dismissed(
+          system_id: filters.system_id,
+          q: filters.q,
+          space: filters.space
+        )
+
       socket
       |> assign(
         asset_safety_events: rows,
-        asset_safety_dismissed:
-          AssetSafety.dismissed(
-            system_id: filters.system_id,
-            q: filters.q,
-            space: filters.space
-          ),
+        asset_safety_dismissed: dismissed,
         asset_safety_watchers: AssetSafety.watchers()
       )
+      |> put_raw("asset_safety", rows)
+      |> put_raw("asset_safety_dismissed", dismissed)
       |> assign_systems([rows])
     else
       socket
@@ -1008,29 +1211,51 @@ defmodule WandererAppWeb.ScoutIntelLive do
     # read in storage order. Each table gets the sort its question
     # implies -- deadline first where there is a deadline, most recently
     # confirmed first everywhere else.
+    active_timers = timers |> Enum.filter(&running?(&1, now)) |> by_deadline()
+    structures_rows = by_recent(structures)
+    # The anchoring clock IS reported (`timer_expires_at` is populated
+    # on every row of this family), so this board reads soonest-first
+    # like the timer board, not newest-first: the structure whose
+    # invulnerability ends next is the one worth undocking for.
+    anchoring_rows = by_deadline(anchoring_structures)
+    abandoned_rows = by_recent(abandoned_structures)
+    no_fuel_rows = by_recent(no_fuel_structures)
+    # One board, two sources: runs a sweep watched end, and runs whose
+    # window ran out with nothing to contradict them. `outcome/2`
+    # names both, so the table does not care which it is reading.
+    sorted_rows = by_ended(resolved_structures ++ expired, now)
+    archived_rows = by_archived(archived_structures)
+
     socket
     |> assign(
-      active_timers: timers |> Enum.filter(&running?(&1, now)) |> by_deadline(),
-      structures: by_recent(structures),
-      # The anchoring clock IS reported (`timer_expires_at` is populated
-      # on every row of this family), so this board reads soonest-first
-      # like the timer board, not newest-first: the structure whose
-      # invulnerability ends next is the one worth undocking for.
-      anchoring_structures: by_deadline(anchoring_structures),
-      abandoned_structures: by_recent(abandoned_structures),
-      no_fuel_structures: by_recent(no_fuel_structures),
+      active_timers: active_timers,
+      structures: structures_rows,
+      anchoring_structures: anchoring_rows,
+      abandoned_structures: abandoned_rows,
+      no_fuel_structures: no_fuel_rows,
       unanchoring_structures: unanchoring_structures,
-      # One board, two sources: runs a sweep watched end, and runs whose
-      # window ran out with nothing to contradict them. `outcome/2`
-      # names both, so the table does not care which it is reading.
-      sorted_structures: by_ended(resolved_structures ++ expired, now),
+      sorted_structures: sorted_rows,
       armed_by: armed_by,
       unarmed_structures: unarmed_structures,
-      archived_structures: by_archived(archived_structures),
+      archived_structures: archived_rows,
       more?: more_structures?,
       spawns: [],
       fresh_spawns: []
     )
+    # CHEWY PATCH (scout column sort/filter): the pre-ScoutTable rows
+    # for every board on this tab, stashed under the table key
+    # `apply_tables/1` reads back out. Each board's own default order
+    # above is exactly the "no sort selected" order `ScoutTable.apply/5`
+    # preserves.
+    |> put_raw("timers", active_timers)
+    |> put_raw("structures", structures_rows)
+    |> put_raw("anchoring", anchoring_rows)
+    |> put_raw("abandoned", abandoned_rows)
+    |> put_raw("no_fuel", no_fuel_rows)
+    |> put_raw("unanchoring", unanchoring_structures)
+    |> put_raw("sorted", sorted_rows)
+    |> put_raw("unarmed", unarmed_structures)
+    |> put_raw("archived", archived_rows)
     |> assign_systems([
       timers,
       structures,
@@ -1066,10 +1291,11 @@ defmodule WandererAppWeb.ScoutIntelLive do
       )
 
     fresh_spawns = fresh_spawns |> Enum.filter(&fresh?(&1, now)) |> by_recent()
+    spawns_rows = by_recent(spawns)
 
     socket
     |> assign(
-      spawns: by_recent(spawns),
+      spawns: spawns_rows,
       more?: more?,
       active_timers: [],
       structures: [],
@@ -1083,6 +1309,17 @@ defmodule WandererAppWeb.ScoutIntelLive do
       archived_structures: [],
       fresh_spawns: fresh_spawns
     )
+    |> put_raw("spawns", spawns_rows)
+    |> put_raw("fresh_spawns", fresh_spawns)
+    |> put_raw("timers", [])
+    |> put_raw("structures", [])
+    |> put_raw("anchoring", [])
+    |> put_raw("abandoned", [])
+    |> put_raw("no_fuel", [])
+    |> put_raw("unanchoring", [])
+    |> put_raw("sorted", [])
+    |> put_raw("unarmed", [])
+    |> put_raw("archived", [])
     |> assign_systems([spawns, fresh_spawns])
   end
 

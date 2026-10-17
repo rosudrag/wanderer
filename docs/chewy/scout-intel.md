@@ -814,6 +814,65 @@ was the other half of the jank.
 `limit` is deliberately not persisted: "Load more" is about the page you are
 on, not about how you like to read the log.
 
+
+### Every column sorts, and every column filters
+
+The page-wide search box narrows a WINDOW of rows across every board at once
+(it is an ILIKE in the read). Per-column sort and filter are the other
+question — "only unanchoring hulls on THIS board", "the sweep by jumps",
+"spawns with more than five in local" — and they run entirely in the BEAM,
+over rows the socket already holds. No query, no read action, no second copy
+of the data.
+
+Three modules, one mechanism, shared by all 22 tables on `/scout` and
+`/scout/planner`:
+
+|Module|What it owns|
+|---|---|
+|`WandererAppWeb.ScoutTable`|the column spec (`col/3`), the state (`toggle_sort/3`, `put_filter/4`, `clear/2`) and `apply/5`, which filters, sorts, and reports|
+|`WandererAppWeb.ScoutIntelColumns` / `ScoutPlannerColumns`|one spec list per table: label, `<th>` class, and the ONE value function both the sort and the filter read|
+|`ScoutComponents.table_head/1`|the whole `<thead>`: a sort button per label, a filter control per column, and the `✕` that clears the table|
+
+A column's `value` returns what the CELL SHOWS, through the same public
+helper the cell calls (`ScoutComponents.system/2`, `where/1`,
+`Unanchor.predicted_max_at/1`, …). That is the load-bearing rule: "filter by
+what I can read" only holds while the two cannot drift.
+
+What a filter string means is decided by the value's TYPE, never configured:
+
+|Type|Filter|
+|---|---|
+|text|case-insensitive substring|
+|number|`>10`, `<=3`, `=0` — or a bare string, which falls back to a substring on the rendered number|
+|`DateTime`|an AGE against the page's `now`: `<2h` inside two hours, `>7d` older than a week. A reinforcement timer is in the FUTURE, so its age is negative and `<0m` means "still running"|
+
+Sorting cycles ascending → descending → **the page's own order**, which is
+the only way back to `by_deadline/1` / `by_recent/1` / the route order: a
+dropdown cannot offer "whatever this board decided". Nils sort last in BOTH
+directions — a structure with no deadline is not the most urgent thing on the
+board because somebody flipped the arrow.
+
+A column renders a `<select>` only when its spec DECLARES `select?: true`
+(status, the asset-safety trigger, how a run ended, a spawn's outcome, an
+event kind, a planner stop's reason/leg/WP). Everything else is a box, at any
+row count. Inferring it from cardinality was tried and reverted: a filter box
+that turns into a dropdown because today's window holds eight rows, and back
+tomorrow, is a control nobody can learn — and it put every structure name
+into the DOM twice.
+
+Two deliberate limits. The state is **per table**, so filtering the log does
+not touch the Unanchored board above it; and it is **not persisted** — not in
+the sticky filter blob, not in a planner preset. A sort is "for the next
+thirty seconds", the same judgement the soloed-board chip makes, and a preset
+names a QUERY, not a table shape.
+
+The one structural risk is that the spec list and the template's `<td>` list
+are different files: a spec one column short renders a header offset by one
+cell from its data, and every value a reader then sorts on is the
+neighbouring column's. `test/integration/scout_table_live_test.exs` walks the
+rendered DOM of every table on every category and asserts header-cell count
+against each body row — the check no unit test over the spec lists can make.
+
 ### The boards collapse, and they move
 
 Every panel on every scout page — the log's twelve structure boards and its
@@ -1214,6 +1273,8 @@ board being collapsed or empty, which is the only state it ever matters in.
 |Planner, as a nested child of the shell|`lib/wanderer_app_web/live/scout/scout_planner_live.ex`|
 |Page shell (header, tab strip, toolbar, pane), panels, cells, formatters|`lib/wanderer_app_web/components/scout_components.ex`|
 |Panel order + collapsed set (per page, localStorage)|`lib/wanderer_app_web/live/scout/scout_layout.ex`, `assets/js/hooks/scoutPanelStack.ts`|
+|Per-column sort/filter (spec, state, apply)|`lib/wanderer_app_web/scout_table.ex`|
+|Column specs per table|`lib/wanderer_app_web/live/scout/scout_{intel,planner}_columns.ex`|
 |Asset-safety trigger (parse, reads, watchers)|`lib/wanderer_app/scout/asset_safety.ex`|
 |Asset-safety notification feed|`lib/wanderer_app/sync/feeds/asset_safety_feed.ex`|
 |Asset-safety resource|`lib/wanderer_app/api/scout_asset_safety.ex`|
@@ -1223,7 +1284,7 @@ board being collapsed or empty, which is the only state it ever matters in.
 |Discord message format|`lib/wanderer_app_web/components/scout_discord.ex`|
 |Waypoint push wording (shared with the planner)|`lib/wanderer_app_web/scout_waypoint.ex`|
 |Sidebar entry|`lib/wanderer_app_web/components/scout_nav.ex`|
-|Tests|`test/integration/scout_intel_test.exs`, `test/integration/scout_{intel,planner}_live_test.exs`|
+|Tests|`test/integration/scout_intel_test.exs`, `test/integration/scout_{intel,planner}_live_test.exs`, `test/integration/scout_table_live_test.exs`, `test/unit/scout/scout_table_test.exs`|
 
 ## Verified
 
